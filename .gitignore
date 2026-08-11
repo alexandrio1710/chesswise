@@ -1,0 +1,26 @@
+# Database and its backups — contains personal game data, never committed.
+chess_tracker.db
+chess_tracker_backup_*.db
+
+# Secrets / environment config
+.env
+
+# CLI-remembered usernames (personal, not secret, still not repo content)
+cli_config.json
+
+# pytest
+.pytest_cache/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Logs
+*.log

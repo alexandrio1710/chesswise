@@ -1,0 +1,28 @@
+# Starting point for Fly.io deployment. Rename to fly.toml after running
+# `fly launch` (which fills in `app` with a real, unique name) — don't
+# fly deploy with this file as-is.
+#
+# Steps (needs a Fly.io account — see README's deployment section):
+#   1. flyctl auth login
+#   2. flyctl launch --no-deploy   (generates/merges fly.toml, picks a region)
+#   3. flyctl volumes create chess_data --size 1   (persistent storage for the DB)
+#   4. Set DB_PATH=/data/chess_tracker.db as a Fly secret/env var, and mount
+#      the volume at /data in the generated fly.toml's [[mounts]] section
+#   5. flyctl deploy
+
+app = "your-app-name-here"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

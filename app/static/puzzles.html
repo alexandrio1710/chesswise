@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Puzzles</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-critical-text: #ffffff;
+    --board-light:    #e9e5d8;
+    --board-dark:     #7c9070;
+    --board-selected: rgba(42, 120, 214, 0.45);
+    --board-dot:      rgba(11, 11, 11, 0.28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-critical-text: #2a0000;
+      --board-light:    #3a3a36;
+      --board-dark:     #21331f;
+      --board-selected: rgba(57, 135, 229, 0.5);
+      --board-dot:      rgba(255, 255, 255, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-critical-text: #2a0000;
+    --board-light:    #3a3a36;
+    --board-dark:     #21331f;
+    --board-selected: rgba(57, 135, 229, 0.5);
+    --board-dot:      rgba(255, 255, 255, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  h1 { font-size: 22px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit;
+    font-size: 15px;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 480px) minmax(240px, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .mode-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .mode-row button {
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .mode-row button.active { background: var(--series-1); color: #fff; border-color: transparent; }
+
+  .puzzle-meta {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 12px 0 16px;
+  }
+  .puzzle-meta .severity {
+    font-weight: 600;
+    text-transform: capitalize;
+    color: var(--text-primary);
+  }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    user-select: none;
+  }
+  .square {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: min(6vw, 40px);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .square.light { background: var(--board-light); }
+  .square.dark { background: var(--board-dark); }
+  .square.selected::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--board-selected);
+  }
+  .square:focus-visible {
+    outline: 3px solid var(--series-1);
+    outline-offset: -3px;
+    z-index: 2;
+  }
+  .square .legal-dot {
+    position: absolute;
+    width: 26%;
+    height: 26%;
+    border-radius: 50%;
+    background: var(--board-dot);
+    pointer-events: none;
+  }
+  .square .piece { position: relative; z-index: 1; }
+
+  .feedback {
+    margin-top: 16px;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    display: none;
+  }
+  .feedback.show { display: block; }
+  .feedback.correct { background: color-mix(in srgb, var(--status-good) 14%, var(--surface-1)); }
+  .feedback.incorrect { background: color-mix(in srgb, var(--status-critical) 14%, var(--surface-1)); }
+  .feedback .verdict { font-weight: 700; margin-bottom: 6px; }
+  .feedback .verdict.correct-text { color: var(--status-good); }
+  .feedback .verdict.incorrect-text { color: var(--status-critical); }
+  .feedback .lines { margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+  .feedback .lines div { padding: 2px 0; }
+
+  .next-btn {
+    margin-top: 14px;
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: none;
+    background: var(--series-1);
+    color: #fff;
+    cursor: pointer;
+    display: none;
+  }
+  .next-btn.show { display: inline-block; }
+
+  /* Queue list */
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  .queue-list { display: flex; flex-direction: column; gap: 6px; max-height: 560px; overflow-y: auto; }
+  .queue-item {
+    text-align: left;
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .queue-item.active { border-color: var(--series-1); color: var(--text-primary); }
+  .queue-item .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 100px;
+    color: #fff;
+    margin-right: 6px;
+  }
+  .badge.lichess { background: var(--series-1); }
+  .badge.chesscom { background: var(--series-2); }
+  .badge.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+  .badge.mistake { background: #ec835a; color: #3a1400; }
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--series-1);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <h1>Puzzle trainer</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles" class="active">Puzzles</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="mode-row" id="mode-row">
+      <button data-mode="all" class="active">All puzzles</button>
+      <button data-mode="practice">Practice my mistakes</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="card">
+      <div class="puzzle-meta" id="puzzle-meta"><span class="spinner"></span>Loading puzzle…</div>
+      <div id="board"></div>
+      <div class="feedback" id="feedback">
+        <div class="verdict" id="feedback-verdict"></div>
+        <div id="feedback-detail"></div>
+        <div class="lines" id="feedback-lines"></div>
+      </div>
+      <button class="next-btn" id="next-btn">Next puzzle →</button>
+    </div>
+
+    <div class="card">
+      <h2 id="queue-title">Queue</h2>
+      <div class="queue-list" id="queue-list"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const PIECE_UNICODE = {
+    K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
+    k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+  };
+  const PIECE_NAMES = {
+    K: "white king", Q: "white queen", R: "white rook", B: "white bishop", N: "white knight", P: "white pawn",
+    k: "black king", q: "black queen", r: "black rook", b: "black bishop", n: "black knight", p: "black pawn",
+  };
+
+  let queue = [];
+  let currentIndex = -1;
+  let currentPuzzle = null;
+  let selectedSquare = null;
+  let solved = false;
+  let mode = "all";
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) {
+          file += parseInt(ch, 10);
+        } else {
+          const square = String.fromCharCode(97 + file) + rank;
+          map[square] = ch;
+          file += 1;
+        }
+      }
+    });
+    return map;
+  }
+
+  function squareOrder(orientation) {
+    const files = "abcdefgh".split("");
+    const ranks = [8, 7, 6, 5, 4, 3, 2, 1];
+    if (orientation === "black") {
+      files.reverse();
+      ranks.reverse();
+    }
+    const order = [];
+    for (const rank of ranks) {
+      for (const file of files) order.push(`${file}${rank}`);
+    }
+    return order;
+  }
+
+  function isLight(square) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = parseInt(square[1], 10);
+    return (file + rank) % 2 === 0 ? false : true; // a1 is dark
+  }
+
+  function renderBoard(puzzle) {
+    const board = document.getElementById("board");
+    board.innerHTML = "";
+    const pieceMap = fenToPieceMap(puzzle.fen_before);
+    const order = squareOrder(puzzle.side_to_move);
+
+    for (const square of order) {
+      const el = document.createElement("div");
+      el.className = `square ${isLight(square) ? "light" : "dark"}`;
+      el.dataset.square = square;
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+
+      const piece = pieceMap[square];
+      const pieceName = piece ? PIECE_NAMES[piece] : null;
+      el.setAttribute("aria-label", pieceName ? `${square}, ${pieceName}` : square);
+
+      if (piece) {
+        const span = document.createElement("span");
+        span.className = "piece";
+        span.textContent = PIECE_UNICODE[piece];
+        el.appendChild(span);
+      }
+
+      const activate = () => onSquareClick(square);
+      el.addEventListener("click", activate);
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
+      });
+      board.appendChild(el);
+    }
+  }
+
+  function ownPiece(square) {
+    const pieceMap = fenToPieceMap(currentPuzzle.fen_before);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    return (currentPuzzle.side_to_move === "white") === isWhitePiece;
+  }
+
+  function legalDestinationsFrom(square) {
+    return currentPuzzle.legal_moves.filter(m => m.from === square).map(m => m.to);
+  }
+
+  function clearHighlights() {
+    document.querySelectorAll(".square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll(".legal-dot").forEach(el => el.remove());
+  }
+
+  function onSquareClick(square) {
+    if (solved) return;
+
+    if (selectedSquare) {
+      const destinations = legalDestinationsFrom(selectedSquare);
+      if (destinations.includes(square)) {
+        submitAttempt(selectedSquare, square);
+        return;
+      }
+    }
+
+    clearHighlights();
+
+    if (ownPiece(square)) {
+      selectedSquare = square;
+      const el = document.querySelector(`.square[data-square="${square}"]`);
+      el.classList.add("selected");
+      for (const dest of legalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`.square[data-square="${dest}"]`);
+        const dot = document.createElement("div");
+        dot.className = "legal-dot";
+        destEl.appendChild(dot);
+      }
+    } else {
+      selectedSquare = null;
+    }
+  }
+
+  async function submitAttempt(from, to) {
+    const res = await fetch(`/api/puzzles/${currentPuzzle.id}/attempt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to }),
+    });
+    if (!res.ok) return;
+    const result = await res.json();
+    showFeedback(result);
+    solved = true;
+    clearHighlights();
+    selectedSquare = null;
+    document.getElementById("next-btn").classList.add("show");
+    markQueueSolved(currentPuzzle.id, result.correct);
+  }
+
+  function formatLine(line, idx) {
+    const evalText = line.mate_in !== null
+      ? `mate in ${Math.abs(line.mate_in)}`
+      : `${line.eval_cp > 0 ? "+" : ""}${(line.eval_cp / 100).toFixed(2)}`;
+    return `<div>${idx + 1}. ${line.move_san} (${evalText})</div>`;
+  }
+
+  function showFeedback(result) {
+    const box = document.getElementById("feedback");
+    const verdict = document.getElementById("feedback-verdict");
+    const detail = document.getElementById("feedback-detail");
+    const lines = document.getElementById("feedback-lines");
+
+    box.className = `feedback show ${result.correct ? "correct" : "incorrect"}`;
+    verdict.className = `verdict ${result.correct ? "correct-text" : "incorrect-text"}`;
+    verdict.textContent = result.correct ? "Correct!" : "Not quite.";
+
+    detail.textContent = result.correct
+      ? `${result.played_san} was the best move here.`
+      : `You played ${result.played_san}. Best was ${result.best_move_san} — in the actual game, you played ${result.original_mistake_move_san} here.`;
+
+    lines.innerHTML = "<strong>Top engine lines:</strong>" + result.top_lines.map(formatLine).join("");
+  }
+
+  function markQueueSolved(puzzleId, correct) {
+    const item = document.querySelector(`.queue-item[data-id="${puzzleId}"]`);
+    if (item) item.style.opacity = correct ? "0.5" : "0.8";
+  }
+
+  async function loadPuzzle(index) {
+    if (index < 0 || index >= queue.length) return;
+    currentIndex = index;
+    solved = false;
+    selectedSquare = null;
+    document.getElementById("feedback").classList.remove("show");
+    document.getElementById("next-btn").classList.remove("show");
+
+    const summary = queue[index];
+    const res = await fetch(`/api/puzzles/${summary.id}`);
+    currentPuzzle = await res.json();
+
+    const date = new Date(summary.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+    document.getElementById("puzzle-meta").innerHTML =
+      `<span class="severity">${summary.severity}</span> in the ${summary.phase} · ` +
+      `vs ${escapeHtml(summary.opponent)} · ${date} · ${summary.source === "lichess" ? "Lichess" : "Chess.com"}`;
+
+    renderBoard(currentPuzzle);
+    highlightActiveQueueItem();
+  }
+
+  function highlightActiveQueueItem() {
+    document.querySelectorAll(".queue-item").forEach(el => el.classList.remove("active"));
+    const active = document.querySelector(`.queue-item[data-id="${queue[currentIndex].id}"]`);
+    if (active) active.classList.add("active");
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function renderQueueList() {
+    const list = document.getElementById("queue-list");
+    const title = document.getElementById("queue-title");
+    title.textContent = mode === "practice" ? "Practice queue (worst first)" : `Queue (${queue.length} puzzles)`;
+
+    if (!queue.length) {
+      list.innerHTML = `<div class="empty-note">No puzzles yet — run puzzles.py to generate them from your flagged mistakes.</div>`;
+      return;
+    }
+
+    list.innerHTML = "";
+    queue.forEach((p, i) => {
+      const date = new Date(p.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+      const btn = document.createElement("button");
+      btn.className = "queue-item";
+      btn.dataset.id = p.id;
+      btn.innerHTML = `<span class="badge ${p.severity}">${p.severity}</span>` +
+        `<span class="badge ${p.source}">${p.source === "lichess" ? "Lichess" : "Chess.com"}</span>` +
+        `${p.phase}, ${date} vs ${escapeHtml(p.opponent)}`;
+      btn.addEventListener("click", () => loadPuzzle(i));
+      list.appendChild(btn);
+    });
+  }
+
+  async function loadQueue() {
+    const res = await fetch(`/api/puzzles/queue?mode=${mode}&limit=30`);
+    const data = await res.json();
+    queue = data.puzzles;
+    renderQueueList();
+    if (queue.length) {
+      loadPuzzle(0);
+    } else {
+      document.getElementById("puzzle-meta").textContent = "No puzzles available for this mode yet.";
+      document.getElementById("board").innerHTML = "";
+    }
+  }
+
+  document.getElementById("next-btn").addEventListener("click", () => {
+    if (currentIndex + 1 < queue.length) loadPuzzle(currentIndex + 1);
+  });
+
+  document.querySelectorAll("#mode-row button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#mode-row button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      mode = btn.dataset.mode;
+      loadQueue();
+    });
+  });
+
+  function applyTheme(theme) {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadQueue();
+</script>
+</body>
+</html>

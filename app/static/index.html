@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6; /* blue — bar chart, lichess badge */
+    --series-2:       #eb6834; /* orange — chesscom badge */
+    --status-critical:#d03b3b; /* blunder */
+    --status-critical-text: #ffffff; /* white passes 4.8:1 on light-mode blunder red; dark-mode red needs dark text instead (see below) */
+    --status-serious: #ec835a; /* mistake */
+    --status-warning: #fab219; /* inaccuracy */
+    --status-good:    #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-critical:#e66767;
+      --status-critical-text: #2a0000;
+      --status-serious: #ec835a;
+      --status-warning: #fab219;
+      --status-good:    #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-critical:#e66767;
+    --status-critical-text: #2a0000;
+    --status-serious: #ec835a;
+    --status-warning: #fab219;
+    --status-good:    #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    /* Hover-only bar-chart tooltips are opacity:0 (not display:none) so
+       they can fade in, but that means they still occupy real layout
+       position even hidden — clip at the root so an off-screen tooltip
+       can't force a page-wide horizontal scrollbar. The tables' own
+       .table-scroll containers manage their scrolling independently of
+       this, so intentional horizontal scroll still works. */
+    overflow-x: hidden;
+  }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+  }
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0;
+  }
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  nav.top-nav a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit;
+    font-size: 15px;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    min-width: 0;
+  }
+
+  /* Segmented controls (source filter, tabs) */
+  .filter-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .filter-group button {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 14px;
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    border: none;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .filter-group button:last-child { border-right: none; }
+  .filter-group button.active {
+    background: var(--series-1);
+    color: #ffffff;
+  }
+
+  .tab-row {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--gridline);
+    margin-bottom: 4px;
+  }
+  .tab-row button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 4px;
+    margin-right: 16px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .tab-row button.active { color: var(--text-primary); border-bottom-color: var(--series-1); }
+  .tab-panel { display: none; flex-direction: column; gap: 20px; min-width: 0; }
+  .tab-panel.active { display: flex; }
+
+  /* Summary card */
+  .takeaway {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 16px;
+  }
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 16px;
+  }
+  .stat-tile .label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .stat-tile .value {
+    font-size: 28px;
+    font-weight: 600;
+  }
+
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    color: var(--text-primary);
+  }
+  h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 10px;
+    color: var(--text-secondary);
+  }
+
+  /* Bar chart */
+  .bar-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 28px;
+    height: 200px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--baseline);
+  }
+  .bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+  }
+  .bar-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+  .bar-value .pct { display: block; font-size: 11px; font-weight: 400; color: var(--text-secondary); }
+  .bar {
+    width: 100%;
+    max-width: 56px;
+    background: var(--series-1);
+    border-radius: 4px 4px 0 0;
+    transition: opacity 0.15s;
+  }
+  .bar-col:hover .bar { opacity: 0.8; }
+  .bar-tooltip {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    background: var(--text-primary);
+    color: var(--surface-1);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s;
+  }
+  .bar-col:hover .bar-tooltip { opacity: 1; }
+  .bar-axis-labels {
+    display: flex;
+    gap: 28px;
+    padding: 8px 12px 0;
+  }
+  .bar-axis-labels span {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: capitalize;
+  }
+
+  /* Trend */
+  .trend-takeaway { font-size: 14px; color: var(--text-secondary); margin: 0 0 4px; }
+
+  /* Tables (worst games, openings) */
+  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  table.data-table {
+    width: 100%;
+    min-width: 480px;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table.data-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--gridline);
+    white-space: nowrap;
+  }
+  table.data-table td {
+    padding: 10px;
+    border-bottom: 1px solid var(--gridline);
+    font-variant-numeric: tabular-nums;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  table.data-table tbody tr.game-row {
+    cursor: pointer;
+  }
+  table.data-table tbody tr.game-row:hover,
+  table.data-table tbody tr.game-row:focus-visible {
+    background: var(--page-plane);
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 100px;
+    color: #ffffff;
+  }
+  .badge.lichess { background: var(--series-1); }
+  .badge.chesscom { background: var(--series-2); }
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  /* Severity is never color-alone: the pill always carries its text label too. */
+  .severity-pill {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 100px;
+    color: #ffffff;
+  }
+  .severity-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+  .severity-pill.mistake { background: var(--status-serious); color: #3a1400; }
+  .severity-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
+  tr.detail-row td {
+    background: var(--page-plane);
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 12px 10px;
+    white-space: normal;
+  }
+  tr.detail-row.hidden { display: none; }
+  .empty-note {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  /* Openings tab */
+  .openings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  ul.opening-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  ul.opening-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--gridline);
+  }
+  ul.opening-list li:last-child { border-bottom: none; }
+  ul.opening-list .opening-name { color: var(--text-primary); }
+  ul.opening-list .opening-metric { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* Loading spinner */
+  .spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--series-1);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -3px;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { color: var(--text-secondary); font-size: 14px; }
+
+  @media (max-width: 600px) {
+    body { padding: 16px 10px 48px; }
+    .card { padding: 14px; }
+    .takeaway { font-size: 16px; }
+    .stat-tile .value { font-size: 22px; }
+    h1 { font-size: 18px; }
+    .bar-chart { gap: 12px; height: 160px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <h1>Chess Mistake Tracker</h1>
+    <div class="header-controls">
+      <nav class="top-nav">
+        <a href="/" class="active">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+      </nav>
+      <div class="filter-group" role="group" aria-label="Filter by source">
+        <button data-source="all" class="active">All</button>
+        <button data-source="lichess">Lichess</button>
+        <button data-source="chesscom">Chess.com</button>
+      </div>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <div class="tab-row" role="tablist">
+    <button role="tab" data-tab="overview" class="active" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="openings" aria-selected="false">Openings</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-overview">
+
+    <section class="card" id="summary-card">
+      <p class="takeaway" id="takeaway"><span class="spinner"></span><span class="loading-text">Loading…</span></p>
+      <div class="stat-row">
+        <div class="stat-tile">
+          <div class="label">Games analyzed</div>
+          <div class="value" id="stat-games">–</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Total mistakes</div>
+          <div class="value" id="stat-mistakes">–</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Blunders per game</div>
+          <div class="value" id="stat-blunders-per-game">–</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Blunders, as % of all flagged mistakes</div>
+          <div class="value" id="stat-blunder-pct">–</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Mistakes by game phase</h2>
+      <div class="bar-chart" id="bar-chart"></div>
+      <div class="bar-axis-labels" id="bar-axis-labels"></div>
+    </section>
+
+    <section class="card">
+      <h2>Monthly trend</h2>
+      <p class="trend-takeaway" id="trend-takeaway">Loading…</p>
+      <div class="table-scroll">
+        <table class="data-table" id="trend-table">
+          <thead><tr><th>Month</th><th>Games</th><th>Blunders/game</th><th>Mistakes/game</th></tr></thead>
+          <tbody><tr><td colspan="4" class="empty-note">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>5 worst games (biggest single eval swing)</h2>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Site</th>
+              <th>Opponent</th>
+              <th>Result</th>
+              <th>Worst move</th>
+            </tr>
+          </thead>
+          <tbody id="worst-games-body">
+            <tr><td colspan="5" class="empty-note">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="tab-panel" id="tab-openings">
+    <section class="card">
+      <h2>Openings to review</h2>
+      <p class="trend-takeaway">Ranked by impact: how often you play it × how many opening-phase mistakes it costs you per game.</p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Opening</th><th>Games</th><th>Win rate</th><th>Opening mistakes/game</th></tr></thead>
+          <tbody id="review-body"><tr><td colspan="4" class="empty-note">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card openings-grid">
+      <div>
+        <h3>Most played</h3>
+        <ul class="opening-list" id="most-played-list"></ul>
+      </div>
+      <div>
+        <h3>Best win rate (2+ games)</h3>
+        <ul class="opening-list" id="best-winrate-list"></ul>
+      </div>
+    </section>
+  </div>
+
+</div>
+
+<script>
+  const PHASES = ["opening", "middlegame", "endgame"];
+  let currentSource = "all";
+  let openingsLoaded = false;
+
+  function qs(source) {
+    return source === "all" ? "" : `?source=${source}`;
+  }
+
+  async function loadOverview(source) {
+    const q = qs(source);
+    const [summary, phaseCounts, worstGames, trend] = await Promise.all([
+      fetch(`/api/summary${q}`).then(r => r.json()),
+      fetch(`/api/mistakes-by-phase${q}`).then(r => r.json()),
+      fetch(`/api/worst-games${q}`).then(r => r.json()),
+      fetch(`/api/trend${q}`).then(r => r.json()),
+    ]);
+    renderSummary(summary);
+    renderBarChart(phaseCounts);
+    renderWorstGames(worstGames);
+    renderTrend(trend);
+  }
+
+  async function loadOpenings(source) {
+    const q = qs(source);
+    const data = await fetch(`/api/openings${q}`).then(r => r.json());
+    renderOpenings(data);
+  }
+
+  function renderSummary(summary) {
+    document.getElementById("takeaway").textContent = summary.takeaway;
+    document.getElementById("stat-games").textContent = summary.total_games_analyzed;
+    document.getElementById("stat-mistakes").textContent = summary.total_mistakes;
+    document.getElementById("stat-blunders-per-game").textContent = summary.avg_blunders_per_game;
+    document.getElementById("stat-blunder-pct").textContent = `${summary.blunders_pct_of_mistakes}%`;
+  }
+
+  function renderBarChart(counts) {
+    const chart = document.getElementById("bar-chart");
+    const axis = document.getElementById("bar-axis-labels");
+    chart.innerHTML = "";
+    axis.innerHTML = "";
+
+    const total = PHASES.reduce((sum, p) => sum + (counts[p] || 0), 0);
+    const max = Math.max(1, ...PHASES.map(p => counts[p] || 0));
+
+    for (const phase of PHASES) {
+      const value = counts[phase] || 0;
+      const pct = Math.round((value / max) * 100);
+      const shareOfTotal = total ? Math.round((value / total) * 100) : 0;
+
+      const col = document.createElement("div");
+      col.className = "bar-col";
+      col.innerHTML = `
+        <div class="bar-tooltip">${phase}: ${value} mistake${value === 1 ? "" : "s"} (${shareOfTotal}% of all flagged mistakes)</div>
+        <div class="bar-value">${value}<span class="pct">${shareOfTotal}%</span></div>
+        <div class="bar" style="height: ${Math.max(pct, value > 0 ? 3 : 0)}%"></div>
+      `;
+      chart.appendChild(col);
+
+      const label = document.createElement("span");
+      label.textContent = phase;
+      axis.appendChild(label);
+    }
+  }
+
+  function renderTrend(trend) {
+    document.getElementById("trend-takeaway").textContent = trend.takeaway;
+    const tbody = document.querySelector("#trend-table tbody");
+    if (!trend.months.length) {
+      tbody.innerHTML = `<tr><td colspan="4" class="empty-note">No analyzed games yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = trend.months.map(m => `
+      <tr>
+        <td>${m.month}</td>
+        <td>${m.games}</td>
+        <td>${m.blunders_per_game}</td>
+        <td>${m.mistakes_per_game}</td>
+      </tr>
+    `).join("");
+  }
+
+  function renderWorstGames(games) {
+    const body = document.getElementById("worst-games-body");
+    body.innerHTML = "";
+
+    if (!games.length) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-note">No analyzed games for this filter yet — run fetch and analyze to get started.</td></tr>`;
+      return;
+    }
+
+    games.forEach((g, i) => {
+      const date = new Date(g.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+      const badgeClass = g.source === "lichess" ? "lichess" : "chesscom";
+      const badgeLabel = g.source === "lichess" ? "Lichess" : "Chess.com";
+      const wm = g.worst_move;
+
+      const row = document.createElement("tr");
+      row.className = "game-row";
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-expanded", "false");
+      row.dataset.target = `detail-${i}`;
+      row.innerHTML = `
+        <td>${date}</td>
+        <td><span class="badge ${badgeClass}"><span class="badge-dot"></span>${badgeLabel}</span></td>
+        <td>${escapeHtml(g.opponent)}</td>
+        <td>${escapeHtml(g.result)}</td>
+        <td><span class="severity-pill ${wm.severity}">${wm.severity}</span> ${escapeHtml(wm.move_san)} (${Math.round(wm.eval_drop)}cp)</td>
+      `;
+
+      const detail = document.createElement("tr");
+      detail.className = "detail-row hidden";
+      detail.id = `detail-${i}`;
+      detail.innerHTML = `
+        <td colspan="5">
+          Move ${wm.move_number} (${wm.phase}): <strong>${escapeHtml(wm.move_san)}</strong>
+          dropped the evaluation by ${Math.round(wm.eval_drop)} centipawns —
+          classified as a <strong>${wm.severity}</strong>.
+          You played <strong>${escapeHtml(g.color)}</strong> vs ${escapeHtml(g.opponent)}
+          (${escapeHtml(g.time_control)}, ${escapeHtml(g.opening_name || "unknown opening")}).
+        </td>
+      `;
+
+      const toggle = () => {
+        const nowHidden = detail.classList.toggle("hidden");
+        row.setAttribute("aria-expanded", String(!nowHidden));
+      };
+      row.addEventListener("click", toggle);
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+
+      body.appendChild(row);
+      body.appendChild(detail);
+    });
+  }
+
+  function renderOpenings(data) {
+    const reviewBody = document.getElementById("review-body");
+    if (!data.to_review.length) {
+      reviewBody.innerHTML = `<tr><td colspan="4" class="empty-note">Not enough opening data yet — play a few more games and re-analyze.</td></tr>`;
+    } else {
+      reviewBody.innerHTML = data.to_review.map(o => `
+        <tr>
+          <td>${escapeHtml(o.family)}</td>
+          <td>${o.games_played}</td>
+          <td>${o.win_rate_pct}%</td>
+          <td>${o.opening_mistakes_per_game}</td>
+        </tr>
+      `).join("");
+    }
+
+    const mostPlayed = document.getElementById("most-played-list");
+    mostPlayed.innerHTML = data.most_played.length
+      ? data.most_played.map(o => `<li><span class="opening-name">${escapeHtml(o.family)}</span><span class="opening-metric">${o.games_played} games</span></li>`).join("")
+      : `<li class="empty-note">No opening data yet.</li>`;
+
+    const bestWinRate = document.getElementById("best-winrate-list");
+    bestWinRate.innerHTML = data.best_win_rate.length
+      ? data.best_win_rate.map(o => `<li><span class="opening-name">${escapeHtml(o.family)}</span><span class="opening-metric">${o.win_rate_pct}%</span></li>`).join("")
+      : `<li class="empty-note">No opening data yet.</li>`;
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  document.querySelectorAll(".filter-group button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filter-group button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentSource = btn.dataset.source;
+      loadOverview(currentSource);
+      if (openingsLoaded) loadOpenings(currentSource);
+    });
+  });
+
+  document.querySelectorAll(".tab-row button").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab-row button").forEach(t => { t.classList.remove("active"); t.setAttribute("aria-selected", "false"); });
+      tab.classList.add("active");
+      tab.setAttribute("aria-selected", "true");
+      document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+      document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
+
+      if (tab.dataset.tab === "openings" && !openingsLoaded) {
+        openingsLoaded = true;
+        loadOpenings(currentSource);
+      }
+    });
+  });
+
+  // Theme toggle: cycles system -> light -> dark -> system, persisted in localStorage.
+  function applyTheme(theme) {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+  }
+  const savedTheme = localStorage.getItem("theme") || "system";
+  applyTheme(savedTheme);
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadOverview("all");
+</script>
+</body>
+</html>

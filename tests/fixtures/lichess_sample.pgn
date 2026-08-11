@@ -1,0 +1,15 @@
+[Event "Rated Blitz game"]
+[Site "https://lichess.org/abcd1234"]
+[Date "2026.01.15"]
+[White "testuser"]
+[Black "opponent1"]
+[Result "1-0"]
+[UTCDate "2026.01.15"]
+[UTCTime "12:00:00"]
+[WhiteElo "1500"]
+[BlackElo "1490"]
+[TimeControl "300+3"]
+[Termination "Normal"]
+[Opening "Italian Game"]
+
+1. e4 { [%clk 0:05:00] } 1... e5 { [%clk 0:05:00] } 2. Nf3 { [%clk 0:04:58] } 2... Nc6 { [%clk 0:04:57] } 1-0

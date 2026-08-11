@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+tests/
+.pytest_cache/
+chess_tracker.db
+chess_tracker_backup_*.db
+cli_config.json
+.env
+*.log
