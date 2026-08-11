@@ -274,6 +274,54 @@
     text-transform: capitalize;
   }
 
+  /* Settings panel */
+  .hidden { display: none !important; }
+  .settings-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .settings-row label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .settings-row input {
+    font: inherit;
+    font-size: 14px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--page-plane);
+    color: var(--text-primary);
+  }
+  .settings-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .settings-actions button {
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .settings-actions button#settings-refresh {
+    background: var(--series-1);
+    color: #fff;
+    border-color: transparent;
+  }
+  .settings-status { font-size: 13px; color: var(--text-secondary); }
+  .settings-hint { font-size: 12px; color: var(--text-muted); margin: 10px 0 0; }
+
   /* Trend */
   .trend-takeaway { font-size: 14px; color: var(--text-secondary); margin: 0 0 4px; }
 
@@ -412,9 +460,33 @@
         <button data-source="lichess">Lichess</button>
         <button data-source="chesscom">Chess.com</button>
       </div>
+      <button class="icon-btn" id="settings-toggle" title="Settings" aria-label="Settings">⚙</button>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
   </header>
+
+  <section class="card hidden" id="settings-panel">
+    <h2>Settings</h2>
+    <div class="settings-row">
+      <label>
+        Lichess username
+        <input type="text" id="settings-lichess" placeholder="e.g. vxyzrs" autocomplete="off">
+      </label>
+      <label>
+        Chess.com username
+        <input type="text" id="settings-chesscom" placeholder="e.g. vxyzrs00" autocomplete="off">
+      </label>
+    </div>
+    <div class="settings-actions">
+      <button id="settings-save">Save</button>
+      <button id="settings-refresh">Save &amp; Refresh now</button>
+      <span class="settings-status" id="settings-status"></span>
+    </div>
+    <p class="settings-hint">
+      Refresh pulls any new games since the last run, analyzes them, and generates puzzles —
+      it can take a few minutes depending on how many games are new. You can navigate away; it keeps running.
+    </p>
+  </section>
 
   <div class="tab-row" role="tablist">
     <button role="tab" data-tab="overview" class="active" aria-selected="true">Overview</button>
@@ -724,6 +796,80 @@
     applyTheme(next);
   });
 
+  // --- Settings: usernames + on-demand refresh ---------------------------
+
+  async function loadSettings() {
+    const res = await fetch("/api/settings");
+    const s = await res.json();
+    document.getElementById("settings-lichess").value = s.lichess_user || "";
+    document.getElementById("settings-chesscom").value = s.chesscom_user || "";
+  }
+
+  function currentSettingsInput() {
+    const lichess_user = document.getElementById("settings-lichess").value.trim() || null;
+    const chesscom_user = document.getElementById("settings-chesscom").value.trim() || null;
+    return { lichess_user, chesscom_user };
+  }
+
+  document.getElementById("settings-toggle").addEventListener("click", () => {
+    document.getElementById("settings-panel").classList.toggle("hidden");
+  });
+
+  document.getElementById("settings-save").addEventListener("click", async () => {
+    const statusEl = document.getElementById("settings-status");
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSettingsInput()),
+    });
+    statusEl.textContent = "Saved.";
+  });
+
+  document.getElementById("settings-refresh").addEventListener("click", async () => {
+    const statusEl = document.getElementById("settings-status");
+    const res = await fetch("/api/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSettingsInput()),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.textContent = body.detail || "Couldn't start refresh.";
+      return;
+    }
+    pollRefreshStatus();
+  });
+
+  async function pollRefreshStatus() {
+    const statusEl = document.getElementById("settings-status");
+    const res = await fetch("/api/refresh/status");
+    const status = await res.json();
+
+    if (status.running) {
+      statusEl.textContent = "Refreshing… this can take a few minutes.";
+      setTimeout(pollRefreshStatus, 3000);
+    } else if (status.error) {
+      statusEl.textContent = `Refresh failed: ${status.error}`;
+    } else if (status.finished_at) {
+      const inserted = status.result ? status.result.inserted : 0;
+      statusEl.textContent = `Done — ${inserted} new game(s). Reloading…`;
+      loadOverview(currentSource);
+      if (openingsLoaded) loadOpenings(currentSource);
+    }
+  }
+
+  // If a refresh was already running when this page loaded (e.g. started
+  // from another tab), pick up polling instead of leaving the status blank.
+  (async () => {
+    const res = await fetch("/api/refresh/status");
+    const status = await res.json();
+    if (status.running) {
+      document.getElementById("settings-panel").classList.remove("hidden");
+      pollRefreshStatus();
+    }
+  })();
+
+  loadSettings();
   loadOverview("all");
 </script>
 </body>

@@ -7,21 +7,40 @@ for both) so the frontend's All/Lichess/Chess.com toggle can re-query
 without the backend knowing anything about how it's rendered.
 """
 
+import logging
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+import cli_state
 import puzzles
 import stats
 from db import get_connection
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Chess Mistake Tracker")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 PHASES = ("opening", "middlegame", "endgame")
+
+# Web-triggered refresh runs in a plain background thread (not a
+# multiprocessing pool — spawning one from a request handler that isn't
+# behind a `__main__` guard is asking for trouble on Windows), so the
+# whole app stays single-user/local-only in spirit. State lives in memory
+# since it only needs to survive one server process's lifetime.
+_refresh_status = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "result": None,
+}
 
 
 def _normalize_source(source: str | None) -> str | None:
@@ -53,6 +72,84 @@ def health():
         "analyzed_games": analyzed_games,
         "last_analysis_run_at": last_analyzed_at,
     }
+
+
+class SettingsUpdate(BaseModel):
+    lichess_user: str | None = None
+    chesscom_user: str | None = None
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    """Currently remembered usernames — same file the CLI's `refresh`/
+    `digest` commands read from and write to (cli_state.py), so setting a
+    username here also makes `python cli.py refresh` work without
+    retyping it, and vice versa.
+    """
+    return cli_state.load_state()
+
+
+@app.post("/api/settings")
+def api_save_settings(settings: SettingsUpdate):
+    cli_state.save_state(lichess_user=settings.lichess_user, chesscom_user=settings.chesscom_user)
+    return cli_state.load_state()
+
+
+def _run_refresh(lichess_user: str | None, chesscom_user: str | None) -> None:
+    from batch_analyze import run_batch_analysis
+    from db import fetch_and_store
+    from puzzles import generate_all_puzzles
+
+    try:
+        result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
+        # Forced sequential: this thread isn't a `__main__`-guarded
+        # script, so spawning a multiprocessing pool from inside a
+        # running web server is exactly the kind of thing that works on
+        # your machine and breaks on someone else's.
+        run_batch_analysis(workers=1)
+        generate_all_puzzles()
+        _refresh_status["result"] = result
+        _refresh_status["error"] = None
+    except Exception as e:
+        logger.exception("Web-triggered refresh failed")
+        _refresh_status["error"] = str(e)
+    finally:
+        _refresh_status["running"] = False
+        _refresh_status["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/api/refresh")
+def api_trigger_refresh(settings: SettingsUpdate = SettingsUpdate()):
+    """Kick off fetch (incremental) + analyze in the background and
+    return immediately — poll /api/refresh/status for progress. Any
+    username given here is saved for next time, same as the CLI.
+    """
+    if _refresh_status["running"]:
+        raise HTTPException(status_code=409, detail="A refresh is already running.")
+
+    state = cli_state.load_state()
+    lichess_user = settings.lichess_user or state.get("lichess_user")
+    chesscom_user = settings.chesscom_user or state.get("chesscom_user")
+    if not lichess_user and not chesscom_user:
+        raise HTTPException(
+            status_code=400,
+            detail="No usernames configured. Set at least one in Settings first.",
+        )
+
+    if settings.lichess_user or settings.chesscom_user:
+        cli_state.save_state(lichess_user=settings.lichess_user, chesscom_user=settings.chesscom_user)
+
+    _refresh_status.update({
+        "running": True, "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None, "error": None, "result": None,
+    })
+    threading.Thread(target=_run_refresh, args=(lichess_user, chesscom_user), daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/api/refresh/status")
+def api_refresh_status():
+    return _refresh_status
 
 
 @app.get("/api/summary")
