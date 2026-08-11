@@ -96,6 +96,26 @@ def api_worst_games(source: str | None = Query(default=None), limit: int = 5):
     return stats.worst_games(source, limit=limit)
 
 
+@app.get("/api/games/{game_id}")
+def api_game_detail(game_id: int):
+    game = stats.get_game_detail(game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not game["analyzed"]:
+        raise HTTPException(status_code=409, detail="This game hasn't been analyzed yet")
+    if game["skip_reason"]:
+        raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
+
+    return {
+        "game": {
+            "id": game["id"], "source": game["source"], "date": game["date"],
+            "opponent": game["opponent"], "result": game["result"], "color": game["color"],
+            "time_control": game["time_control"], "opening_name": game["opening_name"],
+        },
+        "moves": stats.get_game_moves(game_id),
+    }
+
+
 @app.get("/api/puzzles/queue")
 def api_puzzle_queue(
     source: str | None = Query(default=None),
@@ -165,6 +185,11 @@ def index():
 @app.get("/puzzles", response_class=HTMLResponse)
 def puzzles_page():
     return (STATIC_DIR / "puzzles.html").read_text(encoding="utf-8")
+
+
+@app.get("/game", response_class=HTMLResponse)
+def game_page():
+    return (STATIC_DIR / "game.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

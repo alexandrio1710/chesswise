@@ -27,6 +27,53 @@ logger = logging.getLogger(__name__)
 # for a clean "find the best move" puzzle.
 PUZZLE_SEVERITIES = ("mistake", "blunder")
 
+PIECE_NAMES_LONG = {
+    chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
+    chess.ROOK: "rook", chess.QUEEN: "queen", chess.KING: "king",
+}
+
+
+def describe_move(board: chess.Board, move: chess.Move) -> str:
+    """Plain-English one-line description of what a move does: a capture,
+    a promotion, a check, or a mate. Deliberately limited to facts
+    observable directly from the move itself (not a deeper "why", like
+    forks or pins) — that would need real tactical-motif detection this
+    project doesn't have, and a wrong guess at "why" is worse than none.
+    """
+    moving_piece = board.piece_at(move.from_square)
+    piece_name = PIECE_NAMES_LONG[moving_piece.piece_type]
+
+    is_capture = board.is_capture(move)
+    captured_name = None
+    if is_capture:
+        if board.is_en_passant(move):
+            captured_name = "pawn"
+        else:
+            captured_piece = board.piece_at(move.to_square)
+            captured_name = PIECE_NAMES_LONG[captured_piece.piece_type]
+
+    board_after = board.copy()
+    board_after.push(move)
+    is_mate = board_after.is_checkmate()
+    gives_check = board_after.is_check()
+
+    promoted_name = PIECE_NAMES_LONG.get(move.promotion) if move.promotion else None
+
+    parts = []
+    if is_capture:
+        parts.append(f"captures the {captured_name}")
+    if promoted_name:
+        parts.append(f"promotes to a {promoted_name}")
+    if is_mate:
+        parts.append("delivers checkmate")
+    elif gives_check:
+        parts.append("gives check")
+
+    if not parts:
+        parts.append("develops the position without an immediate tactic")
+
+    return f"The {piece_name} " + " and ".join(parts) + "."
+
 
 def board_before_ply(pgn_text: str, target_ply: int) -> chess.Board:
     """Replay a game and return the board position right before the move
@@ -78,6 +125,15 @@ def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict:
     if not top_lines:
         raise ValueError(f"no legal moves found at ply {mistake_row['ply']} (mistake_id={mistake_row['id']})")
     best = top_lines[0]
+    best_move = chess.Move.from_uci(best["move_uci"])
+
+    try:
+        played_move = board.parse_san(mistake_row["move_san"])
+        played_move_explanation = describe_move(board, played_move)
+    except ValueError:
+        # Extremely rare (a SAN string that doesn't parse against this
+        # exact position) — don't let one bad row blow up the whole batch.
+        played_move_explanation = "This move didn't hold up under closer engine analysis."
 
     return {
         "mistake_id": mistake_row["id"],
@@ -87,6 +143,8 @@ def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict:
         "played_move_san": mistake_row["move_san"],
         "best_move_uci": best["move_uci"],
         "best_move_san": best["move_san"],
+        "best_move_explanation": describe_move(board, best_move),
+        "played_move_explanation": played_move_explanation,
         "top_lines": top_lines,
         "phase": mistake_row["phase"],
         "severity": mistake_row["severity"],
@@ -100,12 +158,14 @@ def store_puzzle(p: dict) -> None:
             """
             INSERT OR IGNORE INTO puzzles
                 (mistake_id, game_id, fen_before, side_to_move, played_move_san,
-                 best_move_uci, best_move_san, top_lines, phase, severity, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                 best_move_uci, best_move_san, best_move_explanation,
+                 played_move_explanation, top_lines, phase, severity, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """,
             (
                 p["mistake_id"], p["game_id"], p["fen_before"], p["side_to_move"],
                 p["played_move_san"], p["best_move_uci"], p["best_move_san"],
+                p["best_move_explanation"], p["played_move_explanation"],
                 json.dumps(p["top_lines"]), p["phase"], p["severity"],
             ),
         )
@@ -164,6 +224,43 @@ def generate_all_puzzles() -> None:
             logger.info(f"{i}/{total} processed ({generated} generated, {failed} failed)")
 
     logger.info(f"Done. {generated} puzzles generated, {failed} failed.")
+
+
+def backfill_explanations() -> None:
+    """Fill in best_move_explanation/played_move_explanation for puzzles
+    generated before those columns existed (migration 2). Pure
+    python-chess, no Stockfish needed — describe_move() only reasons
+    about the move itself, not the position's evaluation.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, fen_before, best_move_uci, played_move_san FROM puzzles "
+            "WHERE best_move_explanation IS NULL"
+        ).fetchall()
+
+        if not rows:
+            logger.info("No puzzles need explanation backfill.")
+            return
+
+        logger.info(f"Backfilling explanations for {len(rows)} puzzle(s)...")
+        for row in rows:
+            board = chess.Board(row["fen_before"])
+            best_move = chess.Move.from_uci(row["best_move_uci"])
+            best_expl = describe_move(board, best_move)
+            try:
+                played_move = board.parse_san(row["played_move_san"])
+                played_expl = describe_move(board, played_move)
+            except ValueError:
+                played_expl = "This move didn't hold up under closer engine analysis."
+            conn.execute(
+                "UPDATE puzzles SET best_move_explanation = ?, played_move_explanation = ? WHERE id = ?",
+                (best_expl, played_expl, row["id"]),
+            )
+        conn.commit()
+        logger.info(f"Backfilled {len(rows)} puzzle(s).")
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +389,11 @@ def check_attempt(puzzle: dict, from_square: str, to_square: str, promotion: str
     return {
         "correct": correct,
         "played_san": played_san,
+        "played_explanation": describe_move(board, move),
         "best_move_san": best["move_san"],
+        "best_move_explanation": puzzle.get("best_move_explanation"),
         "original_mistake_move_san": puzzle["played_move_san"],
+        "original_mistake_explanation": puzzle.get("played_move_explanation"),
         "top_lines": top_lines,
     }
 

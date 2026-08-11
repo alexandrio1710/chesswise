@@ -94,11 +94,44 @@ def _migration_001_initial_schema(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
 
 
+def _migration_002_puzzle_explanations(conn: sqlite3.Connection) -> None:
+    """Plain-English explanations for the best move and the move actually
+    played in each puzzle, so the feedback screen can say more than raw
+    engine notation.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(puzzles)")}
+    for col_name in ("best_move_explanation", "played_move_explanation"):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE puzzles ADD COLUMN {col_name} TEXT")
+
+
+def _migration_003_game_moves(conn: sqlite3.Connection) -> None:
+    """Full per-move evaluation trace for every analyzed game (not just
+    flagged mistakes), so a game can be reviewed move-by-move with an eval
+    graph without re-running Stockfish each time it's viewed.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS game_moves (
+            id INTEGER PRIMARY KEY,
+            game_id INTEGER NOT NULL REFERENCES games(id),
+            ply INTEGER NOT NULL,
+            move_number INTEGER NOT NULL,
+            color_moved TEXT NOT NULL,
+            move_san TEXT NOT NULL,
+            eval_cp REAL NOT NULL,
+            clock_seconds_remaining INTEGER,
+            UNIQUE(game_id, ply)
+        );
+    """)
+
+
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
+    (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
+    (3, "Add game_moves table for full per-game analysis", _migration_003_game_moves),
 ]
 
 
@@ -180,5 +213,4 @@ if __name__ == "__main__":
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     logger.info(f"Schema version after run: {_get_schema_version(conn)}")
-    conn.close()
     conn.close()

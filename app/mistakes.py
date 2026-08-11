@@ -96,40 +96,45 @@ def classify_phase(move_number: int, non_king_piece_count: int) -> str:
     return "middlegame"
 
 
+def _classify_move(m: dict) -> dict | None:
+    """Grade one move (a dict from analyze_game_moves) and return its
+    mistake record, or None if it wasn't inaccurate enough to flag.
+    Factored out of detect_mistakes() so analyze_and_store_game() can
+    derive flagged mistakes AND store the full move trace from a single
+    analyze_game_moves() pass, instead of analyzing the same game twice.
+    """
+    is_white = m["color_moved"] == "white"
+    eval_before = m["eval_before_cp"] if is_white else -m["eval_before_cp"]
+    eval_after = m["eval_after_cp"] if is_white else -m["eval_after_cp"]
+    eval_drop = eval_before - eval_after
+
+    severity = classify_severity(eval_drop)
+    if severity is None:
+        return None
+
+    phase = classify_phase(m["move_number"], m["non_king_piece_count"])
+
+    return {
+        "ply": m["ply"],
+        "move_number": m["move_number"],
+        "move_san": m["move_san"],
+        "color_moved": m["color_moved"],
+        "phase": phase,
+        "severity": severity,
+        "eval_before": eval_before,
+        "eval_after": eval_after,
+        "eval_drop": eval_drop,
+        "clock_seconds_remaining": m["clock_seconds_remaining"],
+    }
+
+
 def detect_mistakes(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict]:
     """Analyze a game and return the list of flagged mistakes (moves whose
     eval drop, from the mover's perspective, meets the inaccuracy threshold
     or worse).
     """
     moves = analyze_game_moves(pgn_text, depth=depth)
-    flagged = []
-
-    for m in moves:
-        is_white = m["color_moved"] == "white"
-        eval_before = m["eval_before_cp"] if is_white else -m["eval_before_cp"]
-        eval_after = m["eval_after_cp"] if is_white else -m["eval_after_cp"]
-        eval_drop = eval_before - eval_after
-
-        severity = classify_severity(eval_drop)
-        if severity is None:
-            continue
-
-        phase = classify_phase(m["move_number"], m["non_king_piece_count"])
-
-        flagged.append({
-            "ply": m["ply"],
-            "move_number": m["move_number"],
-            "move_san": m["move_san"],
-            "color_moved": m["color_moved"],
-            "phase": phase,
-            "severity": severity,
-            "eval_before": eval_before,
-            "eval_after": eval_after,
-            "eval_drop": eval_drop,
-            "clock_seconds_remaining": m["clock_seconds_remaining"],
-        })
-
-    return flagged
+    return [flagged for m in moves if (flagged := _classify_move(m)) is not None]
 
 
 def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict] | None:
@@ -153,7 +158,8 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
             conn.close()
         return None
 
-    flagged = detect_mistakes(pgn_text, depth=depth)
+    moves = analyze_game_moves(pgn_text, depth=depth)
+    flagged = [m for move in moves if (m := _classify_move(move)) is not None]
 
     conn = get_connection()
     try:
@@ -185,6 +191,26 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
                 for m in flagged
             ],
         )
+
+        # Full per-move eval trace (Final Pass extension — game analysis
+        # view), from the same analyze_game_moves() pass, so a full-game
+        # review doesn't cost a second round of Stockfish work.
+        conn.execute("DELETE FROM game_moves WHERE game_id = ?", (game_id,))
+        conn.executemany(
+            """
+            INSERT INTO game_moves
+                (game_id, ply, move_number, color_moved, move_san, eval_cp, clock_seconds_remaining)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    game_id, move["ply"], move["move_number"], move["color_moved"],
+                    move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
+                )
+                for move in moves
+            ],
+        )
+
         conn.execute(
             "UPDATE games SET analyzed = 1, analyzed_at = datetime('now') WHERE id = ?",
             (game_id,),

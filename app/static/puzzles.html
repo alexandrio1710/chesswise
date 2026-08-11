@@ -212,6 +212,7 @@
   .feedback .verdict { font-weight: 700; margin-bottom: 6px; }
   .feedback .verdict.correct-text { color: var(--status-good); }
   .feedback .verdict.incorrect-text { color: var(--status-critical); }
+  #feedback-detail div { padding: 3px 0; }
   .feedback .lines { margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
   .feedback .lines div { padding: 2px 0; }
 
@@ -480,9 +481,17 @@
     verdict.className = `verdict ${result.correct ? "correct-text" : "incorrect-text"}`;
     verdict.textContent = result.correct ? "Correct!" : "Not quite.";
 
-    detail.textContent = result.correct
-      ? `${result.played_san} was the best move here.`
-      : `You played ${result.played_san}. Best was ${result.best_move_san} — in the actual game, you played ${result.original_mistake_move_san} here.`;
+    const rows = [];
+    if (result.correct) {
+      rows.push(`<strong>${escapeHtml(result.played_san)}</strong> was the best move. ${escapeHtml(result.played_explanation)}`);
+    } else {
+      rows.push(`You played <strong>${escapeHtml(result.played_san)}</strong>. ${escapeHtml(result.played_explanation)}`);
+      rows.push(`Best was <strong>${escapeHtml(result.best_move_san)}</strong>. ${escapeHtml(result.best_move_explanation)}`);
+    }
+    if (result.original_mistake_move_san !== result.played_san) {
+      rows.push(`In the actual game, you played <strong>${escapeHtml(result.original_mistake_move_san)}</strong> here. ${escapeHtml(result.original_mistake_explanation)}`);
+    }
+    detail.innerHTML = rows.map(r => `<div>${r}</div>`).join("");
 
     lines.innerHTML = "<strong>Top engine lines:</strong>" + result.top_lines.map(formatLine).join("");
   }
@@ -549,10 +558,43 @@
     });
   }
 
+  function getRequestedPuzzleId() {
+    const id = new URLSearchParams(window.location.search).get("id");
+    return id ? parseInt(id, 10) : null;
+  }
+
+  async function fetchPuzzleSummaryById(id) {
+    const res = await fetch(`/api/puzzles/${id}`);
+    if (!res.ok) return null;
+    const p = await res.json();
+    return { id: p.id, phase: p.phase, severity: p.severity, source: p.source, date: p.date, opponent: p.opponent };
+  }
+
   async function loadQueue() {
     const res = await fetch(`/api/puzzles/queue?mode=${mode}&limit=30`);
     const data = await res.json();
     queue = data.puzzles;
+
+    // Deep-link from the game analysis page ("Practice this mistake") —
+    // jump straight to that puzzle even if it's outside the default
+    // worst-30 queue window, splicing it in so Next still makes sense.
+    const requestedId = getRequestedPuzzleId();
+    if (requestedId) {
+      let idx = queue.findIndex(p => p.id === requestedId);
+      if (idx === -1) {
+        const summary = await fetchPuzzleSummaryById(requestedId);
+        if (summary) {
+          queue.unshift(summary);
+          idx = 0;
+        }
+      }
+      if (idx !== -1) {
+        renderQueueList();
+        loadPuzzle(idx);
+        return;
+      }
+    }
+
     renderQueueList();
     if (queue.length) {
       loadPuzzle(0);

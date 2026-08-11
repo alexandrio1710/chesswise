@@ -454,6 +454,42 @@ def openings_to_review(source: str | None = None, min_games: int = 2, limit: int
     return sorted(scored, key=lambda f: f["impact_score"], reverse=True)[:limit]
 
 
+# --- Game analysis view -----------------------------------------------------
+
+def get_game_detail(game_id: int) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_game_moves(game_id: int) -> list[dict]:
+    """Full per-move eval trace for one game (populated at analysis time —
+    see mistakes.analyze_and_store_game), each move flagged with its
+    mistake severity and, if one was generated, its puzzle id.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT gm.ply, gm.move_number, gm.color_moved, gm.move_san,
+                   gm.eval_cp, gm.clock_seconds_remaining,
+                   m.severity, m.eval_drop, p.id as puzzle_id
+            FROM game_moves gm
+            LEFT JOIN mistakes m ON m.game_id = gm.game_id AND m.ply = gm.ply
+            LEFT JOIN puzzles p ON p.mistake_id = m.id
+            WHERE gm.game_id = ?
+            ORDER BY gm.ply
+            """,
+            (game_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import sys
 

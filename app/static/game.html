@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Game Analysis</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6; /* white-advantage zone */
+    --series-2:       #eb6834;
+    --status-critical:#d03b3b; /* black-advantage zone; blunder dot */
+    --status-critical-text: #ffffff;
+    --status-serious: #ec835a; /* mistake dot */
+    --status-warning: #fab219; /* inaccuracy dot */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-critical:#e66767;
+      --status-critical-text: #2a0000;
+      --status-serious: #ec835a;
+      --status-warning: #fab219;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-critical:#e66767;
+    --status-critical-text: #2a0000;
+    --status-serious: #ec835a;
+    --status-warning: #fab219;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+  .game-meta { font-size: 14px; color: var(--text-secondary); }
+  .game-meta strong { color: var(--text-primary); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 100px; color: #fff;
+  }
+  .badge.lichess { background: var(--series-1); }
+  .badge.chesscom { background: var(--series-2); }
+
+  #chart-wrap { position: relative; }
+  #eval-chart { width: 100%; height: 220px; display: block; }
+  .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; background: var(--text-primary); color: var(--surface-1);
+    font-size: 12px; padding: 5px 9px; border-radius: 6px; white-space: nowrap; opacity: 0; transition: opacity .1s;
+    transform: translate(-50%, -110%);
+  }
+
+  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  table.moves-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 13px; }
+  table.moves-table th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--text-muted);
+    font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--gridline);
+  }
+  table.moves-table td { padding: 7px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  table.moves-table tr.move-row { cursor: pointer; }
+  table.moves-table tr.move-row:hover, table.moves-table tr.move-row.highlighted { background: var(--page-plane); }
+  table.moves-table tr.flagged td:first-child { border-left: 3px solid var(--flag-color, var(--status-critical)); }
+  .severity-pill {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; color: #fff;
+  }
+  .severity-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+  .severity-pill.mistake { background: var(--status-serious); color: #3a1400; }
+  .severity-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
+  .practice-link { font-size: 12px; color: var(--series-1); text-decoration: none; margin-left: 6px; }
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 14px; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -3px; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1 id="page-title">Game analysis</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card" id="meta-card">
+    <p class="loading-text"><span class="spinner"></span>Loading game…</p>
+  </section>
+
+  <section class="card" id="chart-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Evaluation over the game</h2>
+    <div id="chart-wrap">
+      <svg id="eval-chart" viewBox="0 0 800 220" preserveAspectRatio="none"></svg>
+      <div class="chart-tooltip" id="chart-tooltip"></div>
+    </div>
+    <p class="chart-caption">Blue = White ahead, red = Black ahead. Capped at ±10.00 for readability — mate-level swings are clamped to the edge. Dots mark flagged mistakes.</p>
+  </section>
+
+  <section class="card" id="moves-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Move list</h2>
+    <div class="table-scroll">
+      <table class="moves-table">
+        <thead><tr><th>#</th><th>Color</th><th>Move</th><th>Eval</th><th>Flag</th></tr></thead>
+        <tbody id="moves-body"><tr><td colspan="5" class="empty-note">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  const CAP = 1000; // display cap, in centipawns (±10.00)
+  let currentMoves = [];
+
+  function getGameId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("id");
+  }
+
+  function formatEval(cp) {
+    if (Math.abs(cp) >= 9000) {
+      const sign = cp > 0 ? "+" : "-";
+      return `${sign}M`;
+    }
+    const pawns = (cp / 100).toFixed(2);
+    return cp > 0 ? `+${pawns}` : pawns;
+  }
+
+  async function loadGame() {
+    const gameId = getGameId();
+    if (!gameId) {
+      document.getElementById("meta-card").innerHTML = `<p class="empty-note">No game specified.</p>`;
+      return;
+    }
+
+    const res = await fetch(`/api/games/${gameId}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      document.getElementById("meta-card").innerHTML =
+        `<p class="empty-note">${escapeHtml(body.detail || "Couldn't load this game.")}</p>`;
+      document.getElementById("chart-card").style.display = "none";
+      document.getElementById("moves-card").style.display = "none";
+      return;
+    }
+
+    const data = await res.json();
+    renderMeta(data.game);
+    currentMoves = data.moves;
+    renderChart(data.moves);
+    renderMoveList(data.moves);
+  }
+
+  function renderMeta(game) {
+    document.getElementById("page-title").textContent = `vs ${game.opponent}`;
+    const date = new Date(game.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+    const badgeClass = game.source === "lichess" ? "lichess" : "chesscom";
+    const badgeLabel = game.source === "lichess" ? "Lichess" : "Chess.com";
+    document.getElementById("meta-card").innerHTML = `
+      <div class="game-meta">
+        <span class="badge ${badgeClass}">${badgeLabel}</span>
+        &nbsp; ${date} &nbsp;·&nbsp; You played <strong>${escapeHtml(game.color)}</strong>
+        &nbsp;·&nbsp; Result: <strong>${escapeHtml(game.result)}</strong>
+        &nbsp;·&nbsp; ${escapeHtml(game.time_control)}
+        &nbsp;·&nbsp; ${escapeHtml(game.opening_name || "Unknown opening")}
+      </div>
+    `;
+  }
+
+  function renderChart(moves) {
+    const svg = document.getElementById("eval-chart");
+    svg.innerHTML = "";
+    if (!moves.length) return;
+
+    const width = 800, height = 220, padTop = 10, padBottom = 10;
+    const maxPly = Math.max(...moves.map(m => m.ply), 1);
+    const zeroY = height / 2;
+
+    const xScale = ply => (ply / maxPly) * width;
+    const yScale = cp => {
+      const clamped = Math.max(-CAP, Math.min(CAP, cp));
+      return zeroY - (clamped / CAP) * (zeroY - padTop);
+    };
+
+    const ns = "http://www.w3.org/2000/svg";
+    const makeEl = (tag, attrs) => {
+      const el = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+      return el;
+    };
+
+    // Background zones
+    svg.appendChild(makeEl("rect", { x: 0, y: 0, width, height: zeroY, fill: "var(--series-1)", opacity: 0.08 }));
+    svg.appendChild(makeEl("rect", { x: 0, y: zeroY, width, height: height - zeroY, fill: "var(--status-critical)", opacity: 0.08 }));
+    svg.appendChild(makeEl("line", { x1: 0, y1: zeroY, x2: width, y2: zeroY, stroke: "var(--baseline)", "stroke-width": 1 }));
+
+    // Eval line — starts at the pre-game (starting position) eval, ~0
+    const points = [[0, zeroY], ...moves.map(m => [xScale(m.ply), yScale(m.eval_cp)])];
+    const pointsAttr = points.map(p => p.join(",")).join(" ");
+    svg.appendChild(makeEl("polyline", {
+      points: pointsAttr, fill: "none", stroke: "var(--text-primary)", "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+
+    // Flagged-mistake dots
+    const severityColor = { blunder: "var(--status-critical)", mistake: "var(--status-serious)", inaccuracy: "var(--status-warning)" };
+    const tooltip = document.getElementById("chart-tooltip");
+    for (const m of moves) {
+      if (!m.severity) continue;
+      const cx = xScale(m.ply), cy = yScale(m.eval_cp);
+      const dot = makeEl("circle", { cx, cy, r: 5, fill: severityColor[m.severity], stroke: "var(--surface-1)", "stroke-width": 2 });
+      dot.style.cursor = "pointer";
+      dot.addEventListener("mouseenter", (e) => {
+        tooltip.textContent = `${m.move_number}. ${m.move_san} — ${m.severity} (${formatEval(m.eval_cp)})`;
+        tooltip.style.opacity = "1";
+        positionTooltip(e);
+      });
+      dot.addEventListener("mousemove", positionTooltip);
+      dot.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+      dot.addEventListener("click", () => highlightMoveRow(m.ply));
+      svg.appendChild(dot);
+    }
+
+    function positionTooltip(e) {
+      const rect = svg.getBoundingClientRect();
+      const wrapRect = document.getElementById("chart-wrap").getBoundingClientRect();
+      tooltip.style.left = (e.clientX - wrapRect.left) + "px";
+      tooltip.style.top = (e.clientY - wrapRect.top) + "px";
+    }
+  }
+
+  function renderMoveList(moves) {
+    const body = document.getElementById("moves-body");
+    if (!moves.length) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-note">No move data for this game.</td></tr>`;
+      return;
+    }
+    body.innerHTML = moves.map(m => {
+      const flagClass = m.severity ? `flagged` : "";
+      const flagStyle = m.severity ? `style="--flag-color: var(--status-${m.severity === 'blunder' ? 'critical' : m.severity === 'mistake' ? 'serious' : 'warning'})"` : "";
+      const pill = m.severity ? `<span class="severity-pill ${m.severity}">${m.severity}</span>` : "";
+      const practiceLink = m.puzzle_id ? `<a class="practice-link" href="/puzzles?id=${m.puzzle_id}">Practice →</a>` : "";
+      return `
+        <tr class="move-row ${flagClass}" ${flagStyle} data-ply="${m.ply}">
+          <td>${m.move_number}</td>
+          <td>${m.color_moved}</td>
+          <td>${escapeHtml(m.move_san)}</td>
+          <td>${formatEval(m.eval_cp)}</td>
+          <td>${pill}${practiceLink}</td>
+        </tr>
+      `;
+    }).join("");
+
+    body.querySelectorAll(".move-row").forEach(row => {
+      row.addEventListener("click", () => highlightMoveRow(parseInt(row.dataset.ply, 10)));
+    });
+  }
+
+  function highlightMoveRow(ply) {
+    document.querySelectorAll(".move-row").forEach(r => r.classList.remove("highlighted"));
+    const row = document.querySelector(`.move-row[data-ply="${ply}"]`);
+    if (row) {
+      row.classList.add("highlighted");
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadGame();
+</script>
+</body>
+</html>
