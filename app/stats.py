@@ -6,6 +6,8 @@ Every function accepts an optional `source` filter ('lichess' | 'chesscom'
 duplicating query logic.
 """
 
+import json
+import math
 import re
 
 from db import get_connection
@@ -467,16 +469,20 @@ def get_game_detail(game_id: int) -> dict | None:
 
 def get_game_moves(game_id: int) -> list[dict]:
     """Full per-move eval trace for one game (populated at analysis time —
-    see mistakes.analyze_and_store_game), each move flagged with its
-    mistake severity and, if one was generated, its puzzle id.
+    see mistakes.analyze_and_store_game): every move's own quality tier
+    (best/excellent/good/inaccuracy/mistake/blunder), plus the flagged
+    mistake's severity and puzzle id where one exists (severity is
+    redundant with tier for flagged moves — kept separately since it's the
+    field the rest of the app, puzzles included, already keys off of).
     """
     conn = get_connection()
     try:
         rows = conn.execute(
             """
             SELECT gm.ply, gm.move_number, gm.color_moved, gm.move_san,
-                   gm.eval_cp, gm.clock_seconds_remaining,
-                   m.severity, m.eval_drop, p.id as puzzle_id
+                   gm.eval_cp, gm.eval_before_cp, gm.eval_drop, gm.tier,
+                   gm.clock_seconds_remaining,
+                   m.severity, p.id as puzzle_id
             FROM game_moves gm
             LEFT JOIN mistakes m ON m.game_id = gm.game_id AND m.ply = gm.ply
             LEFT JOIN puzzles p ON p.mistake_id = m.id
@@ -486,6 +492,130 @@ def get_game_moves(game_id: int) -> list[dict]:
             (game_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ACPL->accuracy decay constant — this project's own calibration (not
+# copied from any external source): chosen so ACPL=50 (a solid, mostly-
+# clean game) scores ~80%, and ACPL=200 (a rough game with a couple of
+# real blunders) scores ~41%. See compute_game_accuracy() docstring.
+ACCURACY_DECAY_K = 0.00446
+
+
+def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
+    """0-100 accuracy score for one player's moves in one game, from their
+    average centipawn loss (ACPL) via exponential decay:
+
+        accuracy = 100 * e^(-k * ACPL)
+
+    This treats every centipawn of loss as equally costly regardless of
+    how winning/losing the position already was, and doesn't correct for
+    the engine's own move-to-move evaluation noise — a real simplification,
+    not a claim of precision. It's a standard style of scoring used across
+    chess analysis tools generally, not any specific site's exact formula
+    (this project picked its own k, see ACCURACY_DECAY_K above).
+
+    `moves` is get_game_moves()'s output; only the given `color`'s own
+    moves count (the opponent's moves aren't yours to be accurate about).
+    Returns None if that color made no moves with a known eval_drop
+    (shouldn't happen for a fully analyzed game, but a partial/corrupt
+    trace shouldn't crash the caller).
+    """
+    drops = [m["eval_drop"] for m in moves if m["color_moved"] == color and m["eval_drop"] is not None]
+    if not drops:
+        return None
+    acpl = sum(max(0.0, d) for d in drops) / len(drops)
+    accuracy = 100 * math.exp(-ACCURACY_DECAY_K * acpl)
+    return round(max(0.0, min(100.0, accuracy)), 1)
+
+
+def get_critical_moment(game_id: int, game_pgn: str, player_color: str) -> dict | None:
+    """The single move with the largest eval swing IN THE PLAYER'S OWN
+    moves for this game (their critical moment to learn from — not the
+    opponent's, even if the opponent blundered harder). Includes the
+    position right before it and what the engine's actual best move was,
+    reusing the stored puzzle if one exists (mistake/blunder severity) or
+    running one fresh, cheap top-line query if the critical moment was
+    only inaccuracy-severity (which doesn't get a puzzle).
+
+    Returns None if the player made no flagged mistakes this game at all.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT m.id as mistake_id, m.ply, m.move_number, m.move_san,
+                   m.phase, m.severity, m.eval_drop, p.id as puzzle_id,
+                   p.best_move_san, p.best_move_explanation, p.fen_before, p.top_lines
+            FROM mistakes m
+            LEFT JOIN puzzles p ON p.mistake_id = m.id
+            WHERE m.game_id = ? AND m.color_moved = ?
+            ORDER BY m.eval_drop DESC
+            LIMIT 1
+            """,
+            (game_id, player_color),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return None
+    d = dict(row)
+
+    if d["fen_before"]:
+        d["top_lines"] = json.loads(d["top_lines"])
+        return d
+
+    # No puzzle (inaccuracy-severity critical moment) — get the position
+    # and best move fresh. One Stockfish call, not stored, since this is a
+    # one-off detail-view lookup rather than something replayed later.
+    import chess
+    from puzzles import board_before_ply, get_top_lines
+
+    board = board_before_ply(game_pgn, d["ply"])
+    d["fen_before"] = board.fen()
+    lines = get_top_lines(d["fen_before"])
+    if lines:
+        d["best_move_san"] = lines[0]["move_san"]
+        d["best_move_explanation"] = None
+    d["top_lines"] = lines
+    d["puzzle_id"] = None
+    return d
+
+
+# --- Notes (Full Game Review, Section 1) ------------------------------------
+
+def add_note(game_id: int, text: str, ply: int | None = None) -> dict:
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO notes (game_id, ply, text, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (game_id, ply, text),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def get_notes(game_id: int) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM notes WHERE game_id = ? ORDER BY created_at", (game_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def delete_note(note_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        conn.commit()
     finally:
         conn.close()
 

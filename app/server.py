@@ -203,14 +203,40 @@ def api_game_detail(game_id: int):
     if game["skip_reason"]:
         raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
 
+    moves = stats.get_game_moves(game_id)
+    critical_moment = stats.get_critical_moment(game_id, game["pgn"], game["color"])
+
     return {
         "game": {
             "id": game["id"], "source": game["source"], "date": game["date"],
             "opponent": game["opponent"], "result": game["result"], "color": game["color"],
             "time_control": game["time_control"], "opening_name": game["opening_name"],
         },
-        "moves": stats.get_game_moves(game_id),
+        "moves": moves,
+        "accuracy": stats.compute_game_accuracy(moves, game["color"]),
+        "critical_moment": critical_moment,
+        "notes": stats.get_notes(game_id),
     }
+
+
+class NoteCreate(BaseModel):
+    text: str
+    ply: int | None = None
+
+
+@app.post("/api/games/{game_id}/notes")
+def api_add_note(game_id: int, note: NoteCreate):
+    if stats.get_game_detail(game_id) is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not note.text.strip():
+        raise HTTPException(status_code=400, detail="Note text can't be empty")
+    return stats.add_note(game_id, note.text.strip(), note.ply)
+
+
+@app.delete("/api/notes/{note_id}")
+def api_delete_note(note_id: int):
+    stats.delete_note(note_id)
+    return {"status": "deleted"}
 
 
 @app.get("/api/puzzles/queue")

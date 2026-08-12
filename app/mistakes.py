@@ -69,6 +69,46 @@ def classify_severity(eval_drop_cp: float) -> str | None:
     return None
 
 
+# --- Move quality tiers (Full Game Review) ----------------------------------
+# classify_severity() above only cares about moves bad enough to flag
+# (>=100cp) — most moves in most games never get graded at all. The Full
+# Game Review wants every move graded, including the good ones, so this
+# adds three tiers BELOW the existing inaccuracy floor. The inaccuracy/
+# mistake/blunder boundaries themselves (100/200/400) are untouched here —
+# changing them would shift the meaning of every already-stored mistake,
+# puzzle, and stat in the app. GOOD_THRESHOLD_CP is therefore pinned to
+# INACCURACY_THRESHOLD_CP so the two scales meet exactly at the same edge
+# rather than leaving an ungraded gap or double-counting a band.
+BEST_THRESHOLD_CP = 10          # 0-10   => best
+EXCELLENT_THRESHOLD_CP = 25     # 10-25  => excellent
+GOOD_THRESHOLD_CP = INACCURACY_THRESHOLD_CP  # 25-100 => good
+
+
+def classify_tier(eval_drop_cp: float) -> str:
+    """Six-tier quality grade for a single move, from an eval drop that's
+    already been converted to the mover's own perspective (same input
+    convention as classify_severity()). Unlike classify_severity(), this
+    always returns something — every move gets graded, not just flagged
+    mistakes.
+
+    A negative eval_drop (the position improved beyond what was already
+    best — happens when the opponent's prior move was itself weak) is
+    clamped to 0 rather than yielding some notion of "better than best".
+    """
+    eval_drop_cp = max(0.0, eval_drop_cp)
+    if eval_drop_cp >= BLUNDER_THRESHOLD_CP:
+        return "blunder"
+    if eval_drop_cp >= MISTAKE_THRESHOLD_CP:
+        return "mistake"
+    if eval_drop_cp >= INACCURACY_THRESHOLD_CP:
+        return "inaccuracy"
+    if eval_drop_cp >= EXCELLENT_THRESHOLD_CP:
+        return "good"
+    if eval_drop_cp >= BEST_THRESHOLD_CP:
+        return "excellent"
+    return "best"
+
+
 def classify_phase(move_number: int, non_king_piece_count: int) -> str:
     """Bucket a move into opening/middlegame/endgame by a simple, cheap
     heuristic rather than real positional understanding (no engine can
@@ -192,23 +232,30 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
             ],
         )
 
-        # Full per-move eval trace (Final Pass extension — game analysis
-        # view), from the same analyze_game_moves() pass, so a full-game
-        # review doesn't cost a second round of Stockfish work.
+        # Full per-move eval trace (game analysis view), from the same
+        # analyze_game_moves() pass, so a full-game review doesn't cost a
+        # second round of Stockfish work. Every move also gets a quality
+        # tier (Full Game Review, Section 1) — not just flagged mistakes.
         conn.execute("DELETE FROM game_moves WHERE game_id = ?", (game_id,))
+        game_moves_rows = []
+        for move in moves:
+            is_white = move["color_moved"] == "white"
+            eval_before = move["eval_before_cp"] if is_white else -move["eval_before_cp"]
+            eval_after = move["eval_after_cp"] if is_white else -move["eval_after_cp"]
+            eval_drop = eval_before - eval_after
+            game_moves_rows.append((
+                game_id, move["ply"], move["move_number"], move["color_moved"],
+                move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
+                eval_before, eval_drop, classify_tier(eval_drop),
+            ))
         conn.executemany(
             """
             INSERT INTO game_moves
-                (game_id, ply, move_number, color_moved, move_san, eval_cp, clock_seconds_remaining)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (game_id, ply, move_number, color_moved, move_san, eval_cp,
+                 clock_seconds_remaining, eval_before_cp, eval_drop, tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [
-                (
-                    game_id, move["ply"], move["move_number"], move["color_moved"],
-                    move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
-                )
-                for move in moves
-            ],
+            game_moves_rows,
         )
 
         conn.execute(

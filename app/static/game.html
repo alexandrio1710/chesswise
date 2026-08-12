@@ -22,6 +22,10 @@
     --status-critical-text: #ffffff;
     --status-serious: #ec835a; /* mistake dot */
     --status-warning: #fab219; /* inaccuracy dot */
+    --status-good:    #0ca30c; /* best */
+    --tier-excellent: #1baf7a; /* aqua */
+    --board-light:    #e9e5d8;
+    --board-dark:     #7c9070;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -40,6 +44,10 @@
       --status-critical-text: #2a0000;
       --status-serious: #ec835a;
       --status-warning: #fab219;
+      --status-good:    #0ca30c;
+      --tier-excellent: #199e70;
+      --board-light:    #3a3a36;
+      --board-dark:     #21331f;
     }
   }
   :root[data-theme="dark"] {
@@ -58,6 +66,10 @@
     --status-critical-text: #2a0000;
     --status-serious: #ec835a;
     --status-warning: #fab219;
+    --status-good:    #0ca30c;
+    --tier-excellent: #199e70;
+    --board-light:    #3a3a36;
+    --board-dark:     #21331f;
   }
 
   * { box-sizing: border-box; }
@@ -119,8 +131,60 @@
   .severity-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
   .severity-pill.mistake { background: var(--status-serious); color: #3a1400; }
   .severity-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
+  .tier-pill {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px;
+  }
+  .tier-pill.best { background: var(--status-good); color: #fff; }
+  .tier-pill.excellent { background: var(--tier-excellent); color: #fff; }
+  .tier-pill.good { background: var(--series-1); color: #fff; }
+  .tier-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
+  .tier-pill.mistake { background: var(--status-serious); color: #3a1400; }
+  .tier-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
   .practice-link { font-size: 12px; color: var(--series-1); text-decoration: none; margin-left: 6px; }
+  .note-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .note-dot.has-note { background: var(--series-1); }
   .empty-note { color: var(--text-secondary); font-size: 13px; }
+
+  /* Accuracy stat */
+  .accuracy-row { display: flex; align-items: baseline; gap: 10px; margin-top: 10px; }
+  .accuracy-value { font-size: 34px; font-weight: 700; }
+  .accuracy-label { font-size: 12px; color: var(--text-secondary); }
+
+  /* Critical moment */
+  .critical-layout { display: grid; grid-template-columns: minmax(0, 220px) 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 560px) { .critical-layout { grid-template-columns: 1fr; } }
+  #critical-board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    width: 100%; aspect-ratio: 1/1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+  }
+  #critical-board .square { display: flex; align-items: center; justify-content: center; font-size: min(5vw, 26px); }
+  #critical-board .square.light { background: var(--board-light); }
+  #critical-board .square.dark { background: var(--board-dark); }
+  .critical-detail p { margin: 0 0 8px; font-size: 14px; }
+  .critical-lines { font-size: 13px; color: var(--text-secondary); }
+  .critical-lines div { padding: 2px 0; }
+
+  /* Notes */
+  .notes-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .note-item {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+    font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--page-plane);
+  }
+  .note-item .note-ply { color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 3px; }
+  .note-item button { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 13px; }
+  .note-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .note-form input[type="text"] {
+    flex: 1; min-width: 200px; font: inherit; font-size: 13px; padding: 8px 10px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  .note-form select {
+    font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  .note-form button {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: none;
+    background: var(--series-1); color: #fff; cursor: pointer;
+  }
   .loading-text { color: var(--text-secondary); font-size: 14px; }
   .spinner {
     display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
@@ -147,6 +211,17 @@
     <p class="loading-text"><span class="spinner"></span>Loading game…</p>
   </section>
 
+  <section class="card hidden" id="critical-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Critical moment</h2>
+    <div class="critical-layout">
+      <div id="critical-board"></div>
+      <div class="critical-detail">
+        <p id="critical-summary"></p>
+        <div class="critical-lines" id="critical-lines"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="chart-card">
     <h2 style="font-size:15px; margin:0 0 14px;">Evaluation over the game</h2>
     <div id="chart-wrap">
@@ -160,16 +235,33 @@
     <h2 style="font-size:15px; margin:0 0 14px;">Move list</h2>
     <div class="table-scroll">
       <table class="moves-table">
-        <thead><tr><th>#</th><th>Color</th><th>Move</th><th>Eval</th><th>Flag</th></tr></thead>
-        <tbody id="moves-body"><tr><td colspan="5" class="empty-note">Loading…</td></tr></tbody>
+        <thead><tr><th>#</th><th>Color</th><th>Move</th><th>Eval</th><th>Tier</th><th>Note</th></tr></thead>
+        <tbody id="moves-body"><tr><td colspan="6" class="empty-note">Loading…</td></tr></tbody>
       </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Notes</h2>
+    <div class="notes-list" id="notes-list"></div>
+    <div class="note-form">
+      <select id="note-ply-select">
+        <option value="">Whole game</option>
+      </select>
+      <input type="text" id="note-text" placeholder="e.g. was tired, tried the gambit on purpose…">
+      <button id="note-add">Add note</button>
     </div>
   </section>
 </div>
 
 <script>
   const CAP = 1000; // display cap, in centipawns (±10.00)
+  const PIECE_UNICODE = {
+    K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
+    k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+  };
   let currentMoves = [];
+  let currentGameId = null;
 
   function getGameId() {
     const params = new URLSearchParams(window.location.search);
@@ -203,17 +295,23 @@
     }
 
     const data = await res.json();
-    renderMeta(data.game);
+    currentGameId = gameId;
     currentMoves = data.moves;
+    renderMeta(data.game, data.accuracy);
     renderChart(data.moves);
     renderMoveList(data.moves);
+    renderCriticalMoment(data.critical_moment, data.game.color);
+    populateNoteSelect(data.moves);
+    renderNotes(data.notes);
   }
 
-  function renderMeta(game) {
+  function renderMeta(game, accuracy) {
     document.getElementById("page-title").textContent = `vs ${game.opponent}`;
     const date = new Date(game.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
     const badgeClass = game.source === "lichess" ? "lichess" : "chesscom";
     const badgeLabel = game.source === "lichess" ? "Lichess" : "Chess.com";
+    const accuracyColor = accuracy == null ? "var(--text-primary)"
+      : accuracy >= 80 ? "var(--status-good)" : accuracy >= 55 ? "var(--status-warning)" : "var(--status-critical)";
     document.getElementById("meta-card").innerHTML = `
       <div class="game-meta">
         <span class="badge ${badgeClass}">${badgeLabel}</span>
@@ -222,6 +320,12 @@
         &nbsp;·&nbsp; ${escapeHtml(game.time_control)}
         &nbsp;·&nbsp; ${escapeHtml(game.opening_name || "Unknown opening")}
       </div>
+      ${accuracy != null ? `
+        <div class="accuracy-row">
+          <span class="accuracy-value" style="color:${accuracyColor}">${accuracy}%</span>
+          <span class="accuracy-label">accuracy (from average centipawn loss on your moves)</span>
+        </div>
+      ` : ""}
     `;
   }
 
@@ -290,13 +394,13 @@
   function renderMoveList(moves) {
     const body = document.getElementById("moves-body");
     if (!moves.length) {
-      body.innerHTML = `<tr><td colspan="5" class="empty-note">No move data for this game.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="empty-note">No move data for this game.</td></tr>`;
       return;
     }
     body.innerHTML = moves.map(m => {
       const flagClass = m.severity ? `flagged` : "";
       const flagStyle = m.severity ? `style="--flag-color: var(--status-${m.severity === 'blunder' ? 'critical' : m.severity === 'mistake' ? 'serious' : 'warning'})"` : "";
-      const pill = m.severity ? `<span class="severity-pill ${m.severity}">${m.severity}</span>` : "";
+      const tierPill = m.tier ? `<span class="tier-pill ${m.tier}">${m.tier}</span>` : "";
       const practiceLink = m.puzzle_id ? `<a class="practice-link" href="/puzzles?id=${m.puzzle_id}">Practice →</a>` : "";
       return `
         <tr class="move-row ${flagClass}" ${flagStyle} data-ply="${m.ply}">
@@ -304,7 +408,8 @@
           <td>${m.color_moved}</td>
           <td>${escapeHtml(m.move_san)}</td>
           <td>${formatEval(m.eval_cp)}</td>
-          <td>${pill}${practiceLink}</td>
+          <td>${tierPill}</td>
+          <td>${practiceLink}<span class="note-dot" data-ply-note="${m.ply}"></span></td>
         </tr>
       `;
     }).join("");
@@ -328,6 +433,132 @@
     div.textContent = s ?? "";
     return div.innerHTML;
   }
+
+  // --- Critical moment: static (non-interactive) board + engine lines ----
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) { file += parseInt(ch, 10); }
+        else { map[String.fromCharCode(97 + file) + rank] = ch; file += 1; }
+      }
+    });
+    return map;
+  }
+
+  function isLightSquare(square) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = parseInt(square[1], 10);
+    return (file + rank) % 2 !== 0;
+  }
+
+  function renderStaticBoard(fen, orientation) {
+    const board = document.getElementById("critical-board");
+    board.innerHTML = "";
+    const pieceMap = fenToPieceMap(fen);
+    const files = "abcdefgh".split("");
+    const ranks = [8, 7, 6, 5, 4, 3, 2, 1];
+    if (orientation === "black") { files.reverse(); ranks.reverse(); }
+
+    for (const rank of ranks) {
+      for (const file of files) {
+        const square = `${file}${rank}`;
+        const el = document.createElement("div");
+        el.className = `square ${isLightSquare(square) ? "light" : "dark"}`;
+        const piece = pieceMap[square];
+        if (piece) el.textContent = PIECE_UNICODE[piece];
+        board.appendChild(el);
+      }
+    }
+  }
+
+  function formatLine(line, idx) {
+    const evalText = line.mate_in != null
+      ? `mate in ${Math.abs(line.mate_in)}`
+      : `${line.eval_cp > 0 ? "+" : ""}${(line.eval_cp / 100).toFixed(2)}`;
+    return `<div>${idx + 1}. ${escapeHtml(line.move_san)} (${evalText})</div>`;
+  }
+
+  function renderCriticalMoment(cm, playerColor) {
+    const card = document.getElementById("critical-card");
+    if (!cm) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+
+    renderStaticBoard(cm.fen_before, playerColor);
+
+    document.getElementById("critical-summary").innerHTML = `
+      Move ${cm.move_number} (${escapeHtml(cm.phase)}): you played <strong>${escapeHtml(cm.move_san)}</strong>,
+      dropping the evaluation by ${Math.round(cm.eval_drop)} centipawns — a <strong>${escapeHtml(cm.severity)}</strong>.
+      ${cm.best_move_san ? `The engine's best move here was <strong>${escapeHtml(cm.best_move_san)}</strong>.` : ""}
+      ${cm.best_move_explanation ? escapeHtml(cm.best_move_explanation) : ""}
+      ${cm.puzzle_id ? `<br><a class="practice-link" href="/puzzles?id=${cm.puzzle_id}">Practice this position →</a>` : ""}
+    `;
+
+    const lines = document.getElementById("critical-lines");
+    lines.innerHTML = (cm.top_lines && cm.top_lines.length)
+      ? "<strong>Top engine lines:</strong>" + cm.top_lines.map(formatLine).join("")
+      : "";
+  }
+
+  // --- Notes ---------------------------------------------------------------
+
+  function populateNoteSelect(moves) {
+    const select = document.getElementById("note-ply-select");
+    select.innerHTML = `<option value="">Whole game</option>` + moves.map(m =>
+      `<option value="${m.ply}">${m.move_number}. ${m.color_moved === "white" ? "" : "…"}${escapeHtml(m.move_san)}</option>`
+    ).join("");
+  }
+
+  function renderNotes(notes) {
+    const list = document.getElementById("notes-list");
+    document.querySelectorAll(".note-dot").forEach(dot => dot.classList.remove("has-note"));
+
+    if (!notes.length) {
+      list.innerHTML = `<p class="empty-note">No notes yet.</p>`;
+      return;
+    }
+
+    list.innerHTML = notes.map(n => {
+      const label = n.ply != null ? `Move ${n.ply}` : "Whole game";
+      return `
+        <div class="note-item" data-note-id="${n.id}">
+          <div><div class="note-ply">${label}</div>${escapeHtml(n.text)}</div>
+          <button data-delete-note="${n.id}" title="Delete note" aria-label="Delete note">✕</button>
+        </div>
+      `;
+    }).join("");
+
+    for (const n of notes) {
+      if (n.ply != null) {
+        const dot = document.querySelector(`.note-dot[data-ply-note="${n.ply}"]`);
+        if (dot) dot.classList.add("has-note");
+      }
+    }
+
+    list.querySelectorAll("[data-delete-note]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        await fetch(`/api/notes/${btn.dataset.deleteNote}`, { method: "DELETE" });
+        loadGame();
+      });
+    });
+  }
+
+  document.getElementById("note-add").addEventListener("click", async () => {
+    const text = document.getElementById("note-text").value.trim();
+    if (!text || !currentGameId) return;
+    const plyValue = document.getElementById("note-ply-select").value;
+    await fetch(`/api/games/${currentGameId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, ply: plyValue ? parseInt(plyValue, 10) : null }),
+    });
+    document.getElementById("note-text").value = "";
+    loadGame();
+  });
 
   function applyTheme(theme) {
     if (theme === "system") document.documentElement.removeAttribute("data-theme");

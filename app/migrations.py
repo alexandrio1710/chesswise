@@ -125,6 +125,29 @@ def _migration_003_game_moves(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_004_move_tiers_and_notes(conn: sqlite3.Connection) -> None:
+    """Full Game Review (advanced features, Section 1): every move gets a
+    quality tier (best/excellent/good, in addition to the existing
+    inaccuracy/mistake/blunder), which needs eval_before_cp and eval_drop
+    stored per move — previously only computed for flagged mistakes, not
+    every move. Also adds free-text notes on a game or a specific move.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(game_moves)")}
+    for col_name, col_type in (("eval_before_cp", "REAL"), ("eval_drop", "REAL"), ("tier", "TEXT")):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE game_moves ADD COLUMN {col_name} {col_type}")
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY,
+            game_id INTEGER NOT NULL REFERENCES games(id),
+            ply INTEGER,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+    """)
+
+
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
@@ -132,6 +155,7 @@ MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
     (3, "Add game_moves table for full per-game analysis", _migration_003_game_moves),
+    (4, "Add move tiers (game_moves) and free-text notes table", _migration_004_move_tiers_and_notes),
 ]
 
 
