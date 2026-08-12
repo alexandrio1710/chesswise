@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Clock Management</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-serious: #ec835a;
+    --status-warning: #fab219;
+    --tier-excellent: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-serious: #ec835a;
+      --status-warning: #fab219;
+      --tier-excellent: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-serious: #ec835a;
+    --status-warning: #fab219;
+    --tier-excellent: #199e70;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .filter-group { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .filter-group button {
+    font: inherit; font-size: 13px; padding: 7px 14px; background: var(--surface-1);
+    color: var(--text-secondary); border: none; border-right: 1px solid var(--border); cursor: pointer;
+  }
+  .filter-group button:last-child { border-right: none; }
+  .filter-group button.active { background: var(--series-1); color: #fff; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .subtext { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+
+  .tier-bar-list { display: flex; flex-direction: column; gap: 9px; }
+  .tier-bar-item { font-size: 13px; }
+  .tier-bar-label { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .tier-bar-label .name { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); text-transform: capitalize; }
+  .tier-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .tier-bar-track { height: 9px; background: var(--gridline); border-radius: 4px; overflow: hidden; }
+  .tier-bar-fill { height: 100%; border-radius: 4px; }
+
+  .flag-list { display: flex; flex-direction: column; gap: 8px; }
+  .flag-item {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 8px; background: var(--page-plane); font-size: 13px;
+    text-decoration: none; color: var(--text-primary);
+  }
+  .flag-item:hover { background: var(--gridline); }
+  .flag-pattern { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 100px; color: #fff; white-space: nowrap; }
+  .flag-pattern.time_advantage_but_lost { background: var(--status-critical); }
+  .flag-pattern.won_despite_time_disadvantage { background: var(--status-good); }
+  .flag-meta { color: var(--text-muted); font-size: 12px; }
+
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 14px; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -3px; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Clock management</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/insights">Insights</a>
+        <a href="/clock" class="active">Clock</a>
+        <a href="/search">Search</a>
+      </nav>
+      <div class="filter-group" id="filter-group">
+        <button data-source="all" class="active">All</button>
+        <button data-source="lichess">Lichess</button>
+        <button data-source="chesscom">Chess.com</button>
+      </div>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Average thinking time by move quality</h2>
+    <p class="subtext">Your own moves only, across every analyzed game with clock data. Whatever pattern shows up here (or doesn't) is what the data actually says — it's not assumed in advance.</p>
+    <div class="tier-bar-list" id="tier-bars"><p class="loading-text"><span class="spinner"></span>Loading…</p></div>
+  </section>
+
+  <section class="card">
+    <h2>Games with a clock/result mismatch</h2>
+    <p class="subtext" id="flag-subtext"></p>
+    <div class="flag-list" id="flag-list"></div>
+  </section>
+</div>
+
+<script>
+  const TIER_ORDER = ["best", "excellent", "good", "inaccuracy", "mistake", "blunder"];
+  const TIER_COLORS = {
+    best: "var(--status-good)", excellent: "var(--tier-excellent)", good: "var(--series-1)",
+    inaccuracy: "var(--status-warning)", mistake: "var(--status-serious)", blunder: "var(--status-critical)",
+  };
+  const PATTERN_LABELS = {
+    time_advantage_but_lost: "Had more time left, but lost",
+    won_despite_time_disadvantage: "Won despite less time left",
+  };
+
+  function qs(source) { return source === "all" ? "" : `?source=${source}`; }
+
+  async function loadClock(source) {
+    const res = await fetch(`/api/clock-analysis${qs(source)}`);
+    const data = await res.json();
+    renderTierBars(data.avg_thinking_time_by_tier);
+    renderFlagged(data.pressure);
+  }
+
+  function renderTierBars(byTier) {
+    const el = document.getElementById("tier-bars");
+    const rows = TIER_ORDER.map(t => ({ tier: t, ...byTier[t] })).filter(r => r.count > 0);
+    if (!rows.length) { el.innerHTML = `<p class="empty-note">No timed games with clock data yet.</p>`; return; }
+    const maxSecs = Math.max(...rows.map(r => r.avg_seconds));
+    el.innerHTML = rows.map(r => `
+      <div class="tier-bar-item">
+        <div class="tier-bar-label">
+          <span class="name"><span class="tier-dot" style="background:${TIER_COLORS[r.tier]}"></span>${r.tier}</span>
+          <span>${r.avg_seconds}s avg (${r.count} moves)</span>
+        </div>
+        <div class="tier-bar-track"><div class="tier-bar-fill" style="width:${(r.avg_seconds / maxSecs) * 100}%; background:${TIER_COLORS[r.tier]}"></div></div>
+      </div>
+    `).join("");
+  }
+
+  function renderFlagged(pressure) {
+    document.getElementById("flag-subtext").textContent =
+      `Comparing each side's final clock reading against the game result. ${pressure.flagged.length} of ${pressure.games_with_clock_data} games with clock data show a mismatch (at least 30s difference).`;
+    const list = document.getElementById("flag-list");
+    if (!pressure.flagged.length) {
+      list.innerHTML = `<p class="empty-note">No clock/result mismatches found — your time usage and results line up as you'd expect.</p>`;
+      return;
+    }
+    list.innerHTML = pressure.flagged.map(f => {
+      const date = new Date(f.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+      const diffAbs = Math.abs(f.clock_diff_seconds);
+      return `
+        <a class="flag-item" href="/game?id=${f.game_id}">
+          <span>
+            vs ${escapeHtml(f.opponent)} &nbsp;<span class="flag-meta">${date} · ${escapeHtml(f.time_control)} · ${diffAbs}s ${f.clock_diff_seconds >= 0 ? "ahead" : "behind"} on the clock at the end</span>
+          </span>
+          <span class="flag-pattern ${f.pattern}">${PATTERN_LABELS[f.pattern]}</span>
+        </a>
+      `;
+    }).join("");
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  document.querySelectorAll("#filter-group button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#filter-group button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadClock(btn.dataset.source);
+    });
+  });
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadClock("all");
+</script>
+</body>
+</html>

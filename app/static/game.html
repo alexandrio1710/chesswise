@@ -108,6 +108,7 @@
 
   #chart-wrap { position: relative; }
   #eval-chart { width: 100%; height: 220px; display: block; }
+  #clock-chart { width: 100%; height: 140px; display: block; }
   .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
   .chart-tooltip {
     position: absolute; pointer-events: none; background: var(--text-primary); color: var(--surface-1);
@@ -206,6 +207,7 @@
         <a href="/endgame">Endgame</a>
         <a href="/analyze">Analyze</a>
         <a href="/insights">Insights</a>
+        <a href="/clock">Clock</a>
         <a href="/search">Search</a>
       </nav>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
@@ -234,6 +236,15 @@
       <div class="chart-tooltip" id="chart-tooltip"></div>
     </div>
     <p class="chart-caption">Blue = White ahead, red = Black ahead. Capped at ±10.00 for readability — mate-level swings are clamped to the edge. Dots mark flagged mistakes.</p>
+  </section>
+
+  <section class="card hidden" id="clock-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Time spent per move</h2>
+    <div id="clock-chart-wrap" style="position:relative;">
+      <svg id="clock-chart" viewBox="0 0 800 140" preserveAspectRatio="none"></svg>
+      <div class="chart-tooltip" id="clock-chart-tooltip"></div>
+    </div>
+    <p class="chart-caption" id="clock-chart-caption"></p>
   </section>
 
   <section class="card" id="moves-card">
@@ -304,6 +315,7 @@
     currentMoves = data.moves;
     renderMeta(data.game, data.accuracy);
     renderChart(data.moves);
+    renderClockChart(data.moves, data.game.color);
     renderMoveList(data.moves);
     renderCriticalMoment(data.critical_moment, data.game.color);
     populateNoteSelect(data.moves);
@@ -394,6 +406,64 @@
       tooltip.style.left = (e.clientX - wrapRect.left) + "px";
       tooltip.style.top = (e.clientY - wrapRect.top) + "px";
     }
+  }
+
+  function renderClockChart(moves, playerColor) {
+    const card = document.getElementById("clock-card");
+    const withTime = moves.filter(m => m.time_spent_seconds != null);
+    if (!withTime.length) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+
+    const svg = document.getElementById("clock-chart");
+    svg.innerHTML = "";
+    const width = 800, height = 140, padBottom = 4, padTop = 4;
+    const maxPly = Math.max(...moves.map(m => m.ply), 1);
+    const maxSpent = Math.max(...withTime.map(m => m.time_spent_seconds), 1);
+    const barWidth = Math.max(1, (width / maxPly) * 0.7);
+
+    const xScale = ply => (ply / maxPly) * width;
+    const yScale = secs => ((height - padTop - padBottom) * secs) / maxSpent;
+
+    const ns = "http://www.w3.org/2000/svg";
+    const makeEl = (tag, attrs) => {
+      const el = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+      return el;
+    };
+
+    const tooltip = document.getElementById("clock-chart-tooltip");
+    for (const m of withTime) {
+      const isPlayer = m.color_moved === playerColor;
+      const barH = yScale(m.time_spent_seconds);
+      const x = xScale(m.ply) - barWidth / 2;
+      const y = height - padBottom - barH;
+      const mistakeTiers = ["inaccuracy", "mistake", "blunder"];
+      const fill = isPlayer && mistakeTiers.includes(m.tier) ? "var(--status-critical)"
+        : isPlayer ? "var(--series-1)" : "var(--text-muted)";
+      const rect = makeEl("rect", {
+        x, y, width: barWidth, height: Math.max(0.5, barH),
+        fill, opacity: isPlayer ? 0.9 : 0.35, rx: 1,
+      });
+      rect.style.cursor = "pointer";
+      rect.addEventListener("mouseenter", (e) => {
+        tooltip.textContent = `${m.move_number}. ${m.move_san} (${m.color_moved}) — ${m.time_spent_seconds}s`;
+        tooltip.style.opacity = "1";
+        const wrapRect = document.getElementById("clock-chart-wrap").getBoundingClientRect();
+        tooltip.style.left = (e.clientX - wrapRect.left) + "px";
+        tooltip.style.top = (e.clientY - wrapRect.top) + "px";
+      });
+      rect.addEventListener("mousemove", (e) => {
+        const wrapRect = document.getElementById("clock-chart-wrap").getBoundingClientRect();
+        tooltip.style.left = (e.clientX - wrapRect.left) + "px";
+        tooltip.style.top = (e.clientY - wrapRect.top) + "px";
+      });
+      rect.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+      rect.addEventListener("click", () => highlightMoveRow(m.ply));
+      svg.appendChild(rect);
+    }
+
+    document.getElementById("clock-chart-caption").textContent =
+      `Blue/red = your moves (red = flagged), gray = opponent's. Tallest bar: ${maxSpent}s.`;
   }
 
   function renderMoveList(moves) {

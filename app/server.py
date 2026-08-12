@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import cli_state
+import clock_analysis
 import insights
 import manual_analysis
 import opening_explorer
@@ -264,7 +265,7 @@ def api_game_detail(game_id: int):
     if game["skip_reason"]:
         raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
 
-    moves = stats.get_game_moves(game_id)
+    moves = clock_analysis.annotate_time_spent(stats.get_game_moves(game_id), game["pgn"])
     critical_moment = stats.get_critical_moment(game_id, game["pgn"], game["color"])
 
     return {
@@ -507,6 +508,20 @@ def search_page():
 @app.get("/insights", response_class=HTMLResponse)
 def insights_page():
     return (STATIC_DIR / "insights.html").read_text(encoding="utf-8")
+
+
+@app.get("/api/clock-analysis")
+def api_clock_analysis(source: str | None = Query(default=None)):
+    source = _normalize_source(source)
+    return {
+        "avg_thinking_time_by_tier": clock_analysis.avg_thinking_time_by_tier(source),
+        "pressure": clock_analysis.clock_pressure_games(source),
+    }
+
+
+@app.get("/clock", response_class=HTMLResponse)
+def clock_page():
+    return (STATIC_DIR / "clock.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
