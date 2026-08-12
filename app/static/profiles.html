@@ -197,7 +197,10 @@
             <span class="profile-name">${escapeHtml(p.name)}</span>
             <span class="profile-game-count">${p.game_count} game${p.game_count === 1 ? "" : "s"}</span>
           </div>
-          <button class="btn btn-danger" data-delete-profile="${p.id}">Delete</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn" data-refresh-profile="${p.id}" ${p.usernames.length ? "" : "disabled title=\"Link a username first\""}>🔄 Refresh</button>
+            <button class="btn btn-danger" data-delete-profile="${p.id}">Delete</button>
+          </div>
         </div>
         <div>
           ${p.usernames.map(u => `
@@ -206,6 +209,7 @@
             </span>
           `).join("")}
         </div>
+        <p class="empty-note" data-refresh-status="${p.id}" style="margin:8px 0 0;"></p>
         <div class="link-form">
           <select data-link-source="${p.id}">
             <option value="lichess">Lichess</option>
@@ -216,6 +220,10 @@
         </div>
       </div>
     `).join("");
+
+    list.querySelectorAll("[data-refresh-profile]").forEach(btn => {
+      btn.addEventListener("click", () => refreshProfile(btn.dataset.refreshProfile));
+    });
 
     list.querySelectorAll("[data-delete-profile]").forEach(btn => {
       btn.addEventListener("click", async () => {
@@ -248,6 +256,70 @@
         if (res.ok) { usernameInput.value = ""; loadProfiles(); }
       });
     });
+  }
+
+  async function refreshProfile(profileId) {
+    const profile = profilesCache.find(p => String(p.id) === String(profileId));
+    if (!profile || !profile.usernames.length) return;
+
+    const btn = document.querySelector(`[data-refresh-profile="${profileId}"]`);
+    const statusEl = document.querySelector(`[data-refresh-status="${profileId}"]`);
+    const lichess = profile.usernames.find(u => u.source === "lichess");
+    const chesscom = profile.usernames.find(u => u.source === "chesscom");
+    const settings = { lichess_user: lichess ? lichess.username : null, chesscom_user: chesscom ? chesscom.username : null };
+
+    btn.disabled = true;
+    statusEl.textContent = "Starting…";
+
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+
+    const res = await fetch("/api/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.textContent = body.detail || "Couldn't start refresh.";
+      btn.disabled = false;
+      return;
+    }
+    pollProfileRefresh(profileId, statusEl, btn);
+  }
+
+  async function pollProfileRefresh(profileId, statusEl, btn) {
+    const res = await fetch("/api/refresh/status");
+    const status = await res.json();
+
+    if (status.running) {
+      statusEl.textContent = "Refreshing… this can take a few minutes.";
+      setTimeout(() => pollProfileRefresh(profileId, statusEl, btn), 3000);
+      return;
+    }
+
+    let finalText;
+    if (status.error) {
+      finalText = `Refresh failed: ${status.error}`;
+    } else if (status.finished_at) {
+      const inserted = status.result ? status.result.inserted : 0;
+      const otherProfile = status.result ? status.result.skipped_other_profile : 0;
+      finalText = `Done — ${inserted} new game(s).`;
+      if (otherProfile) {
+        finalText += ` ${otherProfile} already tracked under a different profile in this database.`;
+      }
+    }
+
+    // loadProfiles() re-renders the whole list (to pick up the new
+    // game_count), which wipes the status paragraph's text along with
+    // it — write the final message again into the freshly-rendered node
+    // rather than losing it to the re-render's blank starting state.
+    await loadProfiles();
+    const freshStatusEl = document.querySelector(`[data-refresh-status="${profileId}"]`);
+    if (freshStatusEl && finalText) freshStatusEl.textContent = finalText;
   }
 
   function renderComparePickers() {

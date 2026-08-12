@@ -125,6 +125,8 @@
     color: var(--text-primary);
     cursor: pointer;
   }
+  .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .icon-btn.spinning { animation: spin 0.9s linear infinite; }
   .card {
     background: var(--surface-1);
     border: 1px solid var(--border);
@@ -467,6 +469,7 @@
         <a href="/search">Search</a>
       </nav>
       <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
+      <button class="icon-btn" id="profile-quick-refresh" title="Refresh this profile's games" aria-label="Refresh this profile's games" disabled>🔄</button>
       <div class="filter-group" role="group" aria-label="Filter by source">
         <button data-source="all" class="active">All</button>
         <button data-source="lichess">Lichess</button>
@@ -609,13 +612,15 @@
     return s ? `?${s}` : "";
   }
 
+  let allProfiles = [];
+
   async function loadProfileOptions() {
     const select = document.getElementById("profile-select");
     try {
-      const profiles = await fetch("/api/profiles").then(r => r.json());
+      allProfiles = await fetch("/api/profiles").then(r => r.json());
       select.innerHTML = `<option value="">All profiles</option>` +
-        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
-      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
+        allProfiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && allProfiles.some(p => String(p.id) === currentProfileId)) {
         select.value = currentProfileId;
       } else {
         currentProfileId = "";
@@ -625,14 +630,83 @@
       // Profiles are a nice-to-have filter, not load-bearing — a failed
       // fetch here shouldn't block the rest of the dashboard from loading.
     }
+    updateQuickRefreshButton();
+  }
+
+  function selectedProfile() {
+    return allProfiles.find(p => String(p.id) === currentProfileId) || null;
+  }
+
+  function updateQuickRefreshButton() {
+    const btn = document.getElementById("profile-quick-refresh");
+    const profile = selectedProfile();
+    if (!profile) {
+      btn.disabled = true;
+      btn.title = "Pick a specific profile to refresh just its games";
+      return;
+    }
+    if (!profile.usernames.length) {
+      btn.disabled = true;
+      btn.title = `${profile.name} has no linked Lichess/Chess.com username yet — add one on the Profiles page`;
+      return;
+    }
+    btn.disabled = false;
+    const names = profile.usernames.map(u => `${u.source === "lichess" ? "Lichess" : "Chess.com"}: ${u.username}`).join(", ");
+    btn.title = `Refresh ${profile.name}'s games (${names})`;
   }
 
   document.getElementById("profile-select").addEventListener("change", () => {
     currentProfileId = document.getElementById("profile-select").value;
     if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
     else localStorage.removeItem("profileId");
+    updateQuickRefreshButton();
     loadOverview(currentSource);
     if (openingsLoaded) loadOpenings(currentSource);
+  });
+
+  // The core "switching accounts" shortcut: pick a profile in the dropdown,
+  // click refresh right next to it — no need to open Settings and retype
+  // that profile's usernames every time. Saves them to Settings too, so
+  // `cli.py refresh` and the Settings panel both stay pointed at whichever
+  // account was refreshed most recently here.
+  document.getElementById("profile-quick-refresh").addEventListener("click", async () => {
+    const profile = selectedProfile();
+    if (!profile || !profile.usernames.length) return;
+
+    const btn = document.getElementById("profile-quick-refresh");
+    const lichess = profile.usernames.find(u => u.source === "lichess");
+    const chesscom = profile.usernames.find(u => u.source === "chesscom");
+    const settings = { lichess_user: lichess ? lichess.username : null, chesscom_user: chesscom ? chesscom.username : null };
+
+    btn.disabled = true;
+    btn.classList.add("spinning");
+
+    document.getElementById("settings-lichess").value = settings.lichess_user || "";
+    document.getElementById("settings-chesscom").value = settings.chesscom_user || "";
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+
+    const res = await fetch("/api/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      btn.classList.remove("spinning");
+      btn.disabled = false;
+      document.getElementById("settings-panel").classList.remove("hidden");
+      document.getElementById("settings-status").textContent = body.detail || "Couldn't start refresh.";
+      return;
+    }
+    document.getElementById("settings-panel").classList.remove("hidden");
+    pollRefreshStatus(() => {
+      btn.classList.remove("spinning");
+      updateQuickRefreshButton();
+    });
   });
 
   async function loadOverview(source) {
@@ -884,21 +958,31 @@
     pollRefreshStatus();
   });
 
-  async function pollRefreshStatus() {
+  async function pollRefreshStatus(onDone) {
     const statusEl = document.getElementById("settings-status");
     const res = await fetch("/api/refresh/status");
     const status = await res.json();
 
     if (status.running) {
       statusEl.textContent = "Refreshing… this can take a few minutes.";
-      setTimeout(pollRefreshStatus, 3000);
+      setTimeout(() => pollRefreshStatus(onDone), 3000);
     } else if (status.error) {
       statusEl.textContent = `Refresh failed: ${status.error}`;
+      if (onDone) onDone();
     } else if (status.finished_at) {
       const inserted = status.result ? status.result.inserted : 0;
-      statusEl.textContent = `Done — ${inserted} new game(s). Reloading…`;
+      const otherProfile = status.result ? status.result.skipped_other_profile : 0;
+      let text = `Done — ${inserted} new game(s).`;
+      if (otherProfile) {
+        text += ` ${otherProfile} game(s) already exist in this database under a different profile ` +
+          `(you both played each other and whichever profile fetched first "owns" that game row) — ` +
+          `not shown under this profile, but not missing either.`;
+      }
+      statusEl.textContent = text + " Reloading…";
+      loadProfileOptions();
       loadOverview(currentSource);
       if (openingsLoaded) loadOpenings(currentSource);
+      if (onDone) onDone();
     }
   }
 
