@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Search</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-critical:#d03b3b;
+    --status-critical-text: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-critical:#e66767;
+      --status-critical-text: #2a0000;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-critical:#e66767;
+    --status-critical-text: #2a0000;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+
+  .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .filter-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+  .filter-grid input, .filter-grid select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  .filter-actions { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+  .filter-actions button {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
+  .stat-tile .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .stat-tile .value { font-size: 24px; font-weight: 600; }
+
+  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  table.data-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; }
+  table.data-table th {
+    text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;
+    padding: 0 10px 8px; border-bottom: 1px solid var(--gridline); cursor: pointer; white-space: nowrap;
+  }
+  table.data-table td { padding: 9px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  table.data-table tbody tr { cursor: pointer; }
+  table.data-table tbody tr:hover { background: var(--page-plane); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 100px; color: #fff;
+  }
+  .badge.lichess { background: var(--series-1); }
+  .badge.chesscom { background: var(--series-2); }
+  .badge.manual { background: var(--text-muted); }
+  .blunder-count { color: var(--status-critical); font-weight: 600; }
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Search games</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+        <a href="/explorer">Explorer</a>
+        <a href="/endgame">Endgame</a>
+        <a href="/analyze">Analyze</a>
+        <a href="/search" class="active">Search</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="filter-grid">
+      <label>Opponent<input type="text" id="f-opponent" placeholder="name contains…"></label>
+      <label>Opening<input type="text" id="f-opening" placeholder="name contains…"></label>
+      <label>From<input type="date" id="f-date-from"></label>
+      <label>To<input type="date" id="f-date-to"></label>
+      <label>Result
+        <select id="f-result"><option value="">Any</option><option value="win">Win</option><option value="loss">Loss</option><option value="draw">Draw</option></select>
+      </label>
+      <label>Color
+        <select id="f-color"><option value="">Any</option><option value="white">White</option><option value="black">Black</option></select>
+      </label>
+      <label>Time control
+        <select id="f-time-control"><option value="">Any</option><option value="bullet">Bullet</option><option value="blitz">Blitz</option><option value="rapid">Rapid</option><option value="classical">Classical</option></select>
+      </label>
+      <label>Site
+        <select id="f-source"><option value="">Any</option><option value="lichess">Lichess</option><option value="chesscom">Chess.com</option><option value="manual">Manual</option></select>
+      </label>
+      <label>Blunders
+        <select id="f-has-blunder"><option value="">Any</option><option value="true">Contains a blunder</option><option value="false">No blunders</option></select>
+      </label>
+    </div>
+    <div class="filter-actions">
+      <button id="clear-btn">Clear filters</button>
+      <span class="empty-note" id="result-count"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:14px; margin:0 0 14px;">Stats for this view</h2>
+    <div class="stat-row" id="stat-row"></div>
+  </section>
+
+  <section class="card">
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th data-sort="date">Date</th>
+            <th>Site</th>
+            <th data-sort="opponent">Opponent</th>
+            <th>Color</th>
+            <th data-sort="result">Result</th>
+            <th>Time control</th>
+            <th>Opening</th>
+            <th data-sort="mistakes">Mistakes</th>
+            <th data-sort="blunders">Blunders</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"><tr><td colspan="9" class="empty-note">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  let sortBy = "date", sortDir = "desc";
+  let debounceHandle = null;
+
+  function currentFilters() {
+    return {
+      opponent: document.getElementById("f-opponent").value.trim(),
+      opening: document.getElementById("f-opening").value.trim(),
+      date_from: document.getElementById("f-date-from").value,
+      date_to: document.getElementById("f-date-to").value,
+      result: document.getElementById("f-result").value,
+      color: document.getElementById("f-color").value,
+      time_control: document.getElementById("f-time-control").value,
+      source: document.getElementById("f-source").value,
+      has_blunder: document.getElementById("f-has-blunder").value,
+    };
+  }
+
+  async function runSearch() {
+    const filters = currentFilters();
+    const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir });
+    for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
+
+    const res = await fetch(`/api/search?${params}`);
+    const data = await res.json();
+    renderStats(data.stats);
+    renderResults(data.games);
+    document.getElementById("result-count").textContent = `${data.games.length} game${data.games.length === 1 ? "" : "s"}`;
+  }
+
+  function renderStats(stats) {
+    const row = document.getElementById("stat-row");
+    const phaseText = Object.entries(stats.by_phase).map(([p, n]) => `${p}: ${n}`).join(", ") || "–";
+    row.innerHTML = `
+      <div class="stat-tile"><div class="label">Games</div><div class="value">${stats.total_games}</div></div>
+      <div class="stat-tile"><div class="label">Mistakes</div><div class="value">${stats.total_mistakes}</div></div>
+      <div class="stat-tile"><div class="label">Blunders/game</div><div class="value">${stats.avg_blunders_per_game}</div></div>
+      <div class="stat-tile"><div class="label">Blunders, % of mistakes</div><div class="value">${stats.blunders_pct_of_mistakes}%</div></div>
+      <div class="stat-tile"><div class="label">By phase</div><div class="value" style="font-size:13px; font-weight:400;">${phaseText}</div></div>
+    `;
+  }
+
+  function renderResults(games) {
+    const body = document.getElementById("results-body");
+    if (!games.length) {
+      body.innerHTML = `<tr><td colspan="9" class="empty-note">No games match these filters.</td></tr>`;
+      return;
+    }
+    body.innerHTML = games.map(g => {
+      const date = new Date(g.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+      const badgeClass = g.source === "lichess" ? "lichess" : g.source === "chesscom" ? "chesscom" : "manual";
+      const badgeLabel = g.source === "lichess" ? "Lichess" : g.source === "chesscom" ? "Chess.com" : "Manual";
+      return `
+        <tr data-id="${g.id}">
+          <td>${date}</td>
+          <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
+          <td>${escapeHtml(g.opponent)}</td>
+          <td>${g.color}</td>
+          <td>${g.result}</td>
+          <td>${g.time_control}</td>
+          <td>${escapeHtml(g.opening_name || "–")}</td>
+          <td>${g.mistake_count}</td>
+          <td class="${g.blunder_count > 0 ? "blunder-count" : ""}">${g.blunder_count}</td>
+        </tr>
+      `;
+    }).join("");
+    body.querySelectorAll("tr[data-id]").forEach(row => {
+      row.addEventListener("click", () => { window.location.href = `/game?id=${row.dataset.id}`; });
+    });
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  document.querySelectorAll("[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (sortBy === key) sortDir = sortDir === "asc" ? "desc" : "asc";
+      else { sortBy = key; sortDir = "desc"; }
+      runSearch();
+    });
+  });
+
+  document.querySelectorAll(".filter-grid select").forEach(el => el.addEventListener("change", runSearch));
+  document.querySelectorAll(".filter-grid input[type='date']").forEach(el => el.addEventListener("change", runSearch));
+  document.querySelectorAll(".filter-grid input[type='text']").forEach(el => {
+    el.addEventListener("input", () => {
+      clearTimeout(debounceHandle);
+      debounceHandle = setTimeout(runSearch, 350);
+    });
+  });
+
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    document.querySelectorAll(".filter-grid input, .filter-grid select").forEach(el => el.value = "");
+    runSearch();
+  });
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  runSearch();
+</script>
+</body>
+</html>

@@ -620,6 +620,133 @@ def delete_note(note_id: int) -> None:
         conn.close()
 
 
+# --- Search and filter (Advanced features, Section 6) -----------------------
+
+def search_games(
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    opening: str | None = None,
+    result: str | None = None,
+    time_control: str | None = None,
+    source: str | None = None,
+    color: str | None = None,
+    has_blunder: bool | None = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    limit: int = 200,
+) -> list[dict]:
+    """Combinable filters across the full game database (e.g. "blitz
+    games I lost as black in the last 3 months" = time_control='blitz',
+    result='loss', color='black', date_from=<3 months ago>). Only
+    analyzed, non-variant-skipped games are searchable — an unanalyzed
+    game has no mistake data for `has_blunder` to mean anything, and a
+    skipped one was never graded at all.
+    """
+    where = ["g.analyzed = 1", "g.skip_reason IS NULL"]
+    params: list = []
+
+    if opponent:
+        where.append("g.opponent LIKE ?")
+        params.append(f"%{opponent}%")
+    if date_from:
+        where.append("g.date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("g.date <= ?")
+        params.append(date_to)
+    if opening:
+        where.append("g.opening_name LIKE ?")
+        params.append(f"%{opening}%")
+    if result:
+        where.append("g.result = ?")
+        params.append(result)
+    if time_control:
+        where.append("g.time_control = ?")
+        params.append(time_control)
+    if source:
+        where.append("g.source = ?")
+        params.append(source)
+    if color:
+        where.append("g.color = ?")
+        params.append(color)
+    if has_blunder is not None:
+        cmp = "IN" if has_blunder else "NOT IN"
+        where.append(f"g.id {cmp} (SELECT DISTINCT game_id FROM mistakes WHERE severity = 'blunder')")
+
+    sort_column = {"date": "g.date", "opponent": "g.opponent", "result": "g.result",
+                   "mistakes": "mistake_count", "blunders": "blunder_count"}.get(sort_by, "g.date")
+    sort_sql = f"{sort_column} {'ASC' if sort_dir == 'asc' else 'DESC'}"
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT g.id, g.source, g.date, g.opponent, g.result, g.color,
+                   g.time_control, g.opening_name,
+                   (SELECT COUNT(*) FROM mistakes m WHERE m.game_id = g.id) as mistake_count,
+                   (SELECT COUNT(*) FROM mistakes m WHERE m.game_id = g.id AND m.severity = 'blunder') as blunder_count
+            FROM games g
+            WHERE {" AND ".join(where)}
+            ORDER BY {sort_sql}
+            LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def compute_stats_for_game_ids(game_ids: list[int]) -> dict:
+    """Headline stats computed for an arbitrary, caller-chosen subset of
+    games — powers the Search page's "stats for this filtered view" panel,
+    so a filter like "blitz losses as black" gets its own mini dashboard
+    rather than only a list of games (Section 6's "feed into the stats
+    dashboard" requirement), without threading a full ad-hoc filter set
+    through every existing stats function.
+    """
+    if not game_ids:
+        return {
+            "total_games": 0, "total_mistakes": 0, "total_blunders": 0,
+            "avg_blunders_per_game": 0.0, "blunders_pct_of_mistakes": 0.0,
+            "by_phase": {}, "by_severity": {},
+        }
+
+    placeholders = ",".join("?" * len(game_ids))
+    conn = get_connection()
+    try:
+        totals = conn.execute(
+            f"SELECT COUNT(*) as total, SUM(CASE WHEN severity = 'blunder' THEN 1 ELSE 0 END) as blunders "
+            f"FROM mistakes WHERE game_id IN ({placeholders})",
+            game_ids,
+        ).fetchone()
+        phase_rows = conn.execute(
+            f"SELECT phase, COUNT(*) as n FROM mistakes WHERE game_id IN ({placeholders}) GROUP BY phase",
+            game_ids,
+        ).fetchall()
+        severity_rows = conn.execute(
+            f"SELECT severity, COUNT(*) as n FROM mistakes WHERE game_id IN ({placeholders}) GROUP BY severity",
+            game_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    total_games = len(game_ids)
+    total_mistakes = totals["total"] or 0
+    total_blunders = totals["blunders"] or 0
+
+    return {
+        "total_games": total_games,
+        "total_mistakes": total_mistakes,
+        "total_blunders": total_blunders,
+        "avg_blunders_per_game": round(total_blunders / total_games, 1) if total_games else 0.0,
+        "blunders_pct_of_mistakes": round(total_blunders / total_mistakes * 100, 1) if total_mistakes else 0.0,
+        "by_phase": {row["phase"]: row["n"] for row in phase_rows},
+        "by_severity": {row["severity"]: row["n"] for row in severity_rows},
+    }
+
+
 if __name__ == "__main__":
     import sys
 

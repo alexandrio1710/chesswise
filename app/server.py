@@ -191,6 +191,32 @@ def api_openings(source: str | None = Query(default=None)):
     }
 
 
+@app.get("/api/search")
+def api_search_games(
+    opponent: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    opening: str | None = Query(default=None),
+    result: str | None = Query(default=None),
+    time_control: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    color: str | None = Query(default=None),
+    has_blunder: bool | None = Query(default=None),
+    sort_by: str = Query(default="date"),
+    sort_dir: str = Query(default="desc"),
+    limit: int = 200,
+):
+    games = stats.search_games(
+        opponent=opponent, date_from=date_from, date_to=date_to, opening=opening,
+        result=result, time_control=time_control, source=_normalize_source(source),
+        color=color, has_blunder=has_blunder, sort_by=sort_by, sort_dir=sort_dir, limit=limit,
+    )
+    return {
+        "games": games,
+        "stats": stats.compute_stats_for_game_ids([g["id"] for g in games]),
+    }
+
+
 @app.get("/api/explorer")
 def api_explorer(moves: str = Query(default=""), source: str | None = Query(default=None)):
     """`moves` is a comma-separated list of UCI moves from the starting
@@ -454,6 +480,11 @@ def endgame_page():
 @app.get("/analyze", response_class=HTMLResponse)
 def analyze_page():
     return (STATIC_DIR / "analyze.html").read_text(encoding="utf-8")
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_page():
+    return (STATIC_DIR / "search.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
