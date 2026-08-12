@@ -144,6 +144,20 @@
     cursor: pointer;
   }
   .mode-row button.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .hidden { display: none !important; }
+  #due-count-badge { font-size: 11px; opacity: 0.8; }
+
+  .filter-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+  .filter-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+  .filter-row select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+
+  .rush-hud { display: flex; gap: 24px; margin-bottom: 14px; flex-wrap: wrap; }
+  .rush-stat { display: flex; flex-direction: column; }
+  .rush-stat-value { font-size: 28px; font-weight: 700; }
+  .rush-stat-label { font-size: 12px; color: var(--text-secondary); }
 
   .puzzle-meta {
     font-size: 13px;
@@ -156,7 +170,7 @@
     color: var(--text-primary);
   }
 
-  #board {
+  #board, #rush-board {
     display: grid;
     grid-template-columns: repeat(8, 1fr);
     grid-template-rows: repeat(8, 1fr);
@@ -293,10 +307,29 @@
     <div class="mode-row" id="mode-row">
       <button data-mode="all" class="active">All puzzles</button>
       <button data-mode="practice">Practice my mistakes</button>
+      <button data-mode="due">Due for review <span id="due-count-badge"></span></button>
+      <button data-mode="rush">Puzzle Rush</button>
+    </div>
+    <div class="filter-row hidden" id="filter-row">
+      <label>Phase
+        <select id="filter-phase">
+          <option value="">All</option>
+          <option value="opening">Opening</option>
+          <option value="middlegame">Middlegame</option>
+          <option value="endgame">Endgame</option>
+        </select>
+      </label>
+      <label>Severity
+        <select id="filter-severity">
+          <option value="">All</option>
+          <option value="blunder">Blunder</option>
+          <option value="mistake">Mistake</option>
+        </select>
+      </label>
     </div>
   </div>
 
-  <div class="layout">
+  <div class="layout" id="normal-layout">
     <div class="card">
       <div class="puzzle-meta" id="puzzle-meta"><span class="spinner"></span>Loading puzzle…</div>
       <div id="board"></div>
@@ -312,6 +345,46 @@
       <h2 id="queue-title">Queue</h2>
       <div class="queue-list" id="queue-list"></div>
     </div>
+  </div>
+
+  <div class="card hidden" id="rush-setup">
+    <h2>Puzzle Rush</h2>
+    <p class="empty-note">Solve as many puzzles as you can before time runs out.</p>
+    <div class="filter-row">
+      <label>Time limit
+        <select id="rush-time-select">
+          <option value="180">3 minutes</option>
+          <option value="300" selected>5 minutes</option>
+        </select>
+      </label>
+    </div>
+    <button class="next-btn show" id="rush-start-btn" style="margin-top:14px;">Start</button>
+  </div>
+
+  <div class="layout hidden" id="rush-layout">
+    <div class="card">
+      <div class="rush-hud">
+        <div class="rush-stat"><span class="rush-stat-value" id="rush-timer">0:00</span><span class="rush-stat-label">time left</span></div>
+        <div class="rush-stat"><span class="rush-stat-value" id="rush-streak">0</span><span class="rush-stat-label">streak</span></div>
+        <div class="rush-stat"><span class="rush-stat-value" id="rush-score">0/0</span><span class="rush-stat-label">correct</span></div>
+      </div>
+      <div class="puzzle-meta" id="rush-puzzle-meta"></div>
+      <div id="rush-board"></div>
+      <div class="feedback" id="rush-feedback">
+        <div class="verdict" id="rush-feedback-verdict"></div>
+        <div id="rush-feedback-detail"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>How it works</h2>
+      <p class="empty-note">Puzzles pull from your whole mistake database, worst-instructive first, shuffled. Get one right or wrong and the next loads automatically — no need to click Next.</p>
+    </div>
+  </div>
+
+  <div class="card hidden" id="rush-summary">
+    <h2>Session complete</h2>
+    <div class="rush-hud" id="rush-summary-stats"></div>
+    <button class="next-btn show" id="rush-again-btn" style="margin-top:14px;">Run it again</button>
   </div>
 
 </div>
@@ -332,6 +405,7 @@
   let selectedSquare = null;
   let solved = false;
   let mode = "all";
+  let puzzleStartedAt = 0;
 
   function fenToPieceMap(fen) {
     const rows = fen.split(" ")[0].split("/");
@@ -451,10 +525,12 @@
   }
 
   async function submitAttempt(from, to) {
+    const timeTaken = Date.now() - puzzleStartedAt;
+    const sessionType = mode === "due" ? "review" : "practice";
     const res = await fetch(`/api/puzzles/${currentPuzzle.id}/attempt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to }),
+      body: JSON.stringify({ from, to, time_taken_ms: timeTaken, session_type: sessionType }),
     });
     if (!res.ok) return;
     const result = await res.json();
@@ -464,6 +540,7 @@
     selectedSquare = null;
     document.getElementById("next-btn").classList.add("show");
     markQueueSolved(currentPuzzle.id, result.correct);
+    refreshDueCount();
   }
 
   function formatLine(line, idx) {
@@ -522,6 +599,7 @@
 
     renderBoard(currentPuzzle);
     highlightActiveQueueItem();
+    puzzleStartedAt = Date.now();
   }
 
   function highlightActiveQueueItem() {
@@ -539,10 +617,13 @@
   function renderQueueList() {
     const list = document.getElementById("queue-list");
     const title = document.getElementById("queue-title");
-    title.textContent = mode === "practice" ? "Practice queue (worst first)" : `Queue (${queue.length} puzzles)`;
+    const titles = { practice: "Practice queue (worst first)", due: "Due for review" };
+    title.textContent = titles[mode] || `Queue (${queue.length} puzzles)`;
 
     if (!queue.length) {
-      list.innerHTML = `<div class="empty-note">No puzzles yet — run puzzles.py to generate them from your flagged mistakes.</div>`;
+      list.innerHTML = mode === "due"
+        ? `<div class="empty-note">Nothing due for review right now — solve some puzzles in another mode to build up review history.</div>`
+        : `<div class="empty-note">No puzzles yet — run puzzles.py to generate them from your flagged mistakes.</div>`;
       return;
     }
 
@@ -573,7 +654,13 @@
   }
 
   async function loadQueue() {
-    const res = await fetch(`/api/puzzles/queue?mode=${mode}&limit=30`);
+    const phase = document.getElementById("filter-phase").value;
+    const severity = document.getElementById("filter-severity").value;
+    const params = new URLSearchParams({ mode, limit: "30" });
+    if (phase) params.set("phase", phase);
+    if (severity) params.set("severity", severity);
+
+    const res = await fetch(`/api/puzzles/queue?${params}`);
     const data = await res.json();
     queue = data.puzzles;
 
@@ -610,14 +697,38 @@
     if (currentIndex + 1 < queue.length) loadPuzzle(currentIndex + 1);
   });
 
+  function showView(viewId) {
+    ["normal-layout", "rush-setup", "rush-layout", "rush-summary"].forEach(id => {
+      document.getElementById(id).classList.toggle("hidden", id !== viewId);
+    });
+  }
+
   document.querySelectorAll("#mode-row button").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#mode-row button").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       mode = btn.dataset.mode;
+
+      if (mode === "rush") {
+        document.getElementById("filter-row").classList.add("hidden");
+        showView("rush-setup");
+        return;
+      }
+      document.getElementById("filter-row").classList.remove("hidden");
+      showView("normal-layout");
       loadQueue();
     });
   });
+
+  document.getElementById("filter-phase").addEventListener("change", loadQueue);
+  document.getElementById("filter-severity").addEventListener("change", loadQueue);
+
+  async function refreshDueCount() {
+    const res = await fetch("/api/puzzles/review-stats");
+    const stats = await res.json();
+    const badge = document.getElementById("due-count-badge");
+    badge.textContent = stats.due_count ? `(${stats.due_count})` : "";
+  }
 
   function applyTheme(theme) {
     if (theme === "system") {
@@ -634,6 +745,192 @@
     applyTheme(next);
   });
 
+  // --- Puzzle Rush ---------------------------------------------------------
+
+  let rushPool = [];
+  let rushPoolIndex = 0;
+  let rushPuzzle = null;
+  let rushSelectedSquare = null;
+  let rushSolved = false;
+  let rushStats = { attempted: 0, correct: 0, streak: 0, bestStreak: 0, times: [] };
+  let rushEndTime = 0;
+  let rushTimerHandle = null;
+  let rushPuzzleStartedAt = 0;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  document.getElementById("rush-start-btn").addEventListener("click", startRushSession);
+  document.getElementById("rush-again-btn").addEventListener("click", () => showView("rush-setup"));
+
+  async function startRushSession() {
+    const seconds = parseInt(document.getElementById("rush-time-select").value, 10);
+    const res = await fetch("/api/puzzles/queue?mode=all&limit=100");
+    const data = await res.json();
+    rushPool = shuffle(data.puzzles.slice());
+    rushPoolIndex = 0;
+    rushStats = { attempted: 0, correct: 0, streak: 0, bestStreak: 0, times: [] };
+    document.getElementById("rush-streak").textContent = "0";
+    document.getElementById("rush-score").textContent = "0/0";
+
+    showView("rush-layout");
+
+    rushEndTime = Date.now() + seconds * 1000;
+    updateRushTimerDisplay();
+    clearInterval(rushTimerHandle);
+    rushTimerHandle = setInterval(() => {
+      if (Date.now() >= rushEndTime) { endRushSession(); return; }
+      updateRushTimerDisplay();
+    }, 250);
+
+    loadNextRushPuzzle();
+  }
+
+  function updateRushTimerDisplay() {
+    const remaining = Math.max(0, Math.round((rushEndTime - Date.now()) / 1000));
+    const m = Math.floor(remaining / 60), s = remaining % 60;
+    document.getElementById("rush-timer").textContent = `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  async function loadNextRushPuzzle() {
+    if (!rushPool.length) return;
+    if (rushPoolIndex >= rushPool.length) rushPoolIndex = 0; // wrap if a long session outlasts the pool
+
+    const summary = rushPool[rushPoolIndex];
+    rushPoolIndex++;
+    rushSolved = false;
+    rushSelectedSquare = null;
+    document.getElementById("rush-feedback").classList.remove("show");
+
+    const res = await fetch(`/api/puzzles/${summary.id}`);
+    rushPuzzle = await res.json();
+    rushPuzzleStartedAt = Date.now();
+
+    document.getElementById("rush-puzzle-meta").innerHTML =
+      `<span class="severity">${escapeHtml(summary.severity)}</span> in the ${escapeHtml(summary.phase)}`;
+    rushRenderBoard();
+  }
+
+  function rushRenderBoard() {
+    const board = document.getElementById("rush-board");
+    board.innerHTML = "";
+    const pieceMap = fenToPieceMap(rushPuzzle.fen_before);
+    const order = squareOrder(rushPuzzle.side_to_move);
+    for (const square of order) {
+      const el = document.createElement("div");
+      el.className = `square ${isLight(square) ? "light" : "dark"}`;
+      el.dataset.square = square;
+      const piece = pieceMap[square];
+      if (piece) {
+        const span = document.createElement("span");
+        span.className = "piece";
+        span.textContent = PIECE_UNICODE[piece];
+        el.appendChild(span);
+      }
+      el.addEventListener("click", () => onRushSquareClick(square));
+      board.appendChild(el);
+    }
+  }
+
+  function rushOwnPiece(square) {
+    const pieceMap = fenToPieceMap(rushPuzzle.fen_before);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    return (rushPuzzle.side_to_move === "white") === isWhitePiece;
+  }
+
+  function rushLegalDestinationsFrom(square) {
+    return rushPuzzle.legal_moves.filter(m => m.from === square).map(m => m.to);
+  }
+
+  function rushClearHighlights() {
+    document.querySelectorAll("#rush-board .square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll("#rush-board .legal-dot").forEach(el => el.remove());
+  }
+
+  function onRushSquareClick(square) {
+    if (rushSolved) return;
+    if (rushSelectedSquare) {
+      const destinations = rushLegalDestinationsFrom(rushSelectedSquare);
+      if (destinations.includes(square)) { rushSubmitAttempt(rushSelectedSquare, square); return; }
+    }
+    rushClearHighlights();
+    if (rushOwnPiece(square)) {
+      rushSelectedSquare = square;
+      document.querySelector(`#rush-board .square[data-square="${square}"]`).classList.add("selected");
+      for (const dest of rushLegalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`#rush-board .square[data-square="${dest}"]`);
+        const dot = document.createElement("div");
+        dot.className = "legal-dot";
+        destEl.appendChild(dot);
+      }
+    } else {
+      rushSelectedSquare = null;
+    }
+  }
+
+  async function rushSubmitAttempt(from, to) {
+    rushSolved = true;
+    rushClearHighlights();
+    const timeTaken = Date.now() - rushPuzzleStartedAt;
+
+    const res = await fetch(`/api/puzzles/${rushPuzzle.id}/attempt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to, time_taken_ms: timeTaken, session_type: "rush" }),
+    });
+    if (!res.ok) { rushSolved = false; return; }
+    const result = await res.json();
+
+    rushStats.attempted++;
+    rushStats.times.push(timeTaken);
+    if (result.correct) {
+      rushStats.correct++;
+      rushStats.streak++;
+      rushStats.bestStreak = Math.max(rushStats.bestStreak, rushStats.streak);
+    } else {
+      rushStats.streak = 0;
+    }
+    document.getElementById("rush-streak").textContent = rushStats.streak;
+    document.getElementById("rush-score").textContent = `${rushStats.correct}/${rushStats.attempted}`;
+
+    const box = document.getElementById("rush-feedback");
+    const verdict = document.getElementById("rush-feedback-verdict");
+    box.className = `feedback show ${result.correct ? "correct" : "incorrect"}`;
+    verdict.className = `verdict ${result.correct ? "correct-text" : "incorrect-text"}`;
+    verdict.textContent = result.correct ? "Correct!" : `Not quite — best was ${escapeHtml(result.best_move_san)}.`;
+    document.getElementById("rush-feedback-detail").textContent = "";
+
+    if (Date.now() < rushEndTime) {
+      setTimeout(loadNextRushPuzzle, 900);
+    }
+  }
+
+  function endRushSession() {
+    clearInterval(rushTimerHandle);
+    showView("rush-summary");
+
+    const avgTimeSec = rushStats.times.length
+      ? Math.round(rushStats.times.reduce((a, b) => a + b, 0) / rushStats.times.length / 100) / 10
+      : 0;
+    const accuracy = rushStats.attempted ? Math.round(rushStats.correct / rushStats.attempted * 100) : 0;
+
+    document.getElementById("rush-summary-stats").innerHTML = `
+      <div class="rush-stat"><span class="rush-stat-value">${rushStats.attempted}</span><span class="rush-stat-label">attempted</span></div>
+      <div class="rush-stat"><span class="rush-stat-value">${accuracy}%</span><span class="rush-stat-label">accuracy</span></div>
+      <div class="rush-stat"><span class="rush-stat-value">${rushStats.bestStreak}</span><span class="rush-stat-label">best streak</span></div>
+      <div class="rush-stat"><span class="rush-stat-value">${avgTimeSec}s</span><span class="rush-stat-label">avg time/puzzle</span></div>
+    `;
+    refreshDueCount();
+  }
+
+  refreshDueCount();
   loadQueue();
 </script>
 </body>

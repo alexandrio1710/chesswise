@@ -273,7 +273,8 @@ def _source_clause(source: str | None) -> tuple[str, tuple]:
     return "", ()
 
 
-def get_puzzle_queue(source: str | None = None, phase: str | None = None, limit: int = 20) -> list[dict]:
+def get_puzzle_queue(source: str | None = None, phase: str | None = None,
+                      severity: str | None = None, limit: int = 20) -> list[dict]:
     """Puzzle summaries only (no FEN/answer) for populating a queue list.
     Ordered worst-first (biggest eval drop) so the most instructive puzzles
     in the selected category surface first.
@@ -282,6 +283,9 @@ def get_puzzle_queue(source: str | None = None, phase: str | None = None, limit:
     if phase:
         where += " AND p.phase = ?"
         params = params + (phase,)
+    if severity:
+        where += " AND p.severity = ?"
+        params = params + (severity,)
 
     conn = get_connection()
     try:
@@ -299,6 +303,33 @@ def get_puzzle_queue(source: str | None = None, phase: str | None = None, limit:
             params + (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_puzzles_by_ids(puzzle_ids: list[int]) -> list[dict]:
+    """Queue summaries for a specific, pre-ordered list of puzzle ids
+    (e.g. from srs.get_due_puzzle_ids) — preserves the given order rather
+    than re-sorting by eval_drop, since the caller's ordering (due date,
+    severity) is the point.
+    """
+    if not puzzle_ids:
+        return []
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(puzzle_ids))
+        rows = conn.execute(
+            f"""
+            SELECT p.id, p.phase, p.severity, g.source, g.date, g.opponent, m.eval_drop
+            FROM puzzles p
+            JOIN games g ON p.game_id = g.id
+            JOIN mistakes m ON p.mistake_id = m.id
+            WHERE p.id IN ({placeholders})
+            """,
+            puzzle_ids,
+        ).fetchall()
+        by_id = {row["id"]: dict(row) for row in rows}
+        return [by_id[pid] for pid in puzzle_ids if pid in by_id]
     finally:
         conn.close()
 

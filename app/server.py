@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import cli_state
 import opening_explorer
 import puzzles
+import srs
 import stats
 import tablebase
 from db import get_connection
@@ -306,20 +307,34 @@ def api_delete_note(note_id: int):
 def api_puzzle_queue(
     source: str | None = Query(default=None),
     mode: str = Query(default="all"),
+    phase: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
     limit: int = 20,
 ):
-    """mode='all' lists puzzles across every phase; mode='practice' narrows
-    to whichever phase has the most mistakes/blunders for this filter, so
-    practice sessions focus on the player's actual biggest leak.
+    """mode='all' lists puzzles across every phase (optionally narrowed by
+    the explicit `phase`/`severity` filters); mode='practice' auto-picks
+    whichever phase has the most mistakes/blunders for this filter, so
+    practice sessions focus on the player's actual biggest leak; mode='due'
+    returns puzzles due for spaced-repetition review right now (Section 4).
     """
     source = _normalize_source(source)
-    phase = None
-    if mode == "practice":
+
+    if mode == "due":
+        due_ids = srs.get_due_puzzle_ids(source=source, phase=phase, severity=severity, limit=limit)
+        return {"phase": phase, "puzzles": puzzles.get_puzzles_by_ids(due_ids)}
+
+    if mode == "practice" and not phase:
         phase = stats.worst_mistake_phase(source)
+
     return {
         "phase": phase,
-        "puzzles": puzzles.get_puzzle_queue(source, phase=phase, limit=limit),
+        "puzzles": puzzles.get_puzzle_queue(source, phase=phase, severity=severity, limit=limit),
     }
+
+
+@app.get("/api/puzzles/review-stats")
+def api_puzzle_review_stats(source: str | None = Query(default=None)):
+    return srs.get_review_stats(source=_normalize_source(source))
 
 
 @app.get("/api/puzzles/{puzzle_id}")
@@ -349,6 +364,8 @@ class PuzzleAttempt(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     from_square: str = Field(alias="from")
     to_square: str = Field(alias="to")
+    time_taken_ms: int | None = None
+    session_type: str = "practice"  # 'practice' | 'rush' | 'review'
 
 
 @app.post("/api/puzzles/{puzzle_id}/attempt")
@@ -358,9 +375,18 @@ def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt):
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
     try:
-        return puzzles.check_attempt(puzzle, attempt.from_square, attempt.to_square)
+        result = puzzles.check_attempt(puzzle, attempt.from_square, attempt.to_square)
     except puzzles.IllegalMoveError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Every attempt, from every mode, feeds the same spaced-repetition
+    # history — recorded server-side so nothing depends on the frontend
+    # remembering to log it separately.
+    srs_state = srs.record_attempt(
+        puzzle_id, result["correct"], attempt.time_taken_ms, attempt.session_type
+    )
+    result["srs"] = srs_state
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -148,6 +148,32 @@ def _migration_004_move_tiers_and_notes(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_005_puzzle_srs(conn: sqlite3.Connection) -> None:
+    """Advanced features, Section 4 — per-puzzle attempt history and a
+    Leitner-system spaced-repetition schedule, so Puzzle Rush sessions and
+    "due for review" queues have real data to work from.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS puzzle_attempts (
+            id INTEGER PRIMARY KEY,
+            puzzle_id INTEGER NOT NULL REFERENCES puzzles(id),
+            correct INTEGER NOT NULL,
+            time_taken_ms INTEGER,
+            session_type TEXT NOT NULL DEFAULT 'practice',
+            attempted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS puzzle_review_state (
+            puzzle_id INTEGER PRIMARY KEY REFERENCES puzzles(id),
+            leitner_box INTEGER NOT NULL DEFAULT 1,
+            next_review_at TEXT NOT NULL,
+            total_attempts INTEGER NOT NULL DEFAULT 0,
+            total_correct INTEGER NOT NULL DEFAULT 0,
+            last_reviewed_at TEXT
+        );
+    """)
+
+
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
@@ -156,6 +182,7 @@ MIGRATIONS = [
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
     (3, "Add game_moves table for full per-game analysis", _migration_003_game_moves),
     (4, "Add move tiers (game_moves) and free-text notes table", _migration_004_move_tiers_and_notes),
+    (5, "Add puzzle_attempts and puzzle_review_state (spaced repetition)", _migration_005_puzzle_srs),
 ]
 
 
