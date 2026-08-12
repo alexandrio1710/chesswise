@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Opening Explorer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6; /* mine */
+    --series-2:       #eb6834; /* community */
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-warning: #fab219;
+    --board-light:    #e9e5d8;
+    --board-dark:     #7c9070;
+    --board-selected: rgba(42, 120, 214, 0.45);
+    --board-dot:      rgba(11, 11, 11, 0.28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-warning: #fab219;
+      --board-light:    #3a3a36;
+      --board-dark:     #21331f;
+      --board-selected: rgba(57, 135, 229, 0.5);
+      --board-dot:      rgba(255, 255, 255, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-warning: #fab219;
+    --board-light:    #3a3a36;
+    --board-dark:     #21331f;
+    --board-selected: rgba(57, 135, 229, 0.5);
+    --board-dot:      rgba(255, 255, 255, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  .hidden { display: none !important; }
+  .loading-disabled { pointer-events: none; opacity: 0.55; transition: opacity .15s; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 420px) 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+
+  .path-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; font-size: 13px; }
+  .path-row button {
+    font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 100px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-secondary); cursor: pointer;
+  }
+  .path-row .crumb { color: var(--text-primary); font-weight: 600; }
+  .path-row .sep { color: var(--text-muted); }
+  #reset-btn { margin-left: auto; }
+
+  #board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    width: 100%; aspect-ratio: 1/1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+    user-select: none;
+  }
+  .square { position: relative; display: flex; align-items: center; justify-content: center; font-size: min(6vw, 40px); cursor: pointer; }
+  .square.light { background: var(--board-light); }
+  .square.dark { background: var(--board-dark); }
+  .square.selected::after { content: ""; position: absolute; inset: 0; background: var(--board-selected); }
+  .square .legal-dot { position: absolute; width: 26%; height: 26%; border-radius: 50%; background: var(--board-dot); pointer-events: none; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 560px) { .stats-grid { grid-template-columns: 1fr; } }
+  .panel-title { font-size: 13px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+  .panel-title .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .panel-title .dot.mine { background: var(--series-1); }
+  .panel-title .dot.community { background: var(--series-2); }
+
+  .wdl-bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; margin: 8px 0; font-size: 0; }
+  .wdl-bar span { display: block; height: 100%; }
+  .wdl-bar .win { background: var(--status-good); }
+  .wdl-bar .draw { background: var(--text-muted); }
+  .wdl-bar .loss { background: var(--status-critical); }
+  .wdl-caption { font-size: 12px; color: var(--text-secondary); }
+
+  table.moves-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  table.moves-table th {
+    text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted);
+    font-weight: 600; padding: 0 8px 6px; border-bottom: 1px solid var(--gridline);
+  }
+  table.moves-table td { padding: 6px 8px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  table.moves-table tr.move-choice { cursor: pointer; }
+  table.moves-table tr.move-choice:hover { background: var(--page-plane); }
+
+  .divergence-card { border-left: 3px solid var(--status-warning); }
+  .divergence-item { font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--gridline); }
+  .divergence-item:last-child { border-bottom: none; }
+
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 13px; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Opening Explorer</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+        <a href="/explorer" class="active">Explorer</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="path-row" id="path-row">
+      <span class="crumb">Starting position</span>
+      <button id="reset-btn">Reset</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="card">
+      <div id="board"></div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <div class="card">
+        <div class="stats-grid">
+          <div>
+            <p class="panel-title"><span class="dot mine"></span>My games</p>
+            <div id="mine-summary"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
+          </div>
+          <div>
+            <p class="panel-title"><span class="dot community"></span>Lichess community</p>
+            <div id="community-summary"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card hidden" id="divergence-card">
+        <p class="panel-title">⚠ Worth a look</p>
+        <div id="divergence-list"></div>
+      </div>
+
+      <div class="card">
+        <p class="panel-title">Next moves</p>
+        <table class="moves-table">
+          <thead><tr><th>Move</th><th>My games</th><th>My win%</th><th>Community %</th><th>Community win%</th></tr></thead>
+          <tbody id="moves-body"><tr><td colspan="5" class="empty-note">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const PIECE_UNICODE = { K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙", k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟" };
+  let movePath = [];       // [{uci, san}, ...]
+  let currentData = null;
+  let selectedSquare = null;
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) { file += parseInt(ch, 10); }
+        else { map[String.fromCharCode(97 + file) + rank] = ch; file += 1; }
+      }
+    });
+    return map;
+  }
+  function isLightSquare(square) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = parseInt(square[1], 10);
+    return (file + rank) % 2 !== 0;
+  }
+  function squareOrder(orientation) {
+    const files = "abcdefgh".split(""), ranks = [8,7,6,5,4,3,2,1];
+    if (orientation === "black") { files.reverse(); ranks.reverse(); }
+    const order = [];
+    for (const r of ranks) for (const f of files) order.push(`${f}${r}`);
+    return order;
+  }
+
+  let isLoading = false;
+  let loadRequestId = 0;
+
+  async function loadPosition() {
+    // Guards against a stale click during the fetch window: a click on the
+    // board or the candidate-moves table while a previous move's request
+    // is still in flight would otherwise fire against DOM/data about to be
+    // replaced (observed: double-appending a move to movePath). The
+    // request id also drops the response of a now-superseded request if
+    // two loads somehow overlap, so only the latest one ever renders.
+    isLoading = true;
+    const thisRequestId = ++loadRequestId;
+    document.getElementById("board").classList.add("loading-disabled");
+    document.getElementById("moves-body").classList.add("loading-disabled");
+    document.getElementById("path-row").classList.add("loading-disabled");
+    document.getElementById("mine-summary").innerHTML = `<span class="loading-text"><span class="spinner"></span>Loading…</span>`;
+    document.getElementById("community-summary").innerHTML = `<span class="loading-text"><span class="spinner"></span>Loading…</span>`;
+
+    const movesParam = movePath.map(m => m.uci).join(",");
+    const res = await fetch(`/api/explorer?moves=${movesParam}`);
+    const data = await res.json();
+    if (thisRequestId !== loadRequestId) return; // superseded by a newer load
+
+    currentData = data;
+    renderPath();
+    renderBoard();
+    renderStats();
+    renderMovesTable();
+    renderDivergence();
+
+    isLoading = false;
+    document.getElementById("board").classList.remove("loading-disabled");
+    document.getElementById("moves-body").classList.remove("loading-disabled");
+    document.getElementById("path-row").classList.remove("loading-disabled");
+  }
+
+  function renderPath() {
+    const row = document.getElementById("path-row");
+    row.innerHTML = "";
+    const start = document.createElement("span");
+    start.className = movePath.length === 0 ? "crumb" : "";
+    start.textContent = "Starting position";
+    start.style.cursor = "pointer";
+    start.addEventListener("click", () => { movePath = []; loadPosition(); });
+    row.appendChild(start);
+
+    movePath.forEach((m, i) => {
+      const sep = document.createElement("span");
+      sep.className = "sep"; sep.textContent = "›";
+      row.appendChild(sep);
+      const crumb = document.createElement("span");
+      crumb.textContent = m.san;
+      crumb.style.cursor = "pointer";
+      if (i === movePath.length - 1) crumb.className = "crumb";
+      crumb.addEventListener("click", () => { movePath = movePath.slice(0, i + 1); loadPosition(); });
+      row.appendChild(crumb);
+    });
+
+    const resetBtn = document.createElement("button");
+    resetBtn.id = "reset-btn";
+    resetBtn.textContent = "Reset";
+    resetBtn.addEventListener("click", () => { movePath = []; loadPosition(); });
+    row.appendChild(resetBtn);
+  }
+
+  function renderBoard() {
+    const board = document.getElementById("board");
+    board.innerHTML = "";
+    selectedSquare = null;
+    const pieceMap = fenToPieceMap(currentData.fen);
+    const order = squareOrder(currentData.side_to_move);
+    for (const square of order) {
+      const el = document.createElement("div");
+      el.className = `square ${isLightSquare(square) ? "light" : "dark"}`;
+      el.dataset.square = square;
+      const piece = pieceMap[square];
+      if (piece) el.textContent = PIECE_UNICODE[piece];
+      el.addEventListener("click", () => onSquareClick(square));
+      board.appendChild(el);
+    }
+  }
+
+  function ownPieceAt(square) {
+    const pieceMap = fenToPieceMap(currentData.fen);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    return (currentData.side_to_move === "white") === isWhitePiece;
+  }
+
+  function legalDestinationsFrom(square) {
+    return currentData.legal_moves
+      .filter(m => m.uci.startsWith(square))
+      .map(m => ({ to: m.uci.slice(2, 4), uci: m.uci, san: m.san }));
+  }
+
+  function clearHighlights() {
+    document.querySelectorAll(".square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll(".legal-dot").forEach(el => el.remove());
+  }
+
+  function onSquareClick(square) {
+    if (isLoading) return;
+    if (selectedSquare) {
+      const dests = legalDestinationsFrom(selectedSquare);
+      const match = dests.find(d => d.to === square);
+      if (match) { playMove(match.uci, match.san); return; }
+    }
+    clearHighlights();
+    if (ownPieceAt(square)) {
+      selectedSquare = square;
+      document.querySelector(`.square[data-square="${square}"]`).classList.add("selected");
+      for (const d of legalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`.square[data-square="${d.to}"]`);
+        const dot = document.createElement("div");
+        dot.className = "legal-dot";
+        destEl.appendChild(dot);
+      }
+    } else {
+      selectedSquare = null;
+    }
+  }
+
+  function playMove(uci, san) {
+    if (isLoading) return;
+    movePath.push({ uci, san });
+    loadPosition();
+  }
+
+  function renderStats() {
+    const mine = currentData.mine;
+    const mineEl = document.getElementById("mine-summary");
+    if (!mine.games_reached) {
+      mineEl.innerHTML = `<p class="empty-note">You haven't reached this position in any analyzed game.</p>`;
+    } else {
+      const total = mine.games_reached;
+      mineEl.innerHTML = `
+        <div style="font-size:22px; font-weight:700;">${mine.win_rate_pct}%<span style="font-size:12px; font-weight:400; color:var(--text-secondary);"> win rate</span></div>
+        <div class="wdl-bar">
+          <span class="win" style="width:${mine.wins/total*100}%"></span>
+          <span class="draw" style="width:${mine.draws/total*100}%"></span>
+          <span class="loss" style="width:${mine.losses/total*100}%"></span>
+        </div>
+        <div class="wdl-caption">${total} game${total===1?"":"s"} · ${mine.wins}W ${mine.draws}D ${mine.losses}L</div>
+      `;
+    }
+
+    const community = currentData.community;
+    const commEl = document.getElementById("community-summary");
+    if (!community.available) {
+      commEl.innerHTML = `<p class="empty-note">Community reference data unavailable right now.</p>`;
+    } else {
+      const total = community.white + community.draws + community.black;
+      if (!total) {
+        commEl.innerHTML = `<p class="empty-note">No community games recorded at this exact position.</p>`;
+      } else {
+        const openingName = community.opening ? escapeHtml(community.opening.name) : "";
+        commEl.innerHTML = `
+          ${openingName ? `<div style="font-size:12px; color:var(--text-secondary); margin-bottom:4px;">${openingName}</div>` : ""}
+          <div class="wdl-bar">
+            <span class="win" style="width:${community.white/total*100}%"></span>
+            <span class="draw" style="width:${community.draws/total*100}%"></span>
+            <span class="loss" style="width:${community.black/total*100}%"></span>
+          </div>
+          <div class="wdl-caption">${total.toLocaleString()} games · White ${Math.round(community.white/total*100)}% / Draw ${Math.round(community.draws/total*100)}% / Black ${Math.round(community.black/total*100)}%</div>
+        `;
+      }
+    }
+  }
+
+  function renderMovesTable() {
+    const body = document.getElementById("moves-body");
+    const mineByUci = Object.fromEntries(currentData.mine.my_moves.map(m => [m.uci, m]));
+    const commByUci = Object.fromEntries(currentData.community.moves.map(m => [m.uci, m]));
+    const allUcis = new Set([...Object.keys(mineByUci), ...Object.keys(commByUci)]);
+
+    if (!allUcis.size) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-note">No move data at this position.</td></tr>`;
+      return;
+    }
+
+    const rows = [...allUcis].map(uci => {
+      const mine = mineByUci[uci];
+      const comm = commByUci[uci];
+      const san = (mine && mine.san) || (comm && comm.san) || uci;
+      return { uci, san, mine, comm };
+    });
+    rows.sort((a, b) => (b.comm ? b.comm.total : 0) - (a.comm ? a.comm.total : 0) || (b.mine ? b.mine.count : 0) - (a.mine ? a.mine.count : 0));
+
+    body.innerHTML = rows.map(r => `
+      <tr class="move-choice" data-uci="${r.uci}" data-san="${escapeHtml(r.san)}">
+        <td><strong>${escapeHtml(r.san)}</strong></td>
+        <td>${r.mine ? r.mine.count : "–"}</td>
+        <td>${r.mine ? r.mine.win_rate_pct + "%" : "–"}</td>
+        <td>${r.comm ? r.comm.total_pct + "%" : "–"}</td>
+        <td>${r.comm ? r.comm.win_rate_pct + "%" : "–"}</td>
+      </tr>
+    `).join("");
+
+    body.querySelectorAll(".move-choice").forEach(row => {
+      row.addEventListener("click", () => playMove(row.dataset.uci, row.dataset.san));
+    });
+  }
+
+  function renderDivergence() {
+    const card = document.getElementById("divergence-card");
+    const list = document.getElementById("divergence-list");
+    const flags = currentData.divergence;
+    if (!flags || !flags.length) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    list.innerHTML = flags.map(f => `
+      <div class="divergence-item">
+        The community plays <strong>${escapeHtml(f.move_san)}</strong> ${f.community_pct}% of the time here,
+        winning ${f.community_win_rate_pct}% — you've only tried it ${f.my_pct}% of the time.
+      </div>
+    `).join("");
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadPosition();
+</script>
+</body>
+</html>

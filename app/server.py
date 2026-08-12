@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import cli_state
+import opening_explorer
 import puzzles
 import stats
 from db import get_connection
@@ -187,6 +188,20 @@ def api_openings(source: str | None = Query(default=None)):
     }
 
 
+@app.get("/api/explorer")
+def api_explorer(moves: str = Query(default=""), source: str | None = Query(default=None)):
+    """`moves` is a comma-separated list of UCI moves from the starting
+    position (e.g. "e2e4,e7e5,g1f3") — empty string means the starting
+    position itself.
+    """
+    source = _normalize_source(source)
+    move_ucis = [m for m in moves.split(",") if m]
+    try:
+        return opening_explorer.explore_position(move_ucis, source=source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid move sequence: {e}")
+
+
 @app.get("/api/worst-games")
 def api_worst_games(source: str | None = Query(default=None), limit: int = 5):
     source = _normalize_source(source)
@@ -313,6 +328,11 @@ def puzzles_page():
 @app.get("/game", response_class=HTMLResponse)
 def game_page():
     return (STATIC_DIR / "game.html").read_text(encoding="utf-8")
+
+
+@app.get("/explorer", response_class=HTMLResponse)
+def explorer_page():
+    return (STATIC_DIR / "explorer.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
