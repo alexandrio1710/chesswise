@@ -203,6 +203,7 @@
         <a href="/">Dashboard</a>
         <a href="/puzzles">Puzzles</a>
         <a href="/explorer">Explorer</a>
+        <a href="/endgame">Endgame</a>
       </nav>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
@@ -497,12 +498,32 @@
       ${cm.best_move_san ? `The engine's best move here was <strong>${escapeHtml(cm.best_move_san)}</strong>.` : ""}
       ${cm.best_move_explanation ? escapeHtml(cm.best_move_explanation) : ""}
       ${cm.puzzle_id ? `<br><a class="practice-link" href="/puzzles?id=${cm.puzzle_id}">Practice this position →</a>` : ""}
+      ${cm.phase === "endgame" ? `<br><a class="practice-link" href="#" id="tablebase-check-link">Check tablebase result →</a><span id="tablebase-result"></span>` : ""}
     `;
 
     const lines = document.getElementById("critical-lines");
     lines.innerHTML = (cm.top_lines && cm.top_lines.length)
       ? "<strong>Top engine lines:</strong>" + cm.top_lines.map(formatLine).join("")
       : "";
+
+    const tbLink = document.getElementById("tablebase-check-link");
+    if (tbLink) {
+      tbLink.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const resultEl = document.getElementById("tablebase-result");
+        resultEl.textContent = " Checking…";
+        const res = await fetch(`/api/mistakes/${cm.mistake_id}/tablebase`);
+        const data = await res.json();
+        tbLink.classList.add("hidden");
+        if (!data.tablebase_solvable) {
+          resultEl.textContent = " Not a tablebase-solvable position (too many pieces, or not found).";
+        } else if (data.result_changed) {
+          resultEl.innerHTML = ` <strong>This was a theoretical ${escapeHtml(data.category_before)} before your move, a ${escapeHtml(data.category_after)} after.</strong> Correct move: ${escapeHtml(data.best_move_san)}.`;
+        } else {
+          resultEl.textContent = ` The theoretical result (${data.category_before}) held despite the eval swing.`;
+        }
+      });
+    }
   }
 
   // --- Notes ---------------------------------------------------------------

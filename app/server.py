@@ -20,6 +20,7 @@ import cli_state
 import opening_explorer
 import puzzles
 import stats
+import tablebase
 from db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,53 @@ def api_game_detail(game_id: int):
     }
 
 
+@app.get("/api/mistakes/{mistake_id}/tablebase")
+def api_mistake_tablebase(mistake_id: int):
+    """For a flagged endgame mistake: was the position tablebase-solvable,
+    and did the move played change the theoretical result. On-demand
+    (not bundled into /api/games/{id}) since it costs a couple of
+    tablebase network calls per mistake — cheap for one, not for a whole
+    move list's worth fetched eagerly.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT m.*, g.pgn FROM mistakes m JOIN games g ON m.game_id = g.id WHERE m.id = ?",
+            (mistake_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Mistake not found")
+
+    from puzzles import board_before_ply
+    board = board_before_ply(row["pgn"], row["ply"])
+    move = board.parse_san(row["move_san"])
+    result = tablebase.analyze_tablebase_mistake(board.fen(), move.uci())
+    if result is None:
+        return {"tablebase_solvable": False}
+    return result
+
+
+@app.get("/api/endgame-trainer/positions")
+def api_endgame_trainer_positions(source: str | None = Query(default=None), limit: int = 8):
+    source = _normalize_source(source)
+    return tablebase.find_endgame_trainer_positions(source=source, limit=limit)
+
+
+class TrainerMove(BaseModel):
+    fen: str
+    uci: str
+
+
+@app.post("/api/endgame-trainer/move")
+def api_endgame_trainer_move(move: TrainerMove):
+    try:
+        return tablebase.trainer_attempt_move(move.fen, move.uci)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 class NoteCreate(BaseModel):
     text: str
     ply: int | None = None
@@ -333,6 +381,11 @@ def game_page():
 @app.get("/explorer", response_class=HTMLResponse)
 def explorer_page():
     return (STATIC_DIR / "explorer.html").read_text(encoding="utf-8")
+
+
+@app.get("/endgame", response_class=HTMLResponse)
+def endgame_page():
+    return (STATIC_DIR / "endgame.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

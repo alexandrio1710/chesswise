@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Endgame Trainer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-warning: #fab219;
+    --board-light:    #e9e5d8;
+    --board-dark:     #7c9070;
+    --board-selected: rgba(42, 120, 214, 0.45);
+    --board-dot:      rgba(11, 11, 11, 0.28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-warning: #fab219;
+      --board-light:    #3a3a36;
+      --board-dark:     #21331f;
+      --board-selected: rgba(57, 135, 229, 0.5);
+      --board-dot:      rgba(255, 255, 255, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-warning: #fab219;
+    --board-light:    #3a3a36;
+    --board-dark:     #21331f;
+    --board-selected: rgba(57, 135, 229, 0.5);
+    --board-dot:      rgba(255, 255, 255, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  .hidden { display: none !important; }
+  .loading-disabled { pointer-events: none; opacity: 0.55; transition: opacity .15s; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 420px) 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+
+  .position-meta { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+  .category-pill {
+    display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    padding: 2px 9px; border-radius: 100px; color: #fff; margin-right: 6px;
+  }
+  .category-pill.win { background: var(--status-good); }
+  .category-pill.draw { background: var(--text-muted); }
+  .category-pill.loss { background: var(--status-critical); }
+
+  #board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    width: 100%; aspect-ratio: 1/1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+    user-select: none;
+  }
+  .square { position: relative; display: flex; align-items: center; justify-content: center; font-size: min(6vw, 40px); cursor: pointer; }
+  .square.light { background: var(--board-light); }
+  .square.dark { background: var(--board-dark); }
+  .square.selected::after { content: ""; position: absolute; inset: 0; background: var(--board-selected); }
+  .square .legal-dot { position: absolute; width: 26%; height: 26%; border-radius: 50%; background: var(--board-dot); pointer-events: none; }
+
+  .feedback { margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 14px; display: none; }
+  .feedback.show { display: block; }
+  .feedback.correct { background: color-mix(in srgb, var(--status-good) 14%, var(--surface-1)); }
+  .feedback.incorrect { background: color-mix(in srgb, var(--status-critical) 14%, var(--surface-1)); }
+  .feedback .verdict { font-weight: 700; margin-bottom: 4px; }
+  .feedback .verdict.correct-text { color: var(--status-good); }
+  .feedback .verdict.incorrect-text { color: var(--status-critical); }
+
+  .next-btn {
+    margin-top: 14px; font: inherit; font-size: 13px; padding: 8px 16px; border-radius: 8px;
+    border: none; background: var(--series-1); color: #fff; cursor: pointer; display: none;
+  }
+  .next-btn.show { display: inline-block; }
+
+  .queue-list { display: flex; flex-direction: column; gap: 6px; max-height: 560px; overflow-y: auto; }
+  .queue-item {
+    text-align: left; font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); cursor: pointer;
+  }
+  .queue-item.active { border-color: var(--series-1); color: var(--text-primary); }
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 13px; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Endgame Trainer</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+        <a href="/explorer">Explorer</a>
+        <a href="/endgame" class="active">Endgame</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <p class="empty-note">
+    Positions where you made an endgame mistake in a tablebase-solvable position (7 pieces or fewer).
+    Play against the tablebase's provably perfect replies and see whether you hold the correct result.
+  </p>
+
+  <div class="layout">
+    <div class="card">
+      <div class="position-meta" id="position-meta"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
+      <div id="board"></div>
+      <div class="feedback" id="feedback">
+        <div class="verdict" id="feedback-verdict"></div>
+        <div id="feedback-detail"></div>
+      </div>
+      <button class="next-btn" id="next-btn">Next position →</button>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:14px; margin:0 0 12px;">Queue</h2>
+      <div class="queue-list" id="queue-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const PIECE_UNICODE = { K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙", k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟" };
+  let queue = [];
+  let currentIndex = -1;
+  let currentFen = null;
+  let startCategory = null;
+  let selectedSquare = null;
+  let solved = false;
+  let isLoading = false;
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) { file += parseInt(ch, 10); }
+        else { map[String.fromCharCode(97 + file) + rank] = ch; file += 1; }
+      }
+    });
+    return map;
+  }
+  function isLightSquare(square) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = parseInt(square[1], 10);
+    return (file + rank) % 2 !== 0;
+  }
+  function sideToMove(fen) { return fen.split(" ")[1] === "w" ? "white" : "black"; }
+  function squareOrder(orientation) {
+    const files = "abcdefgh".split(""), ranks = [8,7,6,5,4,3,2,1];
+    if (orientation === "black") { files.reverse(); ranks.reverse(); }
+    const order = [];
+    for (const r of ranks) for (const f of files) order.push(`${f}${r}`);
+    return order;
+  }
+
+  async function loadQueue() {
+    const res = await fetch("/api/endgame-trainer/positions?limit=8");
+    queue = await res.json();
+    renderQueueList();
+    if (queue.length) loadPosition(0);
+    else {
+      document.getElementById("position-meta").innerHTML = `<p class="empty-note">No tablebase-solvable endgame mistakes found yet — nice, or you just don't have many 7-piece-or-fewer endgames analyzed yet.</p>`;
+      document.getElementById("board").innerHTML = "";
+    }
+  }
+
+  function renderQueueList() {
+    const list = document.getElementById("queue-list");
+    if (!queue.length) { list.innerHTML = `<p class="empty-note">Nothing in the queue.</p>`; return; }
+    list.innerHTML = "";
+    queue.forEach((p, i) => {
+      const date = new Date(p.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+      const btn = document.createElement("button");
+      btn.className = "queue-item";
+      btn.innerHTML = `<span class="category-pill ${p.category_before}">${p.category_before}</span>${date} vs ${escapeHtml(p.opponent)} · move ${p.move_number}`;
+      btn.addEventListener("click", () => loadPosition(i));
+      list.appendChild(btn);
+    });
+  }
+
+  function loadPosition(index) {
+    currentIndex = index;
+    const p = queue[index];
+    currentFen = p.fen;
+    startCategory = p.category_before;
+    solved = false;
+    selectedSquare = null;
+    document.getElementById("feedback").classList.remove("show");
+    document.getElementById("next-btn").classList.remove("show");
+    document.getElementById("position-meta").innerHTML =
+      `<span class="category-pill ${p.category_before}">${p.category_before}</span>` +
+      `Move ${p.move_number}, you played <strong>${escapeHtml(p.move_san)}</strong> (${p.severity}) vs ${escapeHtml(p.opponent)}. ` +
+      `Find the move that holds the ${p.category_before}.`;
+    renderBoard();
+    highlightActiveQueueItem();
+  }
+
+  function highlightActiveQueueItem() {
+    document.querySelectorAll(".queue-item").forEach((el, i) => el.classList.toggle("active", i === currentIndex));
+  }
+
+  function renderBoard() {
+    const board = document.getElementById("board");
+    board.innerHTML = "";
+    const pieceMap = fenToPieceMap(currentFen);
+    const orientation = sideToMove(currentFen);
+    for (const square of squareOrder(orientation)) {
+      const el = document.createElement("div");
+      el.className = `square ${isLightSquare(square) ? "light" : "dark"}`;
+      el.dataset.square = square;
+      const piece = pieceMap[square];
+      if (piece) el.textContent = PIECE_UNICODE[piece];
+      el.addEventListener("click", () => onSquareClick(square));
+      board.appendChild(el);
+    }
+  }
+
+  function ownPieceAt(square) {
+    const pieceMap = fenToPieceMap(currentFen);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    return (sideToMove(currentFen) === "white") === isWhitePiece;
+  }
+
+  // No client-side legal-move list here (unlike the puzzle board) — a
+  // click on any two of the mover's own-piece/empty squares is submitted
+  // as an attempt, and the server is the single source of truth on
+  // legality, returning a clear rejection message for illegal ones.
+
+  function clearHighlights() {
+    document.querySelectorAll(".square.selected").forEach(el => el.classList.remove("selected"));
+  }
+
+  function onSquareClick(square) {
+    if (isLoading || solved) return;
+    if (selectedSquare) {
+      const from = selectedSquare;
+      clearHighlights();
+      selectedSquare = null;
+      if (from !== square) { attemptMove(from, square); return; }
+    }
+    if (ownPieceAt(square)) {
+      selectedSquare = square;
+      document.querySelector(`.square[data-square="${square}"]`).classList.add("selected");
+    }
+  }
+
+  async function attemptMove(from, to) {
+    isLoading = true;
+    document.getElementById("board").classList.add("loading-disabled");
+    const res = await fetch("/api/endgame-trainer/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fen: currentFen, uci: `${from}${to}` }),
+    });
+    isLoading = false;
+    document.getElementById("board").classList.remove("loading-disabled");
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showTransientError(body.detail || "That move didn't work — try another.");
+      return;
+    }
+
+    const result = await res.json();
+    showFeedback(result);
+
+    if (result.game_over || !result.correct) {
+      solved = true;
+      document.getElementById("next-btn").classList.add("show");
+      currentFen = result.fen_final;
+      renderBoard();
+    } else {
+      // Correct and the game continues: show the tablebase's reply, then
+      // let the human keep playing from there.
+      currentFen = result.fen_final;
+      renderBoard();
+    }
+  }
+
+  function showTransientError(msg) {
+    const box = document.getElementById("feedback");
+    box.className = "feedback show incorrect";
+    document.getElementById("feedback-verdict").textContent = "Not a legal move";
+    document.getElementById("feedback-verdict").className = "verdict incorrect-text";
+    document.getElementById("feedback-detail").textContent = msg;
+  }
+
+  function showFeedback(result) {
+    const box = document.getElementById("feedback");
+    const verdict = document.getElementById("feedback-verdict");
+    const detail = document.getElementById("feedback-detail");
+
+    box.className = `feedback show ${result.correct ? "correct" : "incorrect"}`;
+    verdict.className = `verdict ${result.correct ? "correct-text" : "incorrect-text"}`;
+
+    if (result.correct) {
+      verdict.textContent = result.game_over ? "Correct — converted!" : "Correct — still holding it.";
+      detail.textContent = result.reply_san
+        ? `${result.played_san}. Tablebase replies ${result.reply_san}. Keep going — find the next move that holds the ${startCategory}.`
+        : `${result.played_san}.`;
+    } else {
+      verdict.textContent = "That let it slip.";
+      detail.textContent = `${result.played_san} turns this into a ${result.category_after_human} for you` +
+        (result.reply_san ? ` — tablebase continues with ${result.reply_san}.` : ".") +
+        ` The position was a ${startCategory} before this attempt.`;
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  document.getElementById("next-btn").addEventListener("click", () => {
+    if (currentIndex + 1 < queue.length) loadPosition(currentIndex + 1);
+  });
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadQueue();
+</script>
+</body>
+</html>
