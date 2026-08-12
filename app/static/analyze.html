@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Analysis Board</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-critical-text: #ffffff;
+    --status-warning: #fab219;
+    --tier-excellent: #1baf7a;
+    --board-light:    #e9e5d8;
+    --board-dark:     #7c9070;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-critical-text: #2a0000;
+      --status-warning: #fab219;
+      --tier-excellent: #199e70;
+      --board-light:    #3a3a36;
+      --board-dark:     #21331f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-critical-text: #2a0000;
+    --status-warning: #fab219;
+    --tier-excellent: #199e70;
+    --board-light:    #3a3a36;
+    --board-dark:     #21331f;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  .hidden { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+
+  textarea#pgn-input {
+    width: 100%; min-height: 160px; font: 13px/1.5 ui-monospace, monospace; padding: 12px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary); resize: vertical;
+  }
+  .input-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .input-row button, .input-row label.file-btn {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  #analyze-btn { background: var(--series-1); color: #fff; border-color: transparent; }
+  .save-options { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
+  .save-options select, .save-options input[type="text"] {
+    font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-primary);
+  }
+  .error-msg { color: var(--status-critical); font-size: 13px; margin-top: 10px; }
+
+  .accuracy-row { display: flex; gap: 28px; margin: 4px 0 16px; }
+  .accuracy-stat { display: flex; flex-direction: column; }
+  .accuracy-value { font-size: 26px; font-weight: 700; }
+  .accuracy-label { font-size: 12px; color: var(--text-secondary); }
+
+  #chart-wrap { position: relative; }
+  #eval-chart { width: 100%; height: 200px; display: block; }
+  .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  table.moves-table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 13px; }
+  table.moves-table th {
+    text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted);
+    font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--gridline);
+  }
+  table.moves-table td { padding: 6px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  .tier-pill { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px; }
+  .tier-pill.best { background: var(--status-good); color: #fff; }
+  .tier-pill.excellent { background: var(--tier-excellent); color: #fff; }
+  .tier-pill.good { background: var(--series-1); color: #fff; }
+  .tier-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
+  .tier-pill.mistake { background: #ec835a; color: #3a1400; }
+  .tier-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+
+  #board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    width: 100%; max-width: 380px; aspect-ratio: 1/1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+  }
+  .square { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 32px); }
+  .square.light { background: var(--board-light); }
+  .square.dark { background: var(--board-dark); }
+  .lines-list { font-size: 13px; color: var(--text-secondary); margin-top: 10px; }
+  .lines-list div { padding: 2px 0; }
+
+  .loading-text { color: var(--text-secondary); font-size: 13px; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Analysis Board</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+        <a href="/explorer">Explorer</a>
+        <a href="/endgame">Endgame</a>
+        <a href="/analyze" class="active">Analyze</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <p class="loading-text" style="margin-top:0;">Paste a PGN (a full game) or a single FEN (one position) — including from an over-the-board game that never touched Lichess or Chess.com.</p>
+    <textarea id="pgn-input" placeholder="Paste PGN or FEN here…"></textarea>
+    <div class="input-row">
+      <button id="analyze-btn">Analyze</button>
+      <label class="file-btn">Upload .pgn file<input type="file" id="file-input" accept=".pgn,.txt" class="hidden"></label>
+      <span id="analyze-loading" class="loading-text hidden"><span class="spinner"></span>Analyzing…</span>
+    </div>
+    <div class="save-options" id="save-options">
+      <label><input type="checkbox" id="save-checkbox"> Save to my stats (tagged as a manual game)</label>
+      <select id="save-color" class="hidden">
+        <option value="white">I played White</option>
+        <option value="black">I played Black</option>
+      </select>
+      <input type="text" id="save-opponent" class="hidden" placeholder="Opponent name (optional)">
+    </div>
+    <div class="error-msg hidden" id="error-msg"></div>
+  </section>
+
+  <section class="card hidden" id="fen-result-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Position</h2>
+    <div id="board"></div>
+    <div class="lines-list" id="fen-lines"></div>
+  </section>
+
+  <section class="card hidden" id="pgn-result-card">
+    <div class="accuracy-row" id="accuracy-row"></div>
+    <div id="chart-wrap">
+      <svg id="eval-chart" viewBox="0 0 800 200" preserveAspectRatio="none"></svg>
+    </div>
+    <p class="chart-caption">Blue = White ahead, red = Black ahead. Not saved — this analysis exists only in your browser right now.</p>
+    <div class="table-scroll">
+      <table class="moves-table">
+        <thead><tr><th>#</th><th>Color</th><th>Move</th><th>Eval</th><th>Tier</th></tr></thead>
+        <tbody id="moves-body"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  const PIECE_UNICODE = { K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙", k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟" };
+  const CAP = 1000;
+
+  document.getElementById("file-input").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    document.getElementById("pgn-input").value = await file.text();
+  });
+
+  document.getElementById("save-checkbox").addEventListener("change", (e) => {
+    document.getElementById("save-color").classList.toggle("hidden", !e.target.checked);
+    document.getElementById("save-opponent").classList.toggle("hidden", !e.target.checked);
+  });
+
+  function looksLikeFen(text) {
+    text = text.trim();
+    if (text.includes("\n\n") || text.includes("[")) return false;
+    const fields = text.split(/\s+/);
+    return fields.length === 6 && fields[0].includes("/");
+  }
+
+  document.getElementById("analyze-btn").addEventListener("click", async () => {
+    const text = document.getElementById("pgn-input").value.trim();
+    const errorEl = document.getElementById("error-msg");
+    errorEl.classList.add("hidden");
+    document.getElementById("fen-result-card").classList.add("hidden");
+    document.getElementById("pgn-result-card").classList.add("hidden");
+    if (!text) return;
+
+    document.getElementById("analyze-loading").classList.remove("hidden");
+    document.getElementById("analyze-btn").disabled = true;
+
+    try {
+      if (looksLikeFen(text)) {
+        await analyzeFen(text);
+      } else {
+        await analyzePgn(text);
+      }
+    } finally {
+      document.getElementById("analyze-loading").classList.add("hidden");
+      document.getElementById("analyze-btn").disabled = false;
+    }
+  });
+
+  async function analyzeFen(fen) {
+    const res = await fetch("/api/analyze/fen", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fen }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.detail); return; }
+
+    document.getElementById("fen-result-card").classList.remove("hidden");
+    renderStaticBoard(fen);
+    const lines = document.getElementById("fen-lines");
+    lines.innerHTML = "<strong>Top engine lines:</strong>" + data.top_lines.map((l, i) => {
+      const evalText = l.mate_in != null ? `mate in ${Math.abs(l.mate_in)}` : `${l.eval_cp > 0 ? "+" : ""}${(l.eval_cp/100).toFixed(2)}`;
+      return `<div>${i+1}. ${escapeHtml(l.move_san)} (${evalText})</div>`;
+    }).join("");
+  }
+
+  async function analyzePgn(pgn) {
+    const save = document.getElementById("save-checkbox").checked;
+    const body = { pgn, save };
+    if (save) {
+      body.player_color = document.getElementById("save-color").value;
+      const opponent = document.getElementById("save-opponent").value.trim();
+      if (opponent) body.opponent = opponent;
+    }
+
+    const res = await fetch("/api/analyze/pgn", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.detail); return; }
+
+    if (data.saved) {
+      window.location.href = `/game?id=${data.game_id}`;
+      return;
+    }
+
+    document.getElementById("pgn-result-card").classList.remove("hidden");
+    renderAccuracy(data.accuracy_white, data.accuracy_black);
+    renderChart(data.moves);
+    renderMoveList(data.moves);
+  }
+
+  function showError(msg) {
+    const el = document.getElementById("error-msg");
+    el.textContent = msg || "Something went wrong analyzing this.";
+    el.classList.remove("hidden");
+  }
+
+  function renderAccuracy(white, black) {
+    const row = document.getElementById("accuracy-row");
+    row.innerHTML = `
+      <div class="accuracy-stat"><span class="accuracy-value">${white != null ? white + "%" : "–"}</span><span class="accuracy-label">White accuracy</span></div>
+      <div class="accuracy-stat"><span class="accuracy-value">${black != null ? black + "%" : "–"}</span><span class="accuracy-label">Black accuracy</span></div>
+    `;
+  }
+
+  function renderChart(moves) {
+    const svg = document.getElementById("eval-chart");
+    svg.innerHTML = "";
+    if (!moves.length) return;
+    const width = 800, height = 200, padTop = 10, zeroY = height / 2;
+    const maxPly = Math.max(...moves.map(m => m.ply), 1);
+    const xScale = ply => (ply / maxPly) * width;
+    const yScale = cp => { const c = Math.max(-CAP, Math.min(CAP, cp)); return zeroY - (c / CAP) * (zeroY - padTop); };
+
+    const ns = "http://www.w3.org/2000/svg";
+    const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
+
+    svg.appendChild(makeEl("rect", { x:0, y:0, width, height: zeroY, fill: "var(--series-1)", opacity: 0.08 }));
+    svg.appendChild(makeEl("rect", { x:0, y:zeroY, width, height: height-zeroY, fill: "var(--status-critical)", opacity: 0.08 }));
+    svg.appendChild(makeEl("line", { x1:0, y1:zeroY, x2:width, y2:zeroY, stroke: "var(--baseline)", "stroke-width":1 }));
+
+    const points = [[0, zeroY], ...moves.map(m => [xScale(m.ply), yScale(m.eval_cp)])];
+    svg.appendChild(makeEl("polyline", {
+      points: points.map(p => p.join(",")).join(" "), fill: "none", stroke: "var(--text-primary)",
+      "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+  }
+
+  function renderMoveList(moves) {
+    const body = document.getElementById("moves-body");
+    body.innerHTML = moves.map(m => `
+      <tr>
+        <td>${m.move_number}</td>
+        <td>${m.color_moved}</td>
+        <td>${escapeHtml(m.move_san)}</td>
+        <td>${formatEval(m.eval_cp)}</td>
+        <td><span class="tier-pill ${m.tier}">${m.tier}</span></td>
+      </tr>
+    `).join("");
+  }
+
+  function formatEval(cp) {
+    if (Math.abs(cp) >= 9000) return (cp > 0 ? "+" : "-") + "M";
+    const pawns = (cp / 100).toFixed(2);
+    return cp > 0 ? `+${pawns}` : pawns;
+  }
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) { file += parseInt(ch, 10); }
+        else { map[String.fromCharCode(97 + file) + rank] = ch; file += 1; }
+      }
+    });
+    return map;
+  }
+  function isLightSquare(square) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = parseInt(square[1], 10);
+    return (file + rank) % 2 !== 0;
+  }
+
+  function renderStaticBoard(fen) {
+    const board = document.getElementById("board");
+    board.innerHTML = "";
+    const pieceMap = fenToPieceMap(fen);
+    const sideToMove = fen.split(" ")[1] === "w" ? "white" : "black";
+    const files = "abcdefgh".split(""), ranks = [8,7,6,5,4,3,2,1];
+    if (sideToMove === "black") { files.reverse(); ranks.reverse(); }
+    for (const rank of ranks) {
+      for (const file of files) {
+        const square = `${file}${rank}`;
+        const el = document.createElement("div");
+        el.className = `square ${isLightSquare(square) ? "light" : "dark"}`;
+        const piece = pieceMap[square];
+        if (piece) el.textContent = PIECE_UNICODE[piece];
+        board.appendChild(el);
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+</script>
+</body>
+</html>

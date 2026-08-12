@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import cli_state
+import manual_analysis
 import opening_explorer
 import puzzles
 import srs
@@ -236,6 +237,42 @@ def api_game_detail(game_id: int):
     }
 
 
+class AnalyzeFenRequest(BaseModel):
+    fen: str
+
+
+@app.post("/api/analyze/fen")
+def api_analyze_fen(req: AnalyzeFenRequest):
+    try:
+        return manual_analysis.analyze_fen(req.fen)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class AnalyzePgnRequest(BaseModel):
+    pgn: str
+    save: bool = False
+    player_color: str | None = None
+    opponent: str | None = None
+
+
+@app.post("/api/analyze/pgn")
+def api_analyze_pgn(req: AnalyzePgnRequest):
+    if req.save:
+        if req.player_color not in ("white", "black"):
+            raise HTTPException(status_code=400, detail="player_color ('white' or 'black') is required to save.")
+        try:
+            game_id = manual_analysis.save_manual_game(req.pgn, req.player_color, req.opponent)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"saved": True, "game_id": game_id}
+
+    try:
+        return {"saved": False, **manual_analysis.analyze_pgn_oneoff(req.pgn)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api/mistakes/{mistake_id}/tablebase")
 def api_mistake_tablebase(mistake_id: int):
     """For a flagged endgame mistake: was the position tablebase-solvable,
@@ -412,6 +449,11 @@ def explorer_page():
 @app.get("/endgame", response_class=HTMLResponse)
 def endgame_page():
     return (STATIC_DIR / "endgame.html").read_text(encoding="utf-8")
+
+
+@app.get("/analyze", response_class=HTMLResponse)
+def analyze_page():
+    return (STATIC_DIR / "analyze.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
