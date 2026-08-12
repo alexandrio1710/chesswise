@@ -284,6 +284,30 @@ def _migration_008_opening_puzzles(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_009_goals(conn: sqlite3.Connection) -> None:
+    """Advanced features, Section 10 — simple goal tracking (e.g. "reduce
+    endgame blunder rate below 20%") behind the new /progress page.
+    `achieved_at` is set the first time a goal is found met and never
+    cleared even if the metric later regresses — a "first hit this
+    target" marker, not a live "currently passing" flag (evaluate_goal()
+    in progress.py reports the live current/met state separately).
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY,
+            profile_id INTEGER REFERENCES profiles(id),
+            source TEXT,
+            metric TEXT NOT NULL,
+            phase TEXT,
+            comparison TEXT NOT NULL,
+            target_value REAL NOT NULL,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            achieved_at TEXT
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -293,6 +317,7 @@ MIGRATIONS = [
     (6, "Add player_rating/opponent_rating to games", _migration_006_ratings),
     (7, "Add profiles/profile_usernames tables and games.profile_id", _migration_007_profiles),
     (8, "Add opening_puzzles table (Lichess-sourced opening puzzles)", _migration_008_opening_puzzles),
+    (9, "Add goals table", _migration_009_goals),
 ]
 
 

@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+import alerts
 import cli_state
 import clock_analysis
 import insights
@@ -23,6 +24,7 @@ import manual_analysis
 import opening_explorer
 import opening_puzzles
 import profiles
+import progress
 import puzzles
 import srs
 import stats
@@ -114,8 +116,9 @@ def _run_refresh(lichess_user: str | None, chesscom_user: str | None) -> None:
         # script, so spawning a multiprocessing pool from inside a
         # running web server is exactly the kind of thing that works on
         # your machine and breaks on someone else's.
-        run_batch_analysis(workers=1)
+        newly_analyzed = run_batch_analysis(workers=1)
         generate_all_puzzles()
+        alerts.send_alerts_for_games(newly_analyzed)
         _refresh_status["result"] = result
         _refresh_status["error"] = None
     except Exception as e:
@@ -649,6 +652,52 @@ def api_compare_profiles(a: int = Query(...), b: int = Query(...)):
 @app.get("/profiles", response_class=HTMLResponse)
 def profiles_page():
     return (STATIC_DIR / "profiles.html").read_text(encoding="utf-8")
+
+
+# --- Progress, goals, auto-reports (Section 10) -----------------------------
+
+@app.get("/api/progress")
+def api_progress(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+    source = _normalize_source(source)
+    return {
+        "weekly_summary": progress.weekly_summary(source, profile_id),
+        "narrative": progress.generate_narrative(source, profile_id),
+        "goals": progress.list_goals(profile_id),
+    }
+
+
+class GoalCreate(BaseModel):
+    description: str
+    metric: str
+    comparison: str
+    target_value: float
+    phase: str | None = None
+    source: str | None = None
+    profile_id: int | None = None
+
+
+@app.post("/api/goals")
+def api_create_goal(body: GoalCreate):
+    if not body.description.strip():
+        raise HTTPException(status_code=400, detail="Description can't be empty")
+    try:
+        return progress.create_goal(
+            body.description.strip(), body.metric, body.comparison, body.target_value,
+            phase=body.phase, source=_normalize_source(body.source), profile_id=body.profile_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/goals/{goal_id}")
+def api_delete_goal(goal_id: int):
+    progress.delete_goal(goal_id)
+    return {"status": "deleted"}
+
+
+@app.get("/progress", response_class=HTMLResponse)
+def progress_page():
+    return (STATIC_DIR / "progress.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

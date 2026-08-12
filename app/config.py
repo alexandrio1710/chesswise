@@ -125,6 +125,21 @@ API_INTER_REQUEST_DELAY_SECONDS = float(os.environ.get("API_INTER_REQUEST_DELAY_
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
+# Where the dashboard is reachable from wherever this process runs —
+# used to build a clickable game link in Discord alerts/digests, which
+# are sent from a background thread or a CLI script with no HTTP request
+# of their own to read a host from. Override if `serve` runs on a
+# different host/port than the default.
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
+
+# Advanced features, Section 10 — immediate per-game Discord alerts (as
+# opposed to digest.py's weekly summary): a freshly-analyzed game posts
+# its own alert if its accuracy is notably low or it contains an
+# especially large blunder. Both overridable, same pattern as every
+# other tunable in this file.
+ALERT_ACCURACY_BELOW = float(os.environ.get("ALERT_ACCURACY_BELOW", "50"))
+ALERT_BLUNDER_EVAL_DROP_CP = float(os.environ.get("ALERT_BLUNDER_EVAL_DROP_CP", "500"))
+
 # Convenience defaults so `refresh`/`digest` can run without retyping
 # usernames every time — CLI flags (Final Pass 6) always override these.
 LICHESS_USERNAME = os.environ.get("LICHESS_USERNAME")

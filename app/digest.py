@@ -17,6 +17,7 @@ import sys
 import requests
 
 import config
+from alerts import send_alerts_for_games
 from batch_analyze import run_batch_analysis
 from db import count_games, fetch_and_store, get_connection
 from stats import top_takeaway
@@ -52,7 +53,14 @@ def run_digest(
     fetch_and_store(lichess_user, chesscom_user, refresh=True)
 
     logger.info("Analyzing new games...")
-    run_batch_analysis()
+    newly_analyzed = run_batch_analysis()
+
+    # Per-game alerts (Section 10) fire first, on the same webhook, so a
+    # notably bad game gets flagged on its own before being folded into
+    # this run's aggregate summary below.
+    alert_count = send_alerts_for_games(newly_analyzed, webhook_url)
+    if alert_count:
+        logger.info(f"Posted {alert_count} individual game alert(s).")
 
     new_games = sum(count_games().values()) - games_before
     new_mistakes = _total_mistakes() - mistakes_before

@@ -66,13 +66,18 @@ def _analyze_one(game_id: int, depth: int) -> tuple[int, str, object]:
     return (game_id, "ok", len(flagged))
 
 
-def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WORKERS) -> None:
+def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WORKERS) -> list[int]:
+    """Returns the ids of games successfully analyzed in this run (status
+    "ok" — not skipped/failed), so callers that care which games are
+    newly available (e.g. alerts.py's post-game Discord alerts) don't
+    have to separately diff the games table before/after.
+    """
     games = get_unanalyzed_games()
     total = len(games)
 
     if total == 0:
         logger.info("All games already analyzed. Nothing to do.")
-        return
+        return []
 
     # Parallelism only pays for itself once there's more than a couple of
     # games — process startup overhead would dominate a batch of 1-2.
@@ -89,6 +94,7 @@ def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WOR
     total_mistakes = 0
     skipped = 0
     completed = 0
+    succeeded_ids: list[int] = []
 
     if workers == 1:
         results = (_analyze_one(gid, depth) for gid in game_ids)
@@ -97,6 +103,8 @@ def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WOR
             total_mistakes, skipped = _handle_result(
                 game_id, status, payload, labels, completed, total, total_mistakes, skipped
             )
+            if status == "ok":
+                succeeded_ids.append(game_id)
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_analyze_one, gid, depth): gid for gid in game_ids}
@@ -106,6 +114,8 @@ def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WOR
                 total_mistakes, skipped = _handle_result(
                     game_id, status, payload, labels, completed, total, total_mistakes, skipped
                 )
+                if status == "ok":
+                    succeeded_ids.append(game_id)
 
     elapsed = time.time() - start
     remaining = len(get_unanalyzed_games())
@@ -115,6 +125,8 @@ def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WOR
     logger.info(summary + ".")
     if remaining:
         logger.warning(f"{remaining} game(s) still unanalyzed (failed runs) — re-run this script to retry.")
+
+    return succeeded_ids
 
 
 def _handle_result(game_id, status, payload, labels, completed, total, total_mistakes, skipped) -> tuple[int, int]:

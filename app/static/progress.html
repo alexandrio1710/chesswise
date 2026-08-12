@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Progress</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --status-warning: #fab219;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+      --status-warning: #fab219;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+    --status-warning: #fab219;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .profile-select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .subtext { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+
+  .narrative-text { font-size: 16px; line-height: 1.6; margin: 0; }
+
+  .week-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+  .week-stat .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .week-stat .this-value { font-size: 22px; font-weight: 700; }
+  .week-stat .last-value { font-size: 12px; color: var(--text-muted); }
+
+  .goal-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .goal-item { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .goal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; }
+  .goal-desc { font-weight: 600; }
+  .goal-status { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 100px; color: #fff; white-space: nowrap; }
+  .goal-status.met { background: var(--status-good); }
+  .goal-status.unmet { background: var(--status-warning); color: #3a2a00; }
+  .goal-status.unknown { background: var(--text-muted); }
+  .goal-track { height: 8px; background: var(--gridline); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .goal-fill { height: 100%; background: var(--series-1); }
+  .goal-fill.met { background: var(--status-good); }
+  .goal-meta { font-size: 12px; color: var(--text-muted); margin-top: 6px; display: flex; justify-content: space-between; }
+  .goal-meta button { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0; }
+
+  .goal-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; }
+  .goal-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+  .goal-form select, .goal-form input {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  .goal-form button {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: none;
+    background: var(--series-1); color: #fff; cursor: pointer; height: 34px;
+  }
+
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 14px; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -3px; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Progress</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/insights">Insights</a>
+        <a href="/clock">Clock</a>
+        <a href="/progress" class="active">Progress</a>
+        <a href="/search">Search</a>
+      </nav>
+      <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
+      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>This week, in a sentence</h2>
+    <p class="narrative-text" id="narrative"><span class="spinner"></span>Loading…</p>
+  </section>
+
+  <section class="card">
+    <h2>This week vs. last week</h2>
+    <div class="week-compare" id="week-compare"></div>
+  </section>
+
+  <section class="card">
+    <h2>Goals</h2>
+    <p class="subtext">Simple targets tracked against your own stats, live.</p>
+    <div class="goal-list" id="goal-list"></div>
+    <div class="goal-form">
+      <label>Metric
+        <select id="goal-metric">
+          <option value="blunder_rate_overall">Blunder rate (overall)</option>
+          <option value="blunder_rate_phase">Blunder rate (one phase)</option>
+          <option value="accuracy_avg">Average accuracy</option>
+          <option value="win_rate_overall">Win rate (overall)</option>
+        </select>
+      </label>
+      <label id="goal-phase-wrap">Phase
+        <select id="goal-phase">
+          <option value="opening">Opening</option>
+          <option value="middlegame">Middlegame</option>
+          <option value="endgame" selected>Endgame</option>
+        </select>
+      </label>
+      <label>Comparison
+        <select id="goal-comparison">
+          <option value="below">Below</option>
+          <option value="above">Above</option>
+        </select>
+      </label>
+      <label>Target (%)
+        <input type="number" id="goal-target" value="20" step="0.1">
+      </label>
+      <label>Description
+        <input type="text" id="goal-description" placeholder="auto-filled, editable">
+      </label>
+      <button id="goal-create-btn">Add goal</button>
+    </div>
+  </section>
+</div>
+
+<script>
+  let currentProfileId = localStorage.getItem("profileId") || "";
+
+  function qs(profileId) {
+    const params = new URLSearchParams();
+    if (profileId) params.set("profile_id", profileId);
+    const s = params.toString();
+    return s ? `?${s}` : "";
+  }
+
+  async function loadProfileOptions() {
+    const select = document.getElementById("profile-select");
+    try {
+      const profiles = await fetch("/api/profiles").then(r => r.json());
+      select.innerHTML = `<option value="">All profiles</option>` +
+        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
+        select.value = currentProfileId;
+      } else {
+        currentProfileId = "";
+        localStorage.removeItem("profileId");
+      }
+    } catch {
+      // Profiles are a nice-to-have filter — a failed fetch shouldn't block the page.
+    }
+  }
+
+  document.getElementById("profile-select").addEventListener("change", () => {
+    currentProfileId = document.getElementById("profile-select").value;
+    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
+    else localStorage.removeItem("profileId");
+    loadProgress();
+  });
+
+  async function loadProgress() {
+    const res = await fetch(`/api/progress${qs(currentProfileId)}`);
+    const data = await res.json();
+    renderNarrative(data.narrative);
+    renderWeekCompare(data.weekly_summary);
+    renderGoals(data.goals);
+  }
+
+  function renderNarrative(text) {
+    document.getElementById("narrative").textContent = text;
+  }
+
+  function statRow(label, thisVal, lastVal, suffix) {
+    const t = thisVal == null ? "–" : `${thisVal}${suffix}`;
+    const l = lastVal == null ? "no data" : `${lastVal}${suffix} last week`;
+    return `<div class="week-stat"><div class="label">${label}</div><div class="this-value">${t}</div><div class="last-value">${l}</div></div>`;
+  }
+
+  function renderWeekCompare(ws) {
+    const el = document.getElementById("week-compare");
+    const t = ws.this_week, l = ws.last_week;
+    el.innerHTML =
+      statRow("Games played", t.games, l.games, "") +
+      statRow("Win rate", t.win_rate_pct, l.win_rate_pct, "%") +
+      statRow("Blunders / game", t.blunders_per_game, l.blunders_per_game, "") +
+      statRow("Mistakes / game", t.mistakes_per_game, l.mistakes_per_game, "") +
+      statRow("Avg accuracy", t.avg_accuracy, l.avg_accuracy, "%");
+  }
+
+  function renderGoals(goals) {
+    const list = document.getElementById("goal-list");
+    if (!goals.length) {
+      list.innerHTML = `<p class="empty-note">No goals yet — add one below.</p>`;
+      return;
+    }
+    list.innerHTML = goals.map(g => {
+      const statusClass = g.current_value == null ? "unknown" : g.met ? "met" : "unmet";
+      const statusText = g.current_value == null ? "no data yet" : g.met ? "met" : "in progress";
+      const currentText = g.current_value == null ? "–" : `${g.current_value}${suffixFor(g.metric)}`;
+      const progress = g.progress_pct ?? 0;
+      return `
+        <div class="goal-item">
+          <div class="goal-head">
+            <span class="goal-desc">${escapeHtml(g.description)}</span>
+            <span class="goal-status ${statusClass}">${statusText}</span>
+          </div>
+          <div class="goal-track"><div class="goal-fill ${g.met ? 'met' : ''}" style="width:${progress}%"></div></div>
+          <div class="goal-meta">
+            <span>Currently ${currentText} · target ${g.comparison} ${g.target_value}${suffixFor(g.metric)}</span>
+            <button data-delete-goal="${g.id}">Delete</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    list.querySelectorAll("[data-delete-goal]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        await fetch(`/api/goals/${btn.dataset.deleteGoal}`, { method: "DELETE" });
+        loadProgress();
+      });
+    });
+  }
+
+  function suffixFor() { return "%"; }
+
+  function suggestDescription() {
+    const metric = document.getElementById("goal-metric").value;
+    const phase = document.getElementById("goal-phase").value;
+    const comparison = document.getElementById("goal-comparison").value;
+    const target = document.getElementById("goal-target").value;
+    const labels = {
+      blunder_rate_overall: "Blunder rate",
+      blunder_rate_phase: `${phase.charAt(0).toUpperCase() + phase.slice(1)} blunder rate`,
+      accuracy_avg: "Average accuracy",
+      win_rate_overall: "Win rate",
+    };
+    return `${labels[metric]} ${comparison} ${target}%`;
+  }
+
+  function updateSuggestedDescription() {
+    document.getElementById("goal-description").value = suggestDescription();
+  }
+
+  document.getElementById("goal-metric").addEventListener("change", () => {
+    document.getElementById("goal-phase-wrap").style.display =
+      document.getElementById("goal-metric").value === "blunder_rate_phase" ? "" : "none";
+    updateSuggestedDescription();
+  });
+  document.getElementById("goal-phase").addEventListener("change", updateSuggestedDescription);
+  document.getElementById("goal-comparison").addEventListener("change", updateSuggestedDescription);
+  document.getElementById("goal-target").addEventListener("input", updateSuggestedDescription);
+  updateSuggestedDescription();
+  document.getElementById("goal-phase-wrap").style.display = "none";
+
+  document.getElementById("goal-create-btn").addEventListener("click", async () => {
+    const metric = document.getElementById("goal-metric").value;
+    const phase = metric === "blunder_rate_phase" ? document.getElementById("goal-phase").value : null;
+    const comparison = document.getElementById("goal-comparison").value;
+    const target_value = parseFloat(document.getElementById("goal-target").value);
+    const description = document.getElementById("goal-description").value.trim() || suggestDescription();
+    if (Number.isNaN(target_value)) return;
+
+    await fetch("/api/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, metric, comparison, target_value, phase, profile_id: currentProfileId ? parseInt(currentProfileId, 10) : null }),
+    });
+    loadProgress();
+  });
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadProfileOptions();
+  loadProgress();
+</script>
+</body>
+</html>

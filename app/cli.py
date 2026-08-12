@@ -59,6 +59,7 @@ def cmd_analyze(args) -> None:
 
 
 def cmd_refresh(args) -> None:
+    from alerts import send_alerts_for_games
     from batch_analyze import run_batch_analysis
     from db import count_games, fetch_and_store
 
@@ -70,7 +71,10 @@ def cmd_refresh(args) -> None:
 
     fetch_and_store(lichess_user, chesscom_user, refresh=True)
     save_state(lichess_user=lichess_user, chesscom_user=chesscom_user)
-    run_batch_analysis(depth=args.depth, workers=args.workers)
+    newly_analyzed = run_batch_analysis(depth=args.depth, workers=args.workers)
+    sent = send_alerts_for_games(newly_analyzed)
+    if sent:
+        print(f"Posted {sent} Discord alert(s) for notably rough game(s).")
 
     print("\nCurrent DB totals by source:")
     for source, n in count_games().items():
