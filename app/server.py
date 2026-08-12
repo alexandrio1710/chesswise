@@ -7,18 +7,20 @@ for both) so the frontend's All/Lichess/Chess.com toggle can re-query
 without the backend knowing anything about how it's rendered.
 """
 
+import json
 import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 import alerts
 import cli_state
 import clock_analysis
+import export
 import insights
 import manual_analysis
 import opening_explorer
@@ -240,6 +242,72 @@ def api_search_games(
         "games": games,
         "stats": stats.compute_stats_for_game_ids([g["id"] for g in games]),
     }
+
+
+@app.get("/api/export/games")
+def api_export_games(
+    format: str = Query(default="json"),
+    opponent: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    opening: str | None = Query(default=None),
+    result: str | None = Query(default=None),
+    time_control: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    profile_id: int | None = Query(default=None),
+    color: str | None = Query(default=None),
+    has_blunder: bool | None = Query(default=None),
+    sort_by: str = Query(default="date"),
+    sort_dir: str = Query(default="desc"),
+):
+    """Same filters as /api/search (Section 6) — this exports exactly
+    whatever the Search page's current view shows, with no separate
+    filter logic to keep in sync. `limit` is fixed high here rather than
+    exposed, since an export should mean "everything that matches", not
+    a UI-sized page of results.
+    """
+    games = stats.search_games(
+        opponent=opponent, date_from=date_from, date_to=date_to, opening=opening,
+        result=result, time_control=time_control, source=_normalize_source(source),
+        profile_id=profile_id, color=color, has_blunder=has_blunder,
+        sort_by=sort_by, sort_dir=sort_dir, limit=10000,
+    )
+    if format == "csv":
+        return Response(
+            content=export.games_to_csv(games), media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=games.csv"},
+        )
+    return Response(
+        content=json.dumps(games, indent=2), media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=games.json"},
+    )
+
+
+@app.get("/api/export/stats")
+def api_export_stats(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+    """Aggregate stats as a single JSON download — nested structure
+    (per-phase/per-severity/per-opening breakdowns) doesn't flatten to a
+    meaningful CSV, so this is JSON-only, unlike the games export.
+    """
+    source = _normalize_source(source)
+    payload = {
+        "overall_summary": stats.overall_summary(source, profile_id),
+        "mistakes_by_phase": stats.mistakes_by_phase(source, profile_id),
+        "mistakes_by_severity": stats.mistakes_by_severity(source, profile_id),
+        "monthly_trend": stats.monthly_trend(source, profile_id),
+        "openings": stats.opening_family_stats(source, profile_id),
+        "insights": {
+            "win_rate_by_color": insights.win_rate_by_color(source, profile_id),
+            "win_rate_by_time_control": insights.win_rate_by_time_control(source, profile_id),
+            "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source, profile_id),
+            "performance_vs_rating_band": insights.performance_vs_rating_band(source, profile_id),
+            "comeback_rate": insights.comeback_rate(source, profile_id),
+        },
+    }
+    return Response(
+        content=json.dumps(payload, indent=2), media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=stats.json"},
+    )
 
 
 @app.get("/api/explorer")

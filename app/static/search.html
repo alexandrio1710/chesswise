@@ -161,6 +161,10 @@
     <div class="filter-actions">
       <button id="clear-btn">Clear filters</button>
       <span class="empty-note" id="result-count"></span>
+      <span style="flex:1"></span>
+      <button id="export-games-csv">Export CSV</button>
+      <button id="export-games-json">Export JSON</button>
+      <button id="export-stats-json">Export stats JSON</button>
     </div>
   </section>
 
@@ -316,6 +320,23 @@
   document.getElementById("clear-btn").addEventListener("click", () => {
     document.querySelectorAll(".filter-grid input, .filter-grid select").forEach(el => el.value = "");
     runSearch();
+  });
+
+  function exportUrl(path) {
+    const filters = currentFilters();
+    const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir });
+    for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
+    return `${path}?${params}`;
+  }
+
+  document.getElementById("export-games-csv").addEventListener("click", () => {
+    window.location.href = exportUrl("/api/export/games") + "&format=csv";
+  });
+  document.getElementById("export-games-json").addEventListener("click", () => {
+    window.location.href = exportUrl("/api/export/games") + "&format=json";
+  });
+  document.getElementById("export-stats-json").addEventListener("click", () => {
+    window.location.href = exportUrl("/api/export/stats");
   });
 
   function applyTheme(theme) {

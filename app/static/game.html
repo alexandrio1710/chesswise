@@ -210,12 +210,24 @@
         <a href="/clock">Clock</a>
         <a href="/search">Search</a>
       </nav>
+      <button class="icon-btn" id="share-toggle-btn" title="Share this game" aria-label="Share this game" style="width:auto; padding:0 12px;">Share ↗</button>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
   </header>
 
   <section class="card" id="meta-card">
     <p class="loading-text"><span class="spinner"></span>Loading game…</p>
+  </section>
+
+  <section class="card hidden" id="share-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Share this game</h2>
+    <canvas id="share-canvas" width="900" height="470" style="width:100%; max-width:600px; border-radius:8px; display:block;"></canvas>
+    <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+      <button class="icon-btn" id="share-download-btn" style="width:auto; padding:0 14px;">Download image</button>
+      <button class="icon-btn" id="share-copy-link-btn" style="width:auto; padding:0 14px;">Copy link</button>
+      <span class="chart-caption" id="share-status" style="align-self:center;"></span>
+    </div>
+    <p class="chart-caption">A local-only link — it opens this game on this device/network, not a publicly hosted page. For Discord/Reddit, download the image instead.</p>
   </section>
 
   <section class="card hidden" id="critical-card">
@@ -278,6 +290,9 @@
   };
   let currentMoves = [];
   let currentGameId = null;
+  let currentGame = null;
+  let currentAccuracy = null;
+  let currentCriticalMoment = null;
 
   function getGameId() {
     const params = new URLSearchParams(window.location.search);
@@ -313,6 +328,10 @@
     const data = await res.json();
     currentGameId = gameId;
     currentMoves = data.moves;
+    currentGame = data.game;
+    currentAccuracy = data.accuracy;
+    currentCriticalMoment = data.critical_moment;
+    renderShareCard();
     renderMeta(data.game, data.accuracy);
     renderChart(data.moves);
     renderClockChart(data.moves, data.game.color);
@@ -598,6 +617,145 @@
       });
     }
   }
+
+  // --- Share card (Section 11) ---------------------------------------------
+  // Drawn with plain Canvas 2D (no external image/screenshot library — this
+  // app has stayed dependency-free throughout), on a FIXED palette rather
+  // than the page's live light/dark theme, since a shareable image should
+  // look the same regardless of who's viewing it or what theme they're on.
+
+  const SHARE_COLORS = {
+    bg: "#15171b", card: "#1c1f24", border: "#2a2d33",
+    text: "#f2f2ef", muted: "#9a9a95",
+    blue: "#3987e5", orange: "#d95926",
+    good: "#1fbf3f", warn: "#fab219", bad: "#e6534d",
+  };
+
+  function shareAccuracyColor(accuracy) {
+    if (accuracy == null) return SHARE_COLORS.text;
+    if (accuracy >= 80) return SHARE_COLORS.good;
+    if (accuracy >= 55) return SHARE_COLORS.warn;
+    return SHARE_COLORS.bad;
+  }
+
+  function renderShareCard() {
+    if (!currentGame) return;
+    const canvas = document.getElementById("share-canvas");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width, H = canvas.height;
+    const C = SHARE_COLORS;
+
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = C.border;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, W - 2, H - 2);
+
+    // Header
+    ctx.fillStyle = C.muted;
+    ctx.font = "600 20px system-ui, sans-serif";
+    ctx.fillText("Chess Mistake Tracker", 36, 50);
+
+    const date = new Date(currentGame.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+    ctx.fillStyle = currentGame.source === "lichess" ? C.blue : C.orange;
+    ctx.font = "700 15px system-ui, sans-serif";
+    ctx.fillText(currentGame.source === "lichess" ? "LICHESS" : "CHESS.COM", 36, 80);
+    ctx.fillStyle = C.text;
+    ctx.font = "600 26px system-ui, sans-serif";
+    let opp = `vs ${currentGame.opponent}`;
+    if (opp.length > 26) opp = opp.slice(0, 24) + "…";
+    ctx.fillText(opp, 36, 112);
+    ctx.fillStyle = C.muted;
+    ctx.font = "400 15px system-ui, sans-serif";
+    ctx.fillText(`${date} · ${currentGame.color} · ${currentGame.result} · ${currentGame.time_control}`, 36, 136);
+
+    // Big accuracy number
+    if (currentAccuracy != null) {
+      ctx.fillStyle = shareAccuracyColor(currentAccuracy);
+      ctx.font = "700 72px system-ui, sans-serif";
+      ctx.fillText(`${currentAccuracy}%`, 36, 230);
+      ctx.fillStyle = C.muted;
+      ctx.font = "400 14px system-ui, sans-serif";
+      ctx.fillText("accuracy", 36, 254);
+    }
+
+    // Eval sparkline (simplified version of the main chart)
+    if (currentMoves.length) {
+      const sx = 340, sy = 170, sw = 520, sh = 90;
+      const zeroY = sy + sh / 2;
+      const maxPly = Math.max(...currentMoves.map(m => m.ply), 1);
+      const xScale = ply => sx + (ply / maxPly) * sw;
+      const yScale = cp => {
+        const clamped = Math.max(-1000, Math.min(1000, cp));
+        return zeroY - (clamped / 1000) * (sh / 2);
+      };
+      ctx.strokeStyle = C.border;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sx, zeroY);
+      ctx.lineTo(sx + sw, zeroY);
+      ctx.stroke();
+
+      ctx.strokeStyle = C.blue;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(sx, zeroY);
+      for (const m of currentMoves) {
+        ctx.lineTo(xScale(m.ply), yScale(m.eval_cp));
+      }
+      ctx.stroke();
+      ctx.fillStyle = C.muted;
+      ctx.font = "400 13px system-ui, sans-serif";
+      ctx.fillText("evaluation over the game", sx, sy + sh + 20);
+    }
+
+    // Critical moment
+    if (currentCriticalMoment) {
+      const cm = currentCriticalMoment;
+      ctx.fillStyle = C.card;
+      ctx.fillRect(36, 300, W - 72, 110);
+      ctx.fillStyle = C.muted;
+      ctx.font = "600 13px system-ui, sans-serif";
+      ctx.fillText("CRITICAL MOMENT", 56, 328);
+      ctx.fillStyle = C.text;
+      ctx.font = "400 16px system-ui, sans-serif";
+      const line1 = `Move ${cm.move_number} (${cm.phase}): ${cm.move_san} — a ${cm.severity}, `;
+      const line2 = `dropping the eval by ${Math.round(cm.eval_drop)} centipawns.`;
+      ctx.fillText(line1, 56, 356);
+      ctx.fillText(line2, 56, 380);
+    }
+
+    ctx.fillStyle = C.muted;
+    ctx.font = "400 12px system-ui, sans-serif";
+    ctx.fillText("Generated locally — chessmistaketracker (self-hosted)", 36, H - 20);
+  }
+
+  document.getElementById("share-toggle-btn").addEventListener("click", () => {
+    document.getElementById("share-card").classList.toggle("hidden");
+  });
+
+  document.getElementById("share-download-btn").addEventListener("click", () => {
+    const canvas = document.getElementById("share-canvas");
+    canvas.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `game-${currentGameId}-review.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+
+  document.getElementById("share-copy-link-btn").addEventListener("click", async () => {
+    const status = document.getElementById("share-status");
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      status.textContent = "Link copied.";
+    } catch {
+      status.textContent = "Couldn't copy — copy the URL bar manually.";
+    }
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  });
 
   // --- Notes ---------------------------------------------------------------
 
