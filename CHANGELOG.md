@@ -1,5 +1,82 @@
 # Changelog
 
+## v4 — Advanced analysis, training, and insight features
+
+A large expansion across eleven areas, all built on free/public data only
+(Lichess's opening-explorer, tablebase, and puzzle APIs; the player's own
+stored games; local Stockfish) — no scraping or reuse of any commercial
+site's content, branding, or UI text.
+
+- **Full Game Review**: every move (not just flagged mistakes) gets a
+  quality tier — Best/Excellent/Good in addition to the existing
+  Inaccuracy/Mistake/Blunder — plus a 0–100 per-game accuracy score from
+  average centipawn loss (this project's own exponential-decay formula,
+  documented and calibrated, not copied from any external site), a full
+  eval graph, the game's single critical moment (largest eval swing) with
+  board + engine's best move, and free-text notes on a game or move.
+- **Opening Explorer**: live community win/draw/loss stats from Lichess's
+  public opening-explorer API at any position, shown alongside the
+  player's own stats for that same position, with click-through moves and
+  divergence flags (positions where the player rarely plays a move the
+  community plays often, at a notably better win rate).
+- **Endgame Tablebase Integration**: perfect-play results and best moves
+  from Lichess's public 7-piece tablebase for endgame-phase mistakes,
+  showing whether a blunder actually changed the theoretical result, plus
+  an Endgame Trainer that replays the player's own tablebase-eligible
+  mistakes against perfect defense.
+- **Puzzle Rush + Spaced Repetition**: timed 3/5-minute Puzzle Rush
+  sessions with streak/accuracy/avg-time tracking, a Leitner-system
+  spaced-repetition scheduler (5 boxes) with a "due for review" queue,
+  full per-puzzle attempt history, and phase/severity filters.
+- **Free Analysis Board**: paste any PGN or FEN for full analysis through
+  the same pipeline as synced games, with optional save-to-database
+  (tagged `source=manual`) or one-off analysis.
+- **Search and Filter**: combinable filters (opponent, date range,
+  opening, result, time control, source, color, has-blunder) over every
+  stored game, sortable, feeding their own mini stats dashboard.
+- **Advanced Stats and Insights Dashboard**: rating-over-time (backfilled
+  from Elo tags already present in stored PGNs — no new API calls
+  needed), win rate by color/time-control/day-of-week/time-of-day, game
+  length in wins vs. losses, performance vs. opponent rating band,
+  comeback rate (from the real per-move eval trace), and a data-driven
+  "most notable insights" ranking (deviation from a 50% baseline, weighted
+  by sample size) rather than a fixed list of stats to always show.
+- **Clock Management Analysis**: time-spent-per-move derived from stored
+  clock readings and each game's own PGN time control (no schema change
+  needed), a per-game time chart, games where the final clock reading and
+  the result don't line up, and average thinking time by move quality —
+  reported as the data actually shows it, including a real finding that
+  the fastest wrong moves are also the worst ones.
+- **Multi-Profile Support**: fully local, no accounts or login — named
+  profiles with linked Lichess/Chess.com usernames sharing one database,
+  a profile switcher (scoped deliberately to the pages where "whose data"
+  matters — Dashboard, Insights, Clock, Search — while Puzzles/Explorer/
+  Endgame Trainer/Analyze stay shared across all profiles), and a
+  head-to-head stats comparison view.
+- **Progress, Goals, and Auto-Reports**: simple goal tracking against
+  live stats (e.g. "endgame blunder rate below 20%"), a this-week-vs-
+  last-week summary, an auto-generated plain-language narrative
+  (template-based, no LLM calls), and Discord alerts extended from a
+  weekly-only digest to immediate per-game alerts on notably low accuracy
+  or an especially large blunder.
+- **Export and Sharing**: a downloadable, Canvas-drawn shareable game
+  card (accuracy, eval sparkline, critical moment) for Discord/Reddit,
+  plus CSV/JSON export of the Search page's current filtered view and a
+  full stats JSON export.
+- **Bonus, mid-session addition**: Puzzle Rush no longer draws only from
+  the player's own flagged mistakes — a "By opening" mode sources real
+  multi-move tactical puzzles from Lichess's free public puzzle API for
+  openings the player actually plays, graded server-side move-by-move
+  (including the opponent's forced replies), the same way every other
+  puzzle in this app is graded.
+- Real bugs found and fixed while building this pass: Stockfish
+  evaluation-perspective handling, the tablebase API's category field
+  being relative to the wrong side, a rating chart that combined two
+  non-comparable rating pools into one misleading line, and — found via
+  systematic verification against 5 independent live puzzles, not just
+  eyeballing one — the opening-puzzle fetcher initially replayed the
+  wrong number of plies from Lichess's puzzle API response.
+
 ## v3 — Robustness, testing, and deployment prep (unreleased)
 
 A polish pass over the whole project: nothing here changes user-facing
