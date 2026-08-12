@@ -21,6 +21,7 @@ import clock_analysis
 import insights
 import manual_analysis
 import opening_explorer
+import opening_puzzles
 import profiles
 import puzzles
 import srs
@@ -471,6 +472,63 @@ def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt):
     )
     result["srs"] = srs_state
     return result
+
+
+# --- Opening-based puzzles (Lichess-sourced, user-requested addition) -------
+
+@app.get("/api/opening-puzzles")
+def api_opening_puzzles(
+    source: str | None = Query(default=None),
+    profile_id: int | None = Query(default=None),
+    limit: int = 12,
+):
+    """Puzzles for the openings the player actually plays most and makes
+    the most opening-phase mistakes in (stats.openings_to_review — the
+    same "frequency x error rate" ranking Section 7's insights use),
+    sourced live from Lichess and cached locally.
+    """
+    source = _normalize_source(source)
+    top_openings = stats.openings_to_review(source, profile_id, min_games=1, limit=3)
+    families = [o["family"] for o in top_openings]
+    return {
+        "openings": families,
+        "puzzles": opening_puzzles.get_puzzles_for_openings(families, limit=limit),
+    }
+
+
+@app.get("/api/opening-puzzles/{puzzle_id}")
+def api_get_opening_puzzle(puzzle_id: int):
+    puzzle = opening_puzzles.get_puzzle(puzzle_id)
+    if puzzle is None:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+    return {
+        "id": puzzle["id"],
+        "fen": puzzle["fen"],
+        "side_to_move": puzzle["side_to_move"],
+        "legal_moves": puzzles.legal_moves_for_fen(puzzle["fen"]),
+        "opening_family": puzzle["opening_family"],
+        "lichess_rating": puzzle["lichess_rating"],
+        "themes": puzzle["themes"],
+        "game_url": puzzle["game_url"],
+        "move_index": 0,
+    }
+
+
+class OpeningPuzzleAttempt(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_square: str = Field(alias="from")
+    to_square: str = Field(alias="to")
+    move_index: int = 0
+
+
+@app.post("/api/opening-puzzles/{puzzle_id}/attempt")
+def api_opening_puzzle_attempt(puzzle_id: int, attempt: OpeningPuzzleAttempt):
+    try:
+        return opening_puzzles.attempt_move(
+            puzzle_id, attempt.move_index, attempt.from_square, attempt.to_square
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/", response_class=HTMLResponse)

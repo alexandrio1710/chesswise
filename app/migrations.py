@@ -260,6 +260,30 @@ def _migration_007_profiles(conn: sqlite3.Connection) -> None:
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
+def _migration_008_opening_puzzles(conn: sqlite3.Connection) -> None:
+    """Opening-based puzzles (user-requested addition): a local cache of
+    puzzles pulled from Lichess's public puzzle API for openings the
+    player actually plays, kept separate from the existing `puzzles`
+    table (see opening_puzzles.py's module docstring for why).
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS opening_puzzles (
+            id INTEGER PRIMARY KEY,
+            external_id TEXT NOT NULL UNIQUE,
+            opening_family TEXT NOT NULL,
+            fen TEXT NOT NULL,
+            side_to_move TEXT NOT NULL,
+            solution_uci TEXT NOT NULL,
+            lichess_rating INTEGER,
+            themes TEXT,
+            game_url TEXT,
+            fetched_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            correct INTEGER NOT NULL DEFAULT 0
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -268,6 +292,7 @@ MIGRATIONS = [
     (5, "Add puzzle_attempts and puzzle_review_state (spaced repetition)", _migration_005_puzzle_srs),
     (6, "Add player_rating/opponent_rating to games", _migration_006_ratings),
     (7, "Add profiles/profile_usernames tables and games.profile_id", _migration_007_profiles),
+    (8, "Add opening_puzzles table (Lichess-sourced opening puzzles)", _migration_008_opening_puzzles),
 ]
 
 

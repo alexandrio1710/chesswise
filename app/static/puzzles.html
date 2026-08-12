@@ -170,7 +170,7 @@
     color: var(--text-primary);
   }
 
-  #board, #rush-board {
+  #board, #rush-board, #opening-board {
     display: grid;
     grid-template-columns: repeat(8, 1fr);
     grid-template-rows: repeat(8, 1fr);
@@ -312,6 +312,7 @@
       <button data-mode="all" class="active">All puzzles</button>
       <button data-mode="practice">Practice my mistakes</button>
       <button data-mode="due">Due for review <span id="due-count-badge"></span></button>
+      <button data-mode="opening">By opening</button>
       <button data-mode="rush">Puzzle Rush</button>
     </div>
     <div class="filter-row hidden" id="filter-row">
@@ -348,6 +349,27 @@
     <div class="card">
       <h2 id="queue-title">Queue</h2>
       <div class="queue-list" id="queue-list"></div>
+    </div>
+  </div>
+
+  <div class="layout hidden" id="opening-layout">
+    <div class="card">
+      <div class="puzzle-meta" id="opening-puzzle-meta"><span class="spinner"></span>Loading puzzle…</div>
+      <div id="opening-board"></div>
+      <div class="feedback" id="opening-feedback">
+        <div class="verdict" id="opening-feedback-verdict"></div>
+        <div id="opening-feedback-detail"></div>
+      </div>
+      <button class="next-btn" id="opening-next-btn">Next puzzle →</button>
+    </div>
+    <div class="card">
+      <h2>Practicing your openings</h2>
+      <p class="empty-note" id="opening-explainer">Loading…</p>
+      <p class="empty-note">
+        Sourced live from <a href="https://lichess.org" target="_blank" rel="noopener">Lichess's</a> free public
+        puzzle database, filtered to openings you actually play. These are real multi-move tactical sequences —
+        find the right move, the opponent's forced reply plays automatically, and you continue until it's solved.
+      </p>
     </div>
   </div>
 
@@ -702,7 +724,7 @@
   });
 
   function showView(viewId) {
-    ["normal-layout", "rush-setup", "rush-layout", "rush-summary"].forEach(id => {
+    ["normal-layout", "opening-layout", "rush-setup", "rush-layout", "rush-summary"].forEach(id => {
       document.getElementById(id).classList.toggle("hidden", id !== viewId);
     });
   }
@@ -716,6 +738,12 @@
       if (mode === "rush") {
         document.getElementById("filter-row").classList.add("hidden");
         showView("rush-setup");
+        return;
+      }
+      if (mode === "opening") {
+        document.getElementById("filter-row").classList.add("hidden");
+        showView("opening-layout");
+        loadOpeningQueue();
         return;
       }
       document.getElementById("filter-row").classList.remove("hidden");
@@ -748,6 +776,157 @@
     localStorage.setItem("theme", next);
     applyTheme(next);
   });
+
+  // --- By opening (Lichess-sourced puzzles) --------------------------------
+
+  let openingQueue = [];
+  let openingIndex = -1;
+  let openingPuzzle = null;
+  let openingMoveIndex = 0;
+  let openingSelectedSquare = null;
+  let openingSolved = false;
+
+  async function loadOpeningQueue() {
+    document.getElementById("opening-puzzle-meta").innerHTML = `<span class="spinner"></span>Loading puzzle…`;
+    const res = await fetch("/api/opening-puzzles?limit=12");
+    const data = await res.json();
+    openingQueue = data.puzzles;
+    document.getElementById("opening-explainer").textContent = data.openings.length
+      ? `Pulled from your most-played and most error-prone openings: ${data.openings.join(", ")}.`
+      : "Analyze a few more games first — this needs at least one opening with enough games to rank.";
+    openingIndex = -1;
+    loadNextOpeningPuzzle();
+  }
+
+  async function loadNextOpeningPuzzle() {
+    openingIndex++;
+    document.getElementById("opening-next-btn").classList.remove("show");
+    document.getElementById("opening-feedback").classList.remove("show");
+    if (openingIndex >= openingQueue.length) {
+      document.getElementById("opening-puzzle-meta").textContent = openingQueue.length
+        ? "That's the batch — switch modes and back to pull a fresh set."
+        : "No opening puzzles available yet.";
+      document.getElementById("opening-board").innerHTML = "";
+      return;
+    }
+    const summary = openingQueue[openingIndex];
+    const res = await fetch(`/api/opening-puzzles/${summary.id}`);
+    openingPuzzle = await res.json();
+    openingMoveIndex = 0;
+    openingSolved = false;
+    openingSelectedSquare = null;
+    document.getElementById("opening-puzzle-meta").innerHTML =
+      `<span class="severity">${escapeHtml(openingPuzzle.opening_family)}</span>` +
+      (openingPuzzle.lichess_rating ? ` · puzzle rating ${openingPuzzle.lichess_rating}` : "") +
+      ` · <a href="${openingPuzzle.game_url}" target="_blank" rel="noopener">source game ↗</a>`;
+    renderOpeningBoard();
+  }
+
+  function renderOpeningBoard() {
+    const board = document.getElementById("opening-board");
+    board.innerHTML = "";
+    board.dataset.puzzleId = openingPuzzle.id;
+    const pieceMap = fenToPieceMap(openingPuzzle.fen);
+    const order = squareOrder(openingPuzzle.side_to_move);
+    for (const square of order) {
+      const el = document.createElement("div");
+      el.className = `square ${isLight(square) ? "light" : "dark"}`;
+      el.dataset.square = square;
+      const piece = pieceMap[square];
+      if (piece) {
+        const span = document.createElement("span");
+        span.className = "piece";
+        span.textContent = PIECE_UNICODE[piece];
+        el.appendChild(span);
+      }
+      el.addEventListener("click", () => onOpeningSquareClick(square));
+      board.appendChild(el);
+    }
+  }
+
+  function openingOwnPiece(square) {
+    const pieceMap = fenToPieceMap(openingPuzzle.fen);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    return (openingPuzzle.side_to_move === "white") === isWhitePiece;
+  }
+
+  function openingLegalDestinationsFrom(square) {
+    return openingPuzzle.legal_moves.filter(m => m.from === square).map(m => m.to);
+  }
+
+  function openingClearHighlights() {
+    document.querySelectorAll("#opening-board .square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll("#opening-board .legal-dot").forEach(el => el.remove());
+  }
+
+  function onOpeningSquareClick(square) {
+    if (openingSolved) return;
+    if (openingSelectedSquare) {
+      const destinations = openingLegalDestinationsFrom(openingSelectedSquare);
+      if (destinations.includes(square)) { submitOpeningAttempt(openingSelectedSquare, square); return; }
+    }
+    openingClearHighlights();
+    if (openingOwnPiece(square)) {
+      openingSelectedSquare = square;
+      document.querySelector(`#opening-board .square[data-square="${square}"]`).classList.add("selected");
+      for (const dest of openingLegalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`#opening-board .square[data-square="${dest}"]`);
+        const dot = document.createElement("div");
+        dot.className = "legal-dot";
+        destEl.appendChild(dot);
+      }
+    } else {
+      openingSelectedSquare = null;
+    }
+  }
+
+  async function submitOpeningAttempt(from, to) {
+    const res = await fetch(`/api/opening-puzzles/${openingPuzzle.id}/attempt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to, move_index: openingMoveIndex }),
+    });
+    if (!res.ok) return;
+    const result = await res.json();
+    openingClearHighlights();
+    openingSelectedSquare = null;
+
+    const box = document.getElementById("opening-feedback");
+    const verdict = document.getElementById("opening-feedback-verdict");
+    const detail = document.getElementById("opening-feedback-detail");
+
+    if (!result.correct) {
+      openingSolved = true;
+      box.className = "feedback show incorrect";
+      verdict.className = "verdict incorrect-text";
+      verdict.textContent = "Not quite.";
+      detail.innerHTML = `<div>Solution: ${result.solution_san.map(escapeHtml).join(" ")}</div>`;
+      document.getElementById("opening-next-btn").classList.add("show");
+      return;
+    }
+
+    if (result.done) {
+      openingSolved = true;
+      box.className = "feedback show correct";
+      verdict.className = "verdict correct-text";
+      verdict.textContent = "Solved!";
+      detail.innerHTML = "";
+      document.getElementById("opening-next-btn").classList.add("show");
+      return;
+    }
+
+    // Correct so far — the opponent's forced reply already auto-played
+    // server-side; keep going on the updated position.
+    openingPuzzle.fen = result.fen;
+    openingPuzzle.side_to_move = result.side_to_move;
+    openingPuzzle.legal_moves = result.legal_moves;
+    openingMoveIndex = result.next_move_index;
+    renderOpeningBoard();
+  }
+
+  document.getElementById("opening-next-btn").addEventListener("click", loadNextOpeningPuzzle);
 
   // --- Puzzle Rush ---------------------------------------------------------
 
