@@ -85,6 +85,10 @@
     font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
     background: var(--surface-1); color: var(--text-primary); cursor: pointer;
   }
+  .profile-select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
 
   .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
   .stat-tile .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
@@ -125,6 +129,8 @@
         <a href="/clock">Clock</a>
         <a href="/search" class="active">Search</a>
       </nav>
+      <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
+      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
   </header>
@@ -187,6 +193,7 @@
 <script>
   let sortBy = "date", sortDir = "desc";
   let debounceHandle = null;
+  let currentProfileId = localStorage.getItem("profileId") || "";
 
   function currentFilters() {
     return {
@@ -198,9 +205,35 @@
       color: document.getElementById("f-color").value,
       time_control: document.getElementById("f-time-control").value,
       source: document.getElementById("f-source").value,
+      profile_id: currentProfileId,
       has_blunder: document.getElementById("f-has-blunder").value,
     };
   }
+
+  async function loadProfileOptions() {
+    const select = document.getElementById("profile-select");
+    try {
+      const profiles = await fetch("/api/profiles").then(r => r.json());
+      select.innerHTML = `<option value="">All profiles</option>` +
+        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
+        select.value = currentProfileId;
+      } else {
+        currentProfileId = "";
+        localStorage.removeItem("profileId");
+      }
+    } catch {
+      // Profiles are a nice-to-have filter — a failed fetch here shouldn't
+      // block search from working.
+    }
+  }
+
+  document.getElementById("profile-select").addEventListener("change", () => {
+    currentProfileId = document.getElementById("profile-select").value;
+    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
+    else localStorage.removeItem("profileId");
+    runSearch();
+  });
 
   async function runSearch() {
     const filters = currentFilters();
@@ -296,6 +329,7 @@
     applyTheme(next);
   });
 
+  loadProfileOptions();
   runSearch();
 </script>
 </body>

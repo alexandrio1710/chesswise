@@ -13,14 +13,26 @@ import re
 from db import get_connection
 
 
-def _source_clause(source: str | None, table_alias: str = "g") -> tuple[str, tuple]:
+def _source_clause(source: str | None, profile_id: int | None = None, table_alias: str = "g") -> tuple[str, tuple]:
+    """Combined source + profile (Section 9) filter as a SQL fragment
+    ready to inline after a WHERE clause. Kept as one helper (rather than
+    two separate ones threaded independently everywhere) since every
+    caller already wants both applied together.
+    """
+    clauses, params = [], []
     if source:
-        return f" AND {table_alias}.source = ?", (source,)
-    return "", ()
+        clauses.append(f"{table_alias}.source = ?")
+        params.append(source)
+    if profile_id is not None:
+        clauses.append(f"{table_alias}.profile_id = ?")
+        params.append(profile_id)
+    if not clauses:
+        return "", ()
+    return " AND " + " AND ".join(clauses), tuple(params)
 
 
-def mistakes_by_phase(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
+def mistakes_by_phase(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -37,8 +49,8 @@ def mistakes_by_phase(source: str | None = None) -> dict:
         conn.close()
 
 
-def mistakes_by_severity(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
+def mistakes_by_severity(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -55,8 +67,8 @@ def mistakes_by_severity(source: str | None = None) -> dict:
         conn.close()
 
 
-def blunders_by_phase(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
+def blunders_by_phase(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -73,12 +85,12 @@ def blunders_by_phase(source: str | None = None) -> dict:
         conn.close()
 
 
-def worst_mistake_phase(source: str | None = None) -> str | None:
+def worst_mistake_phase(source: str | None = None, profile_id: int | None = None) -> str | None:
     """Which game phase has the most puzzle-eligible mistakes (severity
     'mistake' or 'blunder') — used to prioritize the "Practice my mistakes"
     puzzle queue (Stage B) toward the player's biggest actual leak.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         row = conn.execute(
@@ -97,12 +109,12 @@ def worst_mistake_phase(source: str | None = None) -> str | None:
         conn.close()
 
 
-def clock_correlation(source: str | None = None) -> dict:
+def clock_correlation(source: str | None = None, profile_id: int | None = None) -> dict:
     """Average clock time remaining for blunders vs. everything else, to
     check whether blunders cluster under time pressure. Only considers
     moves where a clock value was actually captured from the PGN.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         blunder_avg = conn.execute(
@@ -131,11 +143,11 @@ def clock_correlation(source: str | None = None) -> dict:
         conn.close()
 
 
-def worst_game(source: str | None = None) -> dict | None:
+def worst_game(source: str | None = None, profile_id: int | None = None) -> dict | None:
     """The game containing the single largest eval swing (biggest
     individual mistake), i.e. the "worst blunder" game.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         row = conn.execute(
@@ -155,11 +167,11 @@ def worst_game(source: str | None = None) -> dict | None:
         conn.close()
 
 
-def worst_games(source: str | None = None, limit: int = 5) -> list[dict]:
+def worst_games(source: str | None = None, profile_id: int | None = None, limit: int = 5) -> list[dict]:
     """The `limit` games with the largest single eval swing, one row each,
     for a dashboard table.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -194,9 +206,9 @@ def worst_games(source: str | None = None, limit: int = 5) -> list[dict]:
         conn.close()
 
 
-def overall_summary(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
-    where_analyzed, params_a = _source_clause(source)
+def overall_summary(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
+    where_analyzed, params_a = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         games_row = conn.execute(
@@ -233,11 +245,11 @@ def overall_summary(source: str | None = None) -> dict:
         conn.close()
 
 
-def top_takeaway(source: str | None = None) -> str:
+def top_takeaway(source: str | None = None, profile_id: int | None = None) -> str:
     """Plain-English sentence naming whichever phase blunders cluster in
     most heavily, e.g. '62% of your blunders happen in the endgame.'
     """
-    phase_counts = blunders_by_phase(source)
+    phase_counts = blunders_by_phase(source, profile_id)
     total_blunders = sum(phase_counts.values())
 
     if total_blunders == 0:
@@ -248,14 +260,14 @@ def top_takeaway(source: str | None = None) -> str:
     return f"{pct}% of your blunders happen in the {dominant_phase}."
 
 
-def monthly_trend(source: str | None = None, n_months: int = 6) -> list[dict]:
+def monthly_trend(source: str | None = None, profile_id: int | None = None, n_months: int = 6) -> list[dict]:
     """Games played and mistakes/blunders per game, grouped by the calendar
     month the game was PLAYED (not when it was analyzed) — most recent
     month first. Every rate here is stated per game, not per move or per
     flagged mistake, so it stays comparable across months with different
     game counts.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -292,12 +304,12 @@ def monthly_trend(source: str | None = None, n_months: int = 6) -> list[dict]:
         conn.close()
 
 
-def trend_takeaway(source: str | None = None) -> str:
+def trend_takeaway(source: str | None = None, profile_id: int | None = None) -> str:
     """Plain-English month-over-month comparison, e.g. 'Blunders per game
     are down from 3.5 last month to 2.1 this month.' Needs at least two
     months with analyzed games to say anything.
     """
-    trend = monthly_trend(source, n_months=2)
+    trend = monthly_trend(source, profile_id, n_months=2)
     if len(trend) < 2:
         return "Not enough months of analyzed games yet to show a trend."
 
@@ -353,12 +365,12 @@ def opening_family(opening_name: str) -> str:
     return truncated or opening_name.strip()
 
 
-def opening_stats(source: str | None = None) -> list[dict]:
+def opening_stats(source: str | None = None, profile_id: int | None = None) -> list[dict]:
     """Per-specific-opening stats (not yet grouped to family): games
     played, win rate, and how many opening-phase mistakes (mistakes table,
     phase='opening') happened in games that used it.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         game_rows = conn.execute(
@@ -407,12 +419,12 @@ def opening_stats(source: str | None = None) -> list[dict]:
         conn.close()
 
 
-def opening_family_stats(source: str | None = None) -> list[dict]:
+def opening_family_stats(source: str | None = None, profile_id: int | None = None) -> list[dict]:
     """Per-specific-opening stats rolled up to top-level family, for the
     summary view. Same fields as opening_stats() minus opening_name.
     """
     families: dict[str, dict] = {}
-    for d in opening_stats(source):
+    for d in opening_stats(source, profile_id):
         fam = families.setdefault(d["family"], {
             "family": d["family"], "games_played": 0, "wins": 0,
             "losses": 0, "draws": 0, "opening_phase_mistakes": 0,
@@ -432,23 +444,23 @@ def opening_family_stats(source: str | None = None) -> list[dict]:
     return results
 
 
-def most_played_openings(source: str | None = None, limit: int = 5) -> list[dict]:
-    return sorted(opening_family_stats(source), key=lambda f: f["games_played"], reverse=True)[:limit]
+def most_played_openings(source: str | None = None, profile_id: int | None = None, limit: int = 5) -> list[dict]:
+    return sorted(opening_family_stats(source, profile_id), key=lambda f: f["games_played"], reverse=True)[:limit]
 
 
-def best_win_rate_openings(source: str | None = None, min_games: int = 2, limit: int = 5) -> list[dict]:
-    eligible = [f for f in opening_family_stats(source) if f["games_played"] >= min_games]
+def best_win_rate_openings(source: str | None = None, profile_id: int | None = None, min_games: int = 2, limit: int = 5) -> list[dict]:
+    eligible = [f for f in opening_family_stats(source, profile_id) if f["games_played"] >= min_games]
     return sorted(eligible, key=lambda f: f["win_rate_pct"], reverse=True)[:limit]
 
 
-def openings_to_review(source: str | None = None, min_games: int = 2, limit: int = 5) -> list[dict]:
+def openings_to_review(source: str | None = None, profile_id: int | None = None, min_games: int = 2, limit: int = 5) -> list[dict]:
     """Openings worth reviewing: played often enough to matter AND
     error-prone in the opening phase specifically. Ranked by
     games_played × opening_mistakes_per_game (frequency × error rate) so a
     rarely-played opening with one bad game doesn't outrank an opening
     that quietly costs a little every time you play it.
     """
-    eligible = [f for f in opening_family_stats(source) if f["games_played"] >= min_games]
+    eligible = [f for f in opening_family_stats(source, profile_id) if f["games_played"] >= min_games]
     scored = [
         {**f, "impact_score": round(f["games_played"] * f["opening_mistakes_per_game"], 1)}
         for f in eligible
@@ -630,6 +642,7 @@ def search_games(
     result: str | None = None,
     time_control: str | None = None,
     source: str | None = None,
+    profile_id: int | None = None,
     color: str | None = None,
     has_blunder: bool | None = None,
     sort_by: str = "date",
@@ -667,6 +680,9 @@ def search_games(
     if source:
         where.append("g.source = ?")
         params.append(source)
+    if profile_id is not None:
+        where.append("g.profile_id = ?")
+        params.append(profile_id)
     if color:
         where.append("g.color = ?")
         params.append(color)

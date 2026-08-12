@@ -16,10 +16,17 @@ _TIME_CONTROL_RE = re.compile(r'\[TimeControl "(\d+)(?:\+(\d+))?"\]')
 _TIER_ORDER = ["best", "excellent", "good", "inaccuracy", "mistake", "blunder"]
 
 
-def _source_clause(source: str | None, alias: str = "g") -> tuple[str, tuple]:
+def _source_clause(source: str | None, profile_id: int | None = None, alias: str = "g") -> tuple[str, tuple]:
+    clauses, params = [], []
     if source:
-        return f" AND {alias}.source = ?", (source,)
-    return "", ()
+        clauses.append(f"{alias}.source = ?")
+        params.append(source)
+    if profile_id is not None:
+        clauses.append(f"{alias}.profile_id = ?")
+        params.append(profile_id)
+    if not clauses:
+        return "", ()
+    return " AND " + " AND ".join(clauses), tuple(params)
 
 
 def parse_time_control(pgn_text: str) -> tuple[int, int] | None:
@@ -69,14 +76,14 @@ def annotate_time_spent(moves: list[dict], pgn_text: str) -> list[dict]:
     return result
 
 
-def avg_thinking_time_by_tier(source: str | None = None) -> dict:
+def avg_thinking_time_by_tier(source: str | None = None, profile_id: int | None = None) -> dict:
     """Average seconds spent per move, grouped by that move's own quality
     tier — only the player's own moves (not the opponent's), across every
     analyzed game with usable clock + TimeControl data. This reports
     whatever the numbers actually turn out to be; there's no assumption
     baked in that mistakes happen faster (or slower) than good moves.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         games = conn.execute(
@@ -110,7 +117,7 @@ def avg_thinking_time_by_tier(source: str | None = None) -> dict:
     }
 
 
-def clock_pressure_games(source: str | None = None, min_diff_seconds: int = 30) -> dict:
+def clock_pressure_games(source: str | None = None, profile_id: int | None = None, min_diff_seconds: int = 30) -> dict:
     """Games where the final clock reading suggests a clock edge that
     didn't translate into a win, or a disadvantage overcome anyway.
     Compares each side's LAST recorded clock reading in the game (time
@@ -120,7 +127,7 @@ def clock_pressure_games(source: str | None = None, min_diff_seconds: int = 30) 
     Only flags a difference of at least `min_diff_seconds` — small gaps
     are noise, not a real "advantage".
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         games = conn.execute(

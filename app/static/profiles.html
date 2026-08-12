@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Profiles</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .subtext { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+
+  .profile-list { display: flex; flex-direction: column; gap: 12px; }
+  .profile-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .profile-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .profile-name { font-size: 15px; font-weight: 600; }
+  .profile-game-count { font-size: 12px; color: var(--text-muted); }
+  .link-chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 3px 9px; border-radius: 100px; background: var(--page-plane); margin: 8px 6px 0 0;
+  }
+  .link-chip button { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0; }
+  .link-form { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  .link-form select, .link-form input {
+    font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  .link-form input { min-width: 160px; }
+  .btn {
+    font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-primary); cursor: pointer;
+  }
+  .btn-primary { background: var(--series-1); color: #fff; border-color: transparent; }
+  .btn-danger { color: var(--status-critical); }
+
+  .create-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .create-form input {
+    flex: 1; min-width: 200px; font: inherit; font-size: 13px; padding: 8px 10px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+
+  .compare-picker { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .compare-picker select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
+  }
+  table.compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.compare-table th, table.compare-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--gridline); }
+  table.compare-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  table.compare-table td.metric { color: var(--text-secondary); }
+
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .status-msg { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Profiles</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/insights">Insights</a>
+        <a href="/clock">Clock</a>
+        <a href="/search">Search</a>
+        <a href="/profiles" class="active">Profiles</a>
+      </nav>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>What profiles are</h2>
+    <p class="subtext" style="margin-bottom:0;">
+      No accounts, no login — a profile is just a name plus the Lichess/Chess.com usernames linked to it, so more
+      than one person's games (or your own separate accounts) can share this local database. A username can only
+      be linked to one profile at a time; fetching for a brand-new username auto-creates a profile for it.
+      The profile switcher on Dashboard, Insights, Clock, and Search narrows those pages to one profile's games —
+      Puzzles, the Opening Explorer, the Endgame Trainer, and the Analyze board always use the full local game pool.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>Create a profile</h2>
+    <p class="subtext">Give it a name, then link a Lichess and/or Chess.com username to it below.</p>
+    <div class="create-form">
+      <input type="text" id="new-profile-name" placeholder="e.g. Alex, or a friend's name">
+      <button class="btn btn-primary" id="create-profile-btn">Create</button>
+      <span class="status-msg" id="create-status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Your profiles</h2>
+    <div class="profile-list" id="profile-list"><p class="empty-note">Loading…</p></div>
+  </section>
+
+  <section class="card">
+    <h2>Head-to-head comparison</h2>
+    <p class="subtext">Same headline stats, computed separately for each profile — not games played against each other.</p>
+    <div class="compare-picker">
+      <select id="compare-a"><option value="">Profile A…</option></select>
+      <span>vs</span>
+      <select id="compare-b"><option value="">Profile B…</option></select>
+    </div>
+    <div id="compare-result"></div>
+  </section>
+</div>
+
+<script>
+  let profilesCache = [];
+
+  async function loadProfiles() {
+    const res = await fetch("/api/profiles");
+    profilesCache = await res.json();
+    renderProfileList();
+    renderComparePickers();
+  }
+
+  function renderProfileList() {
+    const list = document.getElementById("profile-list");
+    if (!profilesCache.length) {
+      list.innerHTML = `<p class="empty-note">No profiles yet — create one above, or just fetch games for a username and one will be created automatically.</p>`;
+      return;
+    }
+    list.innerHTML = profilesCache.map(p => `
+      <div class="profile-card" data-profile-id="${p.id}">
+        <div class="profile-card-head">
+          <div>
+            <span class="profile-name">${escapeHtml(p.name)}</span>
+            <span class="profile-game-count">${p.game_count} game${p.game_count === 1 ? "" : "s"}</span>
+          </div>
+          <button class="btn btn-danger" data-delete-profile="${p.id}">Delete</button>
+        </div>
+        <div>
+          ${p.usernames.map(u => `
+            <span class="link-chip">${u.source === "lichess" ? "Lichess" : "Chess.com"}: ${escapeHtml(u.username)}
+              <button data-unlink="${p.id}|${u.source}|${escapeHtml(u.username)}" title="Unlink">✕</button>
+            </span>
+          `).join("")}
+        </div>
+        <div class="link-form">
+          <select data-link-source="${p.id}">
+            <option value="lichess">Lichess</option>
+            <option value="chesscom">Chess.com</option>
+          </select>
+          <input type="text" data-link-username="${p.id}" placeholder="username">
+          <button class="btn" data-link-submit="${p.id}">Link</button>
+        </div>
+      </div>
+    `).join("");
+
+    list.querySelectorAll("[data-delete-profile]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this profile? Its games stay in the database, unassigned to any profile.")) return;
+        await fetch(`/api/profiles/${btn.dataset.deleteProfile}`, { method: "DELETE" });
+        loadProfiles();
+      });
+    });
+
+    list.querySelectorAll("[data-unlink]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const [profileId, source, username] = btn.dataset.unlink.split("|");
+        await fetch(`/api/profiles/${profileId}/links?source=${source}&username=${encodeURIComponent(username)}`, { method: "DELETE" });
+        loadProfiles();
+      });
+    });
+
+    list.querySelectorAll("[data-link-submit]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const profileId = btn.dataset.linkSubmit;
+        const source = document.querySelector(`[data-link-source="${profileId}"]`).value;
+        const usernameInput = document.querySelector(`[data-link-username="${profileId}"]`);
+        const username = usernameInput.value.trim();
+        if (!username) return;
+        const res = await fetch(`/api/profiles/${profileId}/links`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source, username }),
+        });
+        if (res.ok) { usernameInput.value = ""; loadProfiles(); }
+      });
+    });
+  }
+
+  function renderComparePickers() {
+    const optionsHtml = `<option value="">Choose…</option>` +
+      profilesCache.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    const a = document.getElementById("compare-a"), b = document.getElementById("compare-b");
+    const prevA = a.value, prevB = b.value;
+    a.innerHTML = optionsHtml.replace("Choose…", "Profile A…");
+    b.innerHTML = optionsHtml.replace("Choose…", "Profile B…");
+    if (prevA) a.value = prevA;
+    if (prevB) b.value = prevB;
+  }
+
+  async function runCompare() {
+    const a = document.getElementById("compare-a").value;
+    const b = document.getElementById("compare-b").value;
+    const result = document.getElementById("compare-result");
+    if (!a || !b) { result.innerHTML = ""; return; }
+    if (a === b) { result.innerHTML = `<p class="empty-note">Pick two different profiles.</p>`; return; }
+
+    const res = await fetch(`/api/profiles/compare?a=${a}&b=${b}`);
+    if (!res.ok) { result.innerHTML = `<p class="empty-note">Couldn't compare these profiles.</p>`; return; }
+    const data = await res.json();
+
+    const rows = [
+      ["Games analyzed", data.a.games, data.b.games],
+      ["Win rate", fmtPct(data.a.win_rate_pct), fmtPct(data.b.win_rate_pct)],
+      ["Record (W-L-D)", `${data.a.wins}-${data.a.losses}-${data.a.draws}`, `${data.b.wins}-${data.b.losses}-${data.b.draws}`],
+      ["Avg mistakes/game", fmtNum(data.a.avg_mistakes_per_game), fmtNum(data.b.avg_mistakes_per_game)],
+      ["Avg blunders/game", fmtNum(data.a.avg_blunders_per_game), fmtNum(data.b.avg_blunders_per_game)],
+      ["Latest rating", data.a.latest_rating ?? "–", data.b.latest_rating ?? "–"],
+    ];
+    result.innerHTML = `
+      <div class="table-scroll" style="overflow-x:auto;">
+        <table class="compare-table">
+          <thead><tr><th></th><th>${escapeHtml(data.a.profile.name)}</th><th>${escapeHtml(data.b.profile.name)}</th></tr></thead>
+          <tbody>${rows.map(([label, av, bv]) => `<tr><td class="metric">${label}</td><td>${av}</td><td>${bv}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function fmtPct(v) { return v == null ? "–" : `${v}%`; }
+  function fmtNum(v) { return v == null ? "–" : v; }
+
+  document.getElementById("compare-a").addEventListener("change", runCompare);
+  document.getElementById("compare-b").addEventListener("change", runCompare);
+
+  document.getElementById("create-profile-btn").addEventListener("click", async () => {
+    const input = document.getElementById("new-profile-name");
+    const status = document.getElementById("create-status");
+    const name = input.value.trim();
+    if (!name) return;
+    const res = await fetch("/api/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      input.value = "";
+      status.textContent = "";
+      loadProfiles();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      status.textContent = body.detail || "Couldn't create profile.";
+    }
+  });
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadProfiles();
+</script>
+</body>
+</html>

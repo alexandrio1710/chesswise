@@ -144,7 +144,12 @@ def save_manual_game(pgn_text: str, player_color: str, opponent_override: str | 
         "opponent": opponent, "result": result, "color": player_color,
         "time_control": "unknown", "opening_name": "", "pgn": pgn_text,
     }
-    save_games([normalized])
+    # The Analyze board has no profile switcher of its own (Section 9 keeps
+    # it profile-agnostic, same as Puzzles/Explorer/Endgame Trainer) — a
+    # manually-saved game lands under whichever profile was created first.
+    from profiles import default_profile_id
+
+    save_games([normalized], profile_id=default_profile_id())
 
     conn = get_connection()
     try:

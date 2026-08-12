@@ -13,8 +13,10 @@ that file — nothing here should ever risk losing already-analyzed games.
 """
 
 import logging
+import re
 import shutil
 import sqlite3
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -188,6 +190,73 @@ def _migration_006_ratings(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE games ADD COLUMN {col_name} INTEGER")
 
 
+_PLAYER_NAME_RE = re.compile(r'\[(White|Black)\s+"([^"]*)"\]')
+
+
+def _migration_007_profiles(conn: sqlite3.Connection) -> None:
+    """Advanced features, Section 9 — Multi-Profile Support. A profile is
+    just a name plus the Lichess/Chess.com usernames linked to it (no
+    accounts, no login) — this lets more than one person's games share
+    one local database without the app assuming there's only one "you".
+    A username can only be linked to one profile, which is what routes an
+    incoming fetched game to the right profile automatically.
+
+    Existing games predate profiles entirely, so this also backfills:
+    detects each stored game's own username (from its PGN's White/Black
+    tag matching that game's already-stored `color`) per source, creates
+    one profile from whichever usernames come up most often, links them,
+    and tags every existing game with that profile — so upgrading doesn't
+    silently orphan a user's whole history from their own profile.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS profile_usernames (
+            id INTEGER PRIMARY KEY,
+            profile_id INTEGER NOT NULL REFERENCES profiles(id),
+            source TEXT NOT NULL,
+            username TEXT NOT NULL,
+            UNIQUE(source, username)
+        );
+    """)
+
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    if "profile_id" not in existing:
+        conn.execute("ALTER TABLE games ADD COLUMN profile_id INTEGER REFERENCES profiles(id)")
+
+    rows = conn.execute("SELECT id, source, color, pgn FROM games WHERE pgn IS NOT NULL").fetchall()
+    if not rows:
+        return
+
+    usernames_by_source: dict[str, Counter] = {}
+    for row in rows:
+        names = dict(_PLAYER_NAME_RE.findall(row["pgn"] or ""))
+        mine = names.get("White") if row["color"] == "white" else names.get("Black")
+        if mine and mine not in ("Unknown", "?"):
+            usernames_by_source.setdefault(row["source"], Counter())[mine] += 1
+
+    detected = {src: counter.most_common(1)[0][0] for src, counter in usernames_by_source.items() if counter}
+    if not detected:
+        return  # nothing usable to name/link a profile from — leave profile_id NULL
+
+    profile_name = detected.get("lichess") or detected.get("chesscom") or next(iter(detected.values()))
+    cur = conn.execute(
+        "INSERT INTO profiles (name, created_at) VALUES (?, datetime('now'))", (profile_name,)
+    )
+    profile_id = cur.lastrowid
+    for source, username in detected.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO profile_usernames (profile_id, source, username) VALUES (?, ?, ?)",
+            (profile_id, source, username.lower()),
+        )
+
+    conn.execute("UPDATE games SET profile_id = ? WHERE profile_id IS NULL", (profile_id,))
+
+
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
@@ -198,6 +267,7 @@ MIGRATIONS = [
     (4, "Add move tiers (game_moves) and free-text notes table", _migration_004_move_tiers_and_notes),
     (5, "Add puzzle_attempts and puzzle_review_state (spaced repetition)", _migration_005_puzzle_srs),
     (6, "Add player_rating/opponent_rating to games", _migration_006_ratings),
+    (7, "Add profiles/profile_usernames tables and games.profile_id", _migration_007_profiles),
 ]
 
 

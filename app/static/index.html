@@ -155,6 +155,10 @@
     background: var(--series-1);
     color: #ffffff;
   }
+  .profile-select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
 
   .tab-row {
     display: flex;
@@ -461,11 +465,13 @@
         <a href="/clock">Clock</a>
         <a href="/search">Search</a>
       </nav>
+      <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
       <div class="filter-group" role="group" aria-label="Filter by source">
         <button data-source="all" class="active">All</button>
         <button data-source="lichess">Lichess</button>
         <button data-source="chesscom">Chess.com</button>
       </div>
+      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
       <button class="icon-btn" id="settings-toggle" title="Settings" aria-label="Settings">⚙</button>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
@@ -591,14 +597,45 @@
 <script>
   const PHASES = ["opening", "middlegame", "endgame"];
   let currentSource = "all";
+  let currentProfileId = localStorage.getItem("profileId") || "";
   let openingsLoaded = false;
 
-  function qs(source) {
-    return source === "all" ? "" : `?source=${source}`;
+  function qs(source, profileId) {
+    const params = new URLSearchParams();
+    if (source && source !== "all") params.set("source", source);
+    if (profileId) params.set("profile_id", profileId);
+    const s = params.toString();
+    return s ? `?${s}` : "";
   }
 
+  async function loadProfileOptions() {
+    const select = document.getElementById("profile-select");
+    try {
+      const profiles = await fetch("/api/profiles").then(r => r.json());
+      select.innerHTML = `<option value="">All profiles</option>` +
+        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
+        select.value = currentProfileId;
+      } else {
+        currentProfileId = "";
+        localStorage.removeItem("profileId");
+      }
+    } catch {
+      // Profiles are a nice-to-have filter, not load-bearing — a failed
+      // fetch here shouldn't block the rest of the dashboard from loading.
+    }
+  }
+
+  document.getElementById("profile-select").addEventListener("change", () => {
+    currentProfileId = document.getElementById("profile-select").value;
+    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
+    else localStorage.removeItem("profileId");
+    loadOverview(currentSource);
+    if (openingsLoaded) loadOpenings(currentSource);
+  });
+
   async function loadOverview(source) {
-    const q = qs(source);
+    const q = qs(source, currentProfileId);
     const [summary, phaseCounts, worstGames, trend] = await Promise.all([
       fetch(`/api/summary${q}`).then(r => r.json()),
       fetch(`/api/mistakes-by-phase${q}`).then(r => r.json()),
@@ -612,7 +649,7 @@
   }
 
   async function loadOpenings(source) {
-    const q = qs(source);
+    const q = qs(source, currentProfileId);
     const data = await fetch(`/api/openings${q}`).then(r => r.json());
     renderOpenings(data);
   }
@@ -876,6 +913,7 @@
   })();
 
   loadSettings();
+  loadProfileOptions();
   loadOverview("all");
 </script>
 </body>

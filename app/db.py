@@ -36,11 +36,17 @@ def init_db() -> None:
 init_db()
 
 
-def save_games(games: list[dict]) -> dict:
+def save_games(games: list[dict], profile_id: int | None = None) -> dict:
     """Insert normalized games (from fetchers.py) into the DB.
 
     Duplicates (same source + source_game_id) are silently skipped via
     INSERT OR IGNORE, so re-fetching is always safe to re-run.
+
+    `profile_id` (Section 9) tags every inserted row with which local
+    profile these games belong to. None leaves them unassigned — the
+    same state every game was in before profiles existed, and still what
+    a caller with no profile context (or a fresh install before any
+    profile exists) gets by default.
 
     Returns {"inserted": N, "skipped": M}.
     """
@@ -53,14 +59,14 @@ def save_games(games: list[dict]) -> dict:
                 """
                 INSERT OR IGNORE INTO games
                     (source, source_game_id, date, opponent, result, color,
-                     time_control, opening_name, pgn, player_rating, opponent_rating)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     time_control, opening_name, pgn, player_rating, opponent_rating, profile_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     g["source"], g["source_game_id"], g["date"], g["opponent"],
                     g["result"], g["color"], g["time_control"],
                     g["opening_name"], g["pgn"],
-                    g.get("player_rating"), g.get("opponent_rating"),
+                    g.get("player_rating"), g.get("opponent_rating"), profile_id,
                 ),
             )
             if cur.rowcount:
@@ -133,11 +139,19 @@ def fetch_and_store(
     stored for that source are requested in the first place — via Lichess's
     `since` filter and Chess.com's archive-month narrowing — rather than
     re-fetching everything and relying on dedup to discard the repeats.
+
+    Each source's games are tagged with whichever local profile that
+    username is linked to (Section 9), auto-creating one on first use so
+    fetching still works with zero setup — same as it always has. The two
+    usernames are resolved (and saved) separately since they aren't
+    guaranteed to belong to the same profile.
     """
     from fetchers import fetch_chesscom_games, fetch_lichess_games
+    from profiles import resolve_profile_id
 
     init_db()
-    all_games = []
+    inserted = 0
+    skipped = 0
 
     if lichess_user:
         since_ms = None
@@ -149,7 +163,10 @@ def fetch_and_store(
             lichess_games = fetch_lichess_games(lichess_user, max_games=max_games, since_ms=since_ms)
             suffix = " (since last refresh)" if since_ms else ""
             logger.info(f"Fetched {len(lichess_games)} Lichess games for '{lichess_user}'{suffix}")
-            all_games.extend(lichess_games)
+            profile_id = resolve_profile_id("lichess", lichess_user)
+            result = save_games(lichess_games, profile_id=profile_id)
+            inserted += result["inserted"]
+            skipped += result["skipped"]
         except Exception as e:
             # Don't let a Lichess outage/error block Chess.com's fetch below —
             # whatever DID come in from the other source still gets stored.
@@ -167,13 +184,15 @@ def fetch_and_store(
             )
             suffix = " (since last refresh)" if since_epoch else ""
             logger.info(f"Fetched {len(chesscom_games)} Chess.com games for '{chesscom_user}'{suffix}")
-            all_games.extend(chesscom_games)
+            profile_id = resolve_profile_id("chesscom", chesscom_user)
+            result = save_games(chesscom_games, profile_id=profile_id)
+            inserted += result["inserted"]
+            skipped += result["skipped"]
         except Exception as e:
             logger.error(f"Failed to fetch Chess.com games for '{chesscom_user}': {e}")
 
-    result = save_games(all_games)
-    logger.info(f"Inserted {result['inserted']} new games, skipped {result['skipped']} duplicates")
-    return result
+    logger.info(f"Inserted {inserted} new games, skipped {skipped} duplicates")
+    return {"inserted": inserted, "skipped": skipped}
 
 
 if __name__ == "__main__":

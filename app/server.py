@@ -21,6 +21,7 @@ import clock_analysis
 import insights
 import manual_analysis
 import opening_explorer
+import profiles
 import puzzles
 import srs
 import stats
@@ -159,53 +160,53 @@ def api_refresh_status():
 
 
 @app.get("/api/summary")
-def api_summary(source: str | None = Query(default=None)):
+def api_summary(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
     source = _normalize_source(source)
-    return {"takeaway": stats.top_takeaway(source), **stats.overall_summary(source)}
+    return {"takeaway": stats.top_takeaway(source, profile_id), **stats.overall_summary(source, profile_id)}
 
 
 @app.get("/api/mistakes-by-phase")
-def api_mistakes_by_phase(source: str | None = Query(default=None)):
+def api_mistakes_by_phase(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
     source = _normalize_source(source)
-    counts = stats.mistakes_by_phase(source)
+    counts = stats.mistakes_by_phase(source, profile_id)
     return {phase: counts.get(phase, 0) for phase in PHASES}
 
 
 @app.get("/api/trend")
-def api_trend(source: str | None = Query(default=None), n_months: int = 6):
+def api_trend(source: str | None = Query(default=None), profile_id: int | None = Query(default=None), n_months: int = 6):
     source = _normalize_source(source)
     return {
-        "takeaway": stats.trend_takeaway(source),
-        "months": stats.monthly_trend(source, n_months=n_months),
+        "takeaway": stats.trend_takeaway(source, profile_id),
+        "months": stats.monthly_trend(source, profile_id, n_months=n_months),
     }
 
 
 @app.get("/api/openings")
-def api_openings(source: str | None = Query(default=None)):
+def api_openings(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
     source = _normalize_source(source)
     return {
-        "most_played": stats.most_played_openings(source, limit=8),
-        "best_win_rate": stats.best_win_rate_openings(source, limit=8),
-        "to_review": stats.openings_to_review(source, limit=8),
+        "most_played": stats.most_played_openings(source, profile_id, limit=8),
+        "best_win_rate": stats.best_win_rate_openings(source, profile_id, limit=8),
+        "to_review": stats.openings_to_review(source, profile_id, limit=8),
         "all_families": sorted(
-            stats.opening_family_stats(source), key=lambda f: f["games_played"], reverse=True
+            stats.opening_family_stats(source, profile_id), key=lambda f: f["games_played"], reverse=True
         ),
     }
 
 
 @app.get("/api/insights")
-def api_insights(source: str | None = Query(default=None)):
+def api_insights(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
     source = _normalize_source(source)
     return {
-        "top_insights": insights.top_insights(source),
-        "rating_progress": insights.rating_progress(source),
-        "win_rate_by_color": insights.win_rate_by_color(source),
-        "win_rate_by_time_control": insights.win_rate_by_time_control(source),
-        "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source),
-        "win_rate_by_time_of_day": insights.win_rate_by_time_of_day(source),
-        "avg_game_length": insights.avg_game_length_wins_vs_losses(source),
-        "performance_vs_rating_band": insights.performance_vs_rating_band(source),
-        "comeback_rate": insights.comeback_rate(source),
+        "top_insights": insights.top_insights(source, profile_id),
+        "rating_progress": insights.rating_progress(source, profile_id),
+        "win_rate_by_color": insights.win_rate_by_color(source, profile_id),
+        "win_rate_by_time_control": insights.win_rate_by_time_control(source, profile_id),
+        "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source, profile_id),
+        "win_rate_by_time_of_day": insights.win_rate_by_time_of_day(source, profile_id),
+        "avg_game_length": insights.avg_game_length_wins_vs_losses(source, profile_id),
+        "performance_vs_rating_band": insights.performance_vs_rating_band(source, profile_id),
+        "comeback_rate": insights.comeback_rate(source, profile_id),
     }
 
 
@@ -218,6 +219,7 @@ def api_search_games(
     result: str | None = Query(default=None),
     time_control: str | None = Query(default=None),
     source: str | None = Query(default=None),
+    profile_id: int | None = Query(default=None),
     color: str | None = Query(default=None),
     has_blunder: bool | None = Query(default=None),
     sort_by: str = Query(default="date"),
@@ -227,7 +229,8 @@ def api_search_games(
     games = stats.search_games(
         opponent=opponent, date_from=date_from, date_to=date_to, opening=opening,
         result=result, time_control=time_control, source=_normalize_source(source),
-        color=color, has_blunder=has_blunder, sort_by=sort_by, sort_dir=sort_dir, limit=limit,
+        profile_id=profile_id, color=color, has_blunder=has_blunder,
+        sort_by=sort_by, sort_dir=sort_dir, limit=limit,
     )
     return {
         "games": games,
@@ -250,9 +253,9 @@ def api_explorer(moves: str = Query(default=""), source: str | None = Query(defa
 
 
 @app.get("/api/worst-games")
-def api_worst_games(source: str | None = Query(default=None), limit: int = 5):
+def api_worst_games(source: str | None = Query(default=None), profile_id: int | None = Query(default=None), limit: int = 5):
     source = _normalize_source(source)
-    return stats.worst_games(source, limit=limit)
+    return stats.worst_games(source, profile_id, limit=limit)
 
 
 @app.get("/api/games/{game_id}")
@@ -511,17 +514,83 @@ def insights_page():
 
 
 @app.get("/api/clock-analysis")
-def api_clock_analysis(source: str | None = Query(default=None)):
+def api_clock_analysis(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
     source = _normalize_source(source)
     return {
-        "avg_thinking_time_by_tier": clock_analysis.avg_thinking_time_by_tier(source),
-        "pressure": clock_analysis.clock_pressure_games(source),
+        "avg_thinking_time_by_tier": clock_analysis.avg_thinking_time_by_tier(source, profile_id),
+        "pressure": clock_analysis.clock_pressure_games(source, profile_id),
     }
 
 
 @app.get("/clock", response_class=HTMLResponse)
 def clock_page():
     return (STATIC_DIR / "clock.html").read_text(encoding="utf-8")
+
+
+# --- Multi-profile support (Advanced features, Section 9) -------------------
+
+class ProfileCreate(BaseModel):
+    name: str
+
+
+class UsernameLink(BaseModel):
+    source: str
+    username: str
+
+
+@app.get("/api/profiles")
+def api_list_profiles():
+    return profiles.list_profiles()
+
+
+@app.post("/api/profiles")
+def api_create_profile(body: ProfileCreate):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Profile name can't be empty")
+    try:
+        return profiles.create_profile(name)
+    except Exception:
+        raise HTTPException(status_code=409, detail=f"A profile named '{name}' already exists")
+
+
+@app.delete("/api/profiles/{profile_id}")
+def api_delete_profile(profile_id: int):
+    if profiles.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    profiles.delete_profile(profile_id)
+    return {"status": "deleted"}
+
+
+@app.post("/api/profiles/{profile_id}/links")
+def api_link_username(profile_id: int, body: UsernameLink):
+    if profiles.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if body.source not in ("lichess", "chesscom"):
+        raise HTTPException(status_code=400, detail="source must be 'lichess' or 'chesscom'")
+    username = body.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username can't be empty")
+    return profiles.link_username(profile_id, body.source, username)
+
+
+@app.delete("/api/profiles/{profile_id}/links")
+def api_unlink_username(profile_id: int, source: str = Query(...), username: str = Query(...)):
+    profiles.unlink_username(profile_id, source, username)
+    return {"status": "unlinked"}
+
+
+@app.get("/api/profiles/compare")
+def api_compare_profiles(a: int = Query(...), b: int = Query(...)):
+    try:
+        return profiles.compare_profiles(a, b)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/profiles", response_class=HTMLResponse)
+def profiles_page():
+    return (STATIC_DIR / "profiles.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

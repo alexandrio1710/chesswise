@@ -11,18 +11,25 @@ rule about extending storage before building the feature that needs it.
 from db import get_connection
 
 
-def _source_clause(source: str | None, alias: str = "g") -> tuple[str, tuple]:
+def _source_clause(source: str | None, profile_id: int | None = None, alias: str = "g") -> tuple[str, tuple]:
+    clauses, params = [], []
     if source:
-        return f" AND {alias}.source = ?", (source,)
-    return "", ()
+        clauses.append(f"{alias}.source = ?")
+        params.append(source)
+    if profile_id is not None:
+        clauses.append(f"{alias}.profile_id = ?")
+        params.append(profile_id)
+    if not clauses:
+        return "", ()
+    return " AND " + " AND ".join(clauses), tuple(params)
 
 
-def rating_progress(source: str | None = None) -> list[dict]:
+def rating_progress(source: str | None = None, profile_id: int | None = None) -> list[dict]:
     """Chronological player_rating per game (skipping games with no
     rating data — a handful of very old or unusual games might lack it),
     for a progress-over-time chart.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -39,8 +46,8 @@ def rating_progress(source: str | None = None) -> list[dict]:
         conn.close()
 
 
-def win_rate_by_color(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
+def win_rate_by_color(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -65,8 +72,8 @@ def win_rate_by_color(source: str | None = None) -> dict:
         conn.close()
 
 
-def win_rate_by_time_control(source: str | None = None) -> dict:
-    where, params = _source_clause(source)
+def win_rate_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -94,13 +101,13 @@ def win_rate_by_time_control(source: str | None = None) -> dict:
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
-def win_rate_by_day_of_week(source: str | None = None) -> dict:
+def win_rate_by_day_of_week(source: str | None = None, profile_id: int | None = None) -> dict:
     """Keyed by day name. Based on each game's stored UTC date/time — if
     you play mostly around midnight UTC, a game can land on a different
     calendar day than it felt like locally. Stated here rather than
     silently presented as local-time fact.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -131,12 +138,12 @@ _TIME_BUCKETS = [
 ]
 
 
-def win_rate_by_time_of_day(source: str | None = None) -> dict:
+def win_rate_by_time_of_day(source: str | None = None, profile_id: int | None = None) -> dict:
     """Four 6-hour UTC buckets — same caveat as win_rate_by_day_of_week:
     this is UTC time, not necessarily local time, since that's what's
     actually stored.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -165,12 +172,12 @@ def win_rate_by_time_of_day(source: str | None = None) -> dict:
     return buckets
 
 
-def avg_game_length_wins_vs_losses(source: str | None = None) -> dict:
+def avg_game_length_wins_vs_losses(source: str | None = None, profile_id: int | None = None) -> dict:
     """Average total ply count (from game_moves) for won vs. lost games —
     draws excluded since they're a third, differently-shaped category
     rather than fitting on the same win/loss axis.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -201,12 +208,12 @@ _RATING_BANDS = [
 ]
 
 
-def performance_vs_rating_band(source: str | None = None) -> list[dict]:
+def performance_vs_rating_band(source: str | None = None, profile_id: int | None = None) -> list[dict]:
     """Win rate bucketed by opponent_rating - player_rating, to answer
     "do I do better or worse than expected against higher/lower rated
     opponents" directly, rather than leaving it to eyeballing a scatter.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -234,14 +241,14 @@ def performance_vs_rating_band(source: str | None = None) -> list[dict]:
     return [b for b in bands if b["games"] > 0]
 
 
-def comeback_rate(source: str | None = None, behind_threshold_cp: int = -300) -> dict:
+def comeback_rate(source: str | None = None, profile_id: int | None = None, behind_threshold_cp: int = -300) -> dict:
     """Games where the player was significantly behind at some point
     (their own eval, not the opponent's, dropped to `behind_threshold_cp`
     or worse) but still won — a real fighting-spirit stat, computed from
     the actual per-move eval trace rather than inferred from the result
     alone.
     """
-    where, params = _source_clause(source)
+    where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -268,7 +275,7 @@ def comeback_rate(source: str | None = None, behind_threshold_cp: int = -300) ->
     }
 
 
-def top_insights(source: str | None = None, n: int = 5) -> list[dict]:
+def top_insights(source: str | None = None, profile_id: int | None = None, n: int = 5) -> list[dict]:
     """The most notable findings across every stat above, as plain-English
     sentences — ranked by how far each finding deviates from a 50%/neutral
     baseline, weighted by sample size (a 70% win rate over 3 games isn't
@@ -280,28 +287,28 @@ def top_insights(source: str | None = None, n: int = 5) -> list[dict]:
 
     candidates: list[tuple[float, str]] = []
 
-    color = win_rate_by_color(source)
+    color = win_rate_by_color(source, profile_id)
     for c, d in color.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)
             score = deviation * math.sqrt(d["games"])
             candidates.append((score, f"You win {d['win_rate_pct']}% of games as {c} ({d['games']} games)."))
 
-    tc = win_rate_by_time_control(source)
+    tc = win_rate_by_time_control(source, profile_id)
     for t, d in tc.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)
             score = deviation * math.sqrt(d["games"]) * 0.9  # slightly below color/rating-band framing
             candidates.append((score, f"Your win rate in {t} is {d['win_rate_pct']}% ({d['games']} games)."))
 
-    bands = performance_vs_rating_band(source)
+    bands = performance_vs_rating_band(source, profile_id)
     for b in bands:
         if b["games"] >= 3 and b["win_rate_pct"] is not None:
             deviation = abs(b["win_rate_pct"] - 50)
             score = deviation * math.sqrt(b["games"]) * 1.1  # rating-band findings tend to be the most actionable
             candidates.append((score, f"Against opponents {b['label']}, your win rate is {b['win_rate_pct']}% ({b['games']} games)."))
 
-    lengths = avg_game_length_wins_vs_losses(source)
+    lengths = avg_game_length_wins_vs_losses(source, profile_id)
     if "win" in lengths and "loss" in lengths:
         diff = lengths["win"]["avg_moves"] - lengths["loss"]["avg_moves"]
         if abs(diff) >= 3:
@@ -309,12 +316,12 @@ def top_insights(source: str | None = None, n: int = 5) -> list[dict]:
             longer = "longer" if diff > 0 else "shorter"
             candidates.append((score, f"Your wins average {lengths['win']['avg_moves']} moves — {longer} than your losses ({lengths['loss']['avg_moves']} moves)."))
 
-    cb = comeback_rate(source)
+    cb = comeback_rate(source, profile_id)
     if cb["games_significantly_behind"] >= 3:
         score = 40 + cb["games_significantly_behind"]  # always fairly notable, more so with more data
         candidates.append((score, f"When significantly behind, you still win {cb['comeback_rate_pct']}% of the time ({cb['comebacks_won']}/{cb['games_significantly_behind']} games)."))
 
-    dow = win_rate_by_day_of_week(source)
+    dow = win_rate_by_day_of_week(source, profile_id)
     for day, d in dow.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)
