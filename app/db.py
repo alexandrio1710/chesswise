@@ -53,13 +53,14 @@ def save_games(games: list[dict]) -> dict:
                 """
                 INSERT OR IGNORE INTO games
                     (source, source_game_id, date, opponent, result, color,
-                     time_control, opening_name, pgn)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     time_control, opening_name, pgn, player_rating, opponent_rating)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     g["source"], g["source_game_id"], g["date"], g["opponent"],
                     g["result"], g["color"], g["time_control"],
                     g["opening_name"], g["pgn"],
+                    g.get("player_rating"), g.get("opponent_rating"),
                 ),
             )
             if cur.rowcount:

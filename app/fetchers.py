@@ -14,6 +14,8 @@ Normalized game dict shape:
         "time_control": "bullet" | "blitz" | "rapid" | "classical",
         "opening_name": str,
         "pgn": str,
+        "player_rating": int | None,
+        "opponent_rating": int | None,
     }
 """
 
@@ -156,6 +158,10 @@ def _normalize_lichess_game(pgn: str, username: str) -> dict | None:
 
     opening_name = tags.get("Opening", "")
 
+    white_elo = int(tags["WhiteElo"]) if tags.get("WhiteElo", "").isdigit() else None
+    black_elo = int(tags["BlackElo"]) if tags.get("BlackElo", "").isdigit() else None
+    player_rating, opponent_rating = (white_elo, black_elo) if color == "white" else (black_elo, white_elo)
+
     return {
         "source": "lichess",
         "source_game_id": source_game_id,
@@ -166,6 +172,8 @@ def _normalize_lichess_game(pgn: str, username: str) -> dict | None:
         "time_control": time_control,
         "opening_name": opening_name,
         "pgn": pgn.strip(),
+        "player_rating": player_rating,
+        "opponent_rating": opponent_rating,
     }
 
 
@@ -295,6 +303,11 @@ def _normalize_chesscom_game(raw: dict, username: str) -> dict | None:
     # clock parsing (Stage 4+) can use one regex regardless of source.
     normalized_pgn = _normalize_chesscom_clock_format(pgn)
 
+    player_rating, opponent_rating = (
+        (white_info.get("rating"), black_info.get("rating")) if color == "white"
+        else (black_info.get("rating"), white_info.get("rating"))
+    )
+
     return {
         "source": "chesscom",
         "source_game_id": source_game_id,
@@ -305,6 +318,8 @@ def _normalize_chesscom_game(raw: dict, username: str) -> dict | None:
         "time_control": time_control,
         "opening_name": opening_name,
         "pgn": normalized_pgn.strip(),
+        "player_rating": player_rating,
+        "opponent_rating": opponent_rating,
     }
 
 

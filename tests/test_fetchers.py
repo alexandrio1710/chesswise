@@ -13,6 +13,7 @@ from conftest import FIXTURES_DIR
 NORMALIZED_KEYS = {
     "source", "source_game_id", "date", "opponent", "result",
     "color", "time_control", "opening_name", "pgn",
+    "player_rating", "opponent_rating",
 }
 
 

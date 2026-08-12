@@ -174,6 +174,20 @@ def _migration_005_puzzle_srs(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_006_ratings(conn: sqlite3.Connection) -> None:
+    """Advanced features, Section 7 — rating at time of game, a
+    prerequisite for the rating-progress chart and performance-vs-
+    opponent-rating-band insight. Both Lichess and Chess.com already
+    embed WhiteElo/BlackElo in the PGN text this app already stores, so
+    this is a schema change plus a pure-Python backfill (see
+    backfill_ratings.py) — no new API calls needed.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    for col_name in ("player_rating", "opponent_rating"):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {col_name} INTEGER")
+
+
 # (version, description, migration_fn). Append new entries here for future
 # schema changes — never edit or reorder an already-shipped migration, since
 # a DB that already recorded it as applied would silently skip your edit.
@@ -183,6 +197,7 @@ MIGRATIONS = [
     (3, "Add game_moves table for full per-game analysis", _migration_003_game_moves),
     (4, "Add move tiers (game_moves) and free-text notes table", _migration_004_move_tiers_and_notes),
     (5, "Add puzzle_attempts and puzzle_review_state (spaced repetition)", _migration_005_puzzle_srs),
+    (6, "Add player_rating/opponent_rating to games", _migration_006_ratings),
 ]
 
 

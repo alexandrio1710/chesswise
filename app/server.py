@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import cli_state
+import insights
 import manual_analysis
 import opening_explorer
 import puzzles
@@ -188,6 +189,22 @@ def api_openings(source: str | None = Query(default=None)):
         "all_families": sorted(
             stats.opening_family_stats(source), key=lambda f: f["games_played"], reverse=True
         ),
+    }
+
+
+@app.get("/api/insights")
+def api_insights(source: str | None = Query(default=None)):
+    source = _normalize_source(source)
+    return {
+        "top_insights": insights.top_insights(source),
+        "rating_progress": insights.rating_progress(source),
+        "win_rate_by_color": insights.win_rate_by_color(source),
+        "win_rate_by_time_control": insights.win_rate_by_time_control(source),
+        "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source),
+        "win_rate_by_time_of_day": insights.win_rate_by_time_of_day(source),
+        "avg_game_length": insights.avg_game_length_wins_vs_losses(source),
+        "performance_vs_rating_band": insights.performance_vs_rating_band(source),
+        "comeback_rate": insights.comeback_rate(source),
     }
 
 
@@ -485,6 +502,11 @@ def analyze_page():
 @app.get("/search", response_class=HTMLResponse)
 def search_page():
     return (STATIC_DIR / "search.html").read_text(encoding="utf-8")
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page():
+    return (STATIC_DIR / "insights.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

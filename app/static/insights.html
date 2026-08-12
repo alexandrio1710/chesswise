@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Tracker — Insights</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --status-good:    #0ca30c;
+      --status-critical:#e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --status-good:    #0ca30c;
+    --status-critical:#e66767;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  }
+  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .filter-group { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .filter-group button {
+    font: inherit; font-size: 13px; padding: 7px 14px; background: var(--surface-1);
+    color: var(--text-secondary); border: none; border-right: 1px solid var(--border); cursor: pointer;
+  }
+  .filter-group button:last-child { border-right: none; }
+  .filter-group button.active { background: var(--series-1); color: #fff; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+
+  .insight-list { display: flex; flex-direction: column; gap: 10px; }
+  .insight-item {
+    display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
+    background: var(--page-plane); border-radius: 10px; font-size: 15px;
+  }
+  .insight-rank {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--series-1); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+  }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  .bar-list { display: flex; flex-direction: column; gap: 8px; }
+  .bar-list-item { font-size: 13px; }
+  .bar-list-label { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text-secondary); }
+  .bar-track { height: 8px; background: var(--gridline); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--series-1); }
+
+  #rating-chart-wrap { position: relative; }
+  #rating-chart { width: 100%; height: 180px; display: block; }
+  .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .loading-text { color: var(--text-secondary); font-size: 14px; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -3px; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Insights</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/insights" class="active">Insights</a>
+        <a href="/search">Search</a>
+      </nav>
+      <div class="filter-group" id="filter-group">
+        <button data-source="all" class="active">All</button>
+        <button data-source="lichess">Lichess</button>
+        <button data-source="chesscom">Chess.com</button>
+      </div>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Most notable right now</h2>
+    <p class="empty-note" style="margin-top:-6px;">Ranked by how much each finding deviates from a 50% baseline, weighted by how many games back it up — not a fixed list.</p>
+    <div class="insight-list" id="insight-list"><p class="loading-text"><span class="spinner"></span>Loading…</p></div>
+  </section>
+
+  <section class="card">
+    <h2>Rating over time</h2>
+    <div id="rating-chart-wrap">
+      <svg id="rating-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
+    </div>
+    <p class="chart-caption" id="rating-caption"></p>
+  </section>
+
+  <div class="stats-grid">
+    <div class="card">
+      <h2>Win rate by color</h2>
+      <div class="bar-list" id="by-color"></div>
+    </div>
+    <div class="card">
+      <h2>Win rate by time control</h2>
+      <div class="bar-list" id="by-time-control"></div>
+    </div>
+    <div class="card">
+      <h2>Win rate by day of week (UTC)</h2>
+      <div class="bar-list" id="by-day"></div>
+    </div>
+    <div class="card">
+      <h2>Win rate by time of day (UTC)</h2>
+      <div class="bar-list" id="by-hour"></div>
+    </div>
+    <div class="card">
+      <h2>Performance vs. opponent rating</h2>
+      <div class="bar-list" id="by-rating-band"></div>
+    </div>
+    <div class="card">
+      <h2>Game length &amp; comebacks</h2>
+      <div id="length-comeback"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentSource = "all";
+
+  function qs(source) { return source === "all" ? "" : `?source=${source}`; }
+
+  async function loadInsights(source) {
+    currentSource = source;
+    const res = await fetch(`/api/insights${qs(source)}`);
+    const data = await res.json();
+    renderTopInsights(data.top_insights);
+    renderRatingChart(data.rating_progress);
+    renderBarList("by-color", data.win_rate_by_color);
+    renderBarList("by-time-control", data.win_rate_by_time_control);
+    renderBarList("by-day", data.win_rate_by_day_of_week, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]);
+    renderBarList("by-hour", data.win_rate_by_time_of_day);
+    renderRatingBands(data.performance_vs_rating_band);
+    renderLengthComeback(data.avg_game_length, data.comeback_rate);
+  }
+
+  function renderTopInsights(items) {
+    const list = document.getElementById("insight-list");
+    if (!items.length) {
+      list.innerHTML = `<p class="empty-note">Not enough games yet for a reliable insight (each one needs at least 3 games of supporting data).</p>`;
+      return;
+    }
+    list.innerHTML = items.map((it, i) => `
+      <div class="insight-item"><span class="insight-rank">${i + 1}</span><span>${escapeHtml(it.text)}</span></div>
+    `).join("");
+  }
+
+  function renderBarList(elId, dict, order) {
+    const el = document.getElementById(elId);
+    const keys = order ? order.filter(k => dict[k]) : Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
+    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
+    el.innerHTML = keys.map(k => {
+      const d = dict[k];
+      return `
+        <div class="bar-list-item">
+          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${d.win_rate_pct}% (${d.games})</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${d.win_rate_pct}%"></div></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderRatingBands(bands) {
+    const el = document.getElementById("by-rating-band");
+    if (!bands.length) { el.innerHTML = `<p class="empty-note">No rating data yet.</p>`; return; }
+    el.innerHTML = bands.map(b => `
+      <div class="bar-list-item">
+        <div class="bar-list-label"><span>${escapeHtml(b.label)}</span><span>${b.win_rate_pct}% (${b.games})</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${b.win_rate_pct}%"></div></div>
+      </div>
+    `).join("");
+  }
+
+  function renderLengthComeback(length, comeback) {
+    const el = document.getElementById("length-comeback");
+    const rows = [];
+    if (length.win) rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Avg moves in wins</span><span>${length.win.avg_moves}</span></div></div>`);
+    if (length.loss) rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Avg moves in losses</span><span>${length.loss.avg_moves}</span></div></div>`);
+    if (comeback.games_significantly_behind) {
+      rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Comeback rate when significantly behind</span><span>${comeback.comeback_rate_pct}% (${comeback.comebacks_won}/${comeback.games_significantly_behind})</span></div></div>`);
+    }
+    el.innerHTML = rows.length ? `<div class="bar-list">${rows.join("")}</div>` : `<p class="empty-note">Not enough data yet.</p>`;
+  }
+
+  const SOURCE_COLORS = { lichess: "var(--series-1)", chesscom: "var(--series-2)" };
+  const SOURCE_LABELS = { lichess: "Lichess", chesscom: "Chess.com" };
+
+  function renderRatingChart(progress) {
+    const svg = document.getElementById("rating-chart");
+    svg.innerHTML = "";
+    const caption = document.getElementById("rating-caption");
+    if (!progress.length) { caption.textContent = "No rating data yet."; return; }
+
+    const width = 800, height = 180, pad = 16;
+    const ns = "http://www.w3.org/2000/svg";
+    const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
+
+    // Lichess and Chess.com ratings are different, non-comparable pools —
+    // plotting them as one connected line would show huge fake "swings"
+    // that are really just alternating between sites (caught in testing:
+    // a combined line jumped from ~1245 to ~1790 and back repeatedly).
+    // Each source gets its own line on its OWN min-max scale instead, so
+    // the shape of each trend is legible without implying the numbers
+    // are on the same axis.
+    const sources = [...new Set(progress.map(p => p.source))];
+    const xScale = i => pad + (i / Math.max(1, progress.length - 1)) * (width - 2 * pad);
+    const captions = [];
+
+    sources.forEach(source => {
+      const rows = progress.map((p, i) => ({ ...p, i })).filter(r => r.source === source);
+      const vals = rows.map(r => r.player_rating);
+      const minR = Math.min(...vals), maxR = Math.max(...vals);
+      const range = Math.max(1, maxR - minR);
+      const yScale = r => height - pad - ((r - minR) / range) * (height - 2 * pad);
+
+      const points = rows.map(r => [xScale(r.i), yScale(r.player_rating)]);
+      svg.appendChild(makeEl("polyline", {
+        points: points.map(p => p.join(",")).join(" "), fill: "none",
+        stroke: SOURCE_COLORS[source] || "var(--series-1)",
+        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+      }));
+
+      const first = rows[0].player_rating, last = rows[rows.length - 1].player_rating;
+      const change = last - first;
+      const label = SOURCE_LABELS[source] || source;
+      captions.push(`${label}: ${rows.length} games, ${first} → ${last} (${change >= 0 ? "+" : ""}${change})`);
+    });
+
+    caption.innerHTML = captions.join(" &nbsp;·&nbsp; ") +
+      (sources.length > 1 ? ' <span style="color:var(--text-muted)">— each on its own scale; Lichess and Chess.com ratings aren\'t comparable numbers.</span>' : "");
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  document.querySelectorAll("#filter-group button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#filter-group button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadInsights(btn.dataset.source);
+    });
+  });
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  loadInsights("all");
+</script>
+</body>
+</html>
