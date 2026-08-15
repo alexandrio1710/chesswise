@@ -13,11 +13,12 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 import alerts
+import auth
 import cli_state
 import clock_analysis
 import export
@@ -29,9 +30,22 @@ import profiles
 import progress
 import puzzles
 import srs
+import srs_sm2
 import stats
 import tablebase
+from config import SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
 from db import get_connection
+
+# Celery/Redis (Web platform, Section 4) are optional infrastructure — only
+# needed for /api/analyze/*, not for the app's existing analysis paths
+# (CLI, batch_analyze.py, the `refresh` button). Importing tasks.py fails if
+# `celery`/`redis` aren't installed, or, at task-dispatch time, if Redis
+# itself isn't reachable; either way this app should still start and serve
+# every other route rather than refusing to boot over an optional feature.
+try:
+    from tasks import analyze_game_task
+except ImportError:
+    analyze_game_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -766,6 +780,178 @@ def api_delete_goal(goal_id: int):
 @app.get("/progress", response_class=HTMLResponse)
 def progress_page():
     return (STATIC_DIR / "progress.html").read_text(encoding="utf-8")
+
+
+# --- Web platform: Lichess OAuth, per-user SM-2 SRS, background analysis --
+#
+# Additive, not a rewrite: every route above this line is untouched, so the
+# app keeps working exactly as it did — no login, one implicit local user —
+# for anyone who just wants to run it on their own machine. The routes below
+# are the multi-user-aware surface: they all require a session (a request
+# with no/expired cookie gets a 401 from auth.get_current_user) and are
+# scoped to the requesting user's own data via auth.require_game_owner /
+# auth.require_puzzle_owner or an explicit `WHERE user_id = ?` filter.
+#
+# Note: list/aggregate endpoints above (stats, insights, search, puzzle
+# queue) are NOT yet user-scoped — they'd need a `user_id` filter threaded
+# through stats.py/insights.py/srs.py the same way `profile_id` already is,
+# which is a larger, mostly-mechanical follow-up beyond these four features.
+
+@app.get("/auth/lichess/login")
+def auth_lichess_login():
+    return RedirectResponse(auth.build_authorize_url())
+
+
+@app.get("/auth/lichess/callback")
+def auth_lichess_callback(code: str, state: str):
+    access_token = auth.exchange_code_for_token(code, state)
+    account = auth.fetch_lichess_account(access_token)
+    user = auth.upsert_user(account)
+    raw_token, _ = auth.create_session(user["id"])
+
+    response = RedirectResponse(url="/")
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=raw_token,
+        max_age=SESSION_TTL_DAYS * 86400,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request):
+    raw_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw_token:
+        auth.destroy_session(raw_token)
+    response = Response(status_code=204)
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
+
+@app.get("/api/me")
+def api_me(user: dict = Depends(auth.get_current_user)):
+    return {"id": user["id"], "username": user["username"], "lichess_id": user["lichess_id"]}
+
+
+@app.post("/api/me/claim")
+def api_me_claim(user: dict = Depends(auth.get_current_user)):
+    """One-time convenience for a pre-existing single-user install: assigns
+    every profile/game/puzzle with no owner yet to the logged-in user. See
+    auth.claim_unowned_data's docstring for why this is opt-in, not automatic.
+    """
+    return auth.claim_unowned_data(user["id"])
+
+
+@app.get("/api/games/{game_id}/owned")
+def api_game_owned_example(game_id: int, user: dict = Depends(auth.require_game_owner)):
+    """Reference implementation of the ownership dependency requested for
+    Section 1: `auth.require_game_owner` resolves `game_id` from the path,
+    404s unless it belongs to the logged-in user, and hands the route the
+    verified user — the same pattern to apply to any other per-game/per-
+    puzzle route that needs to guarantee "your data, not someone else's".
+    """
+    game = stats.get_game_detail(game_id)
+    return {"game": game}
+
+
+@app.post("/api/analyze/start")
+def api_analyze_start(user: dict = Depends(auth.get_current_user), depth: int = Query(default=STOCKFISH_DEPTH)):
+    """Queues every one of the current user's not-yet-analyzed games onto
+    Celery. Requires a running worker (see celery_app.py's docstring) and a
+    reachable Redis — a connection failure surfaces as a 503 rather than a
+    silently-stuck 'processing' row.
+    """
+    if analyze_game_task is None:
+        raise HTTPException(
+            status_code=501,
+            detail="Background analysis isn't available: `celery`/`redis` aren't installed. "
+            "Run `pip install -r requirements.txt` and start a worker (see celery_app.py).",
+        )
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM games WHERE user_id = ? AND (analysis_status IS NULL OR analysis_status = 'pending')",
+            (user["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"queued": 0}
+
+    conn = get_connection()
+    queued = 0
+    try:
+        for row in rows:
+            game_id = row["id"]
+            try:
+                async_result = analyze_game_task.apply_async(args=[game_id, user["id"], depth])
+            except Exception as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Could not reach the task queue (is Redis/the Celery worker running?): {e}",
+                )
+            conn.execute(
+                "UPDATE games SET analysis_status = 'processing', analysis_task_id = ?, analysis_error = NULL "
+                "WHERE id = ?",
+                (async_result.id, game_id),
+            )
+            queued += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"queued": queued}
+
+
+@app.get("/api/analyze/status")
+def api_analyze_status(user: dict = Depends(auth.get_current_user)):
+    conn = get_connection()
+    try:
+        counts = conn.execute(
+            "SELECT COALESCE(analysis_status, 'pending') as status, COUNT(*) as n "
+            "FROM games WHERE user_id = ? GROUP BY status",
+            (user["id"],),
+        ).fetchall()
+        in_flight = conn.execute(
+            "SELECT id, analysis_status, analysis_task_id, analysis_error FROM games "
+            "WHERE user_id = ? AND analysis_status IN ('processing', 'failed') "
+            "ORDER BY id DESC LIMIT 50",
+            (user["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "counts": {row["status"]: row["n"] for row in counts},
+        "in_flight": [dict(r) for r in in_flight],
+    }
+
+
+@app.get("/api/srs2/due")
+def api_srs2_due(user: dict = Depends(auth.get_current_user), limit: int = 10):
+    return {"puzzles": srs_sm2.get_due_puzzles(user["id"], limit=limit)}
+
+
+@app.get("/api/srs2/progress")
+def api_srs2_progress(user: dict = Depends(auth.get_current_user)):
+    return srs_sm2.get_progress_summary(user["id"])
+
+
+class PuzzleAttemptSM2(BaseModel):
+    quality: int  # 0-5 SuperMemo-2 self-assessed recall grade — see srs_sm2.py
+
+
+@app.post("/api/srs2/puzzles/{puzzle_id}/attempt")
+def api_srs2_attempt(puzzle_id: int, attempt: PuzzleAttemptSM2, user: dict = Depends(auth.require_puzzle_owner)):
+    try:
+        return srs_sm2.record_puzzle_attempt(user["id"], puzzle_id, attempt.quality)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,37 @@
 # Changelog
 
+## v5 — Multi-user web platform foundations
+
+Four additive building blocks toward running this as a shared, multi-user
+web app instead of a single local install — none of them change existing
+routes or require a login for anyone still using it locally.
+
+- **Lichess OAuth login**: sign in via `oauth.lichess.org` (Authorization
+  Code + PKCE, no client secret required or stored). Adds `users`,
+  `sessions`, and `oauth_states` tables and a `user_id` ownership column on
+  `profiles`/`games`/`puzzles`, plus `auth.require_game_owner` /
+  `require_puzzle_owner` FastAPI dependencies that 404 (not 403) any
+  request for another user's data. Existing local data is left unowned
+  until a user explicitly claims it (`POST /api/me/claim`).
+- **Per-user SM-2 spaced repetition**: a `puzzle_progress` table and
+  `srs_sm2.py` implement classic SuperMemo-2 scoped to (user, puzzle) —
+  kept alongside, not replacing, the existing Leitner-box `srs.py`, which
+  only ever worked correctly for a single implicit user.
+- **ECO opening classification**: a local `eco_codes` table imported from
+  the public lichess-org/chess-openings dataset (`eco_import.py`), and
+  `eco.classify_game_opening()`, which matches a game's moves to the
+  deepest ECO entry they're consistent with. Wired into game ingestion
+  (`db.save_games`) so every newly fetched game gets an exact ECO code and
+  opening name, with `eco.backfill_missing_eco()` for games stored before
+  this existed.
+- **Background analysis via Celery + Redis**: `analyze_game_task` moves
+  Stockfish analysis off the request path, with `analysis_status` /
+  `analysis_task_id` / `analysis_error` columns on `games` and
+  `/api/analyze/start` + `/api/analyze/status` endpoints to queue and poll
+  it per user. Optional infrastructure — the app still starts and serves
+  every other route if `celery`/`redis` aren't installed or Redis isn't
+  reachable.
+
 ## v4 — Advanced analysis, training, and insight features
 
 A large expansion across eleven areas, all built on free/public data only

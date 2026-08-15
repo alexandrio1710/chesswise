@@ -36,6 +36,32 @@ def init_db() -> None:
 init_db()
 
 
+def _classify_opening(conn: sqlite3.Connection, game_id: int, pgn_text: str) -> None:
+    """Web platform, Section 3 — classify a freshly-inserted game's opening
+    against the local ECO table and write it onto the same row, using the
+    caller's own open connection/transaction (save_games() hasn't committed
+    yet) rather than opening a second one — a second writer connection
+    trying to touch this same uncommitted row would just deadlock/block on
+    SQLite's single-writer lock. Imported lazily (not at module load) since
+    eco.py itself imports get_connection from this module — a top-level
+    import here would be circular.
+    """
+    try:
+        from eco import classify_game_opening, moves_from_pgn
+
+        result = classify_game_opening(moves_from_pgn(pgn_text))
+        if result is not None:
+            conn.execute(
+                "UPDATE games SET eco = ?, opening_name = ? WHERE id = ?",
+                (result["eco"], result["name"], game_id),
+            )
+    except Exception as e:
+        # eco_codes may simply be empty (eco_import.py never run yet) — not
+        # worth failing a whole fetch over a classification that can always
+        # be backfilled later via eco.backfill_missing_eco().
+        logger.warning(f"ECO classification skipped for game {game_id}: {e}")
+
+
 def save_games(games: list[dict], profile_id: int | None = None) -> dict:
     """Insert normalized games (from fetchers.py) into the DB.
 
@@ -89,6 +115,7 @@ def save_games(games: list[dict], profile_id: int | None = None) -> dict:
             )
             if cur.rowcount:
                 inserted += 1
+                _classify_opening(conn, cur.lastrowid, g["pgn"])
             elif existing is not None and existing["profile_id"] != profile_id:
                 skipped_other_profile += 1
         conn.commit()

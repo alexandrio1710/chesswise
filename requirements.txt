@@ -1,11 +1,24 @@
 # Runtime dependencies, pinned to exact versions for reproducibility.
 # Install with: pip install -r requirements.txt
 # (Stockfish itself is a separate binary — see README for install instructions,
-# it is not a Python package.)
+# it is not a Python package. Redis is likewise a separate service, not a
+# Python package — see celery_app.py's docstring.)
 #
-# Top-level: requests, python-chess, stockfish, fastapi, uvicorn, python-dotenv.
+# Top-level: requests, python-chess, stockfish, fastapi, uvicorn, python-dotenv,
+# celery, redis (client).
 # Everything else below is their transitive dependencies, pinned so a fresh
 # install can't silently drift to an incompatible version.
+
+# --- Web platform: Section 4 (background analysis) ---
+celery==5.6.3
+redis==8.1.0
+amqp==5.3.1
+billiard==4.2.4
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+kombu==5.6.2
+vine==5.1.0
 
 annotated-doc==0.0.5
 annotated-types==0.8.0

@@ -159,14 +159,15 @@ def store_puzzle(p: dict) -> None:
             INSERT OR IGNORE INTO puzzles
                 (mistake_id, game_id, fen_before, side_to_move, played_move_san,
                  best_move_uci, best_move_san, best_move_explanation,
-                 played_move_explanation, top_lines, phase, severity, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                 played_move_explanation, top_lines, phase, severity, created_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
+                    (SELECT user_id FROM games WHERE id = ?))
             """,
             (
                 p["mistake_id"], p["game_id"], p["fen_before"], p["side_to_move"],
                 p["played_move_san"], p["best_move_uci"], p["best_move_san"],
                 p["best_move_explanation"], p["played_move_explanation"],
-                json.dumps(p["top_lines"]), p["phase"], p["severity"],
+                json.dumps(p["top_lines"]), p["phase"], p["severity"], p["game_id"],
             ),
         )
         conn.commit()

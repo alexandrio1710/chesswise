@@ -144,3 +144,34 @@ ALERT_BLUNDER_EVAL_DROP_CP = float(os.environ.get("ALERT_BLUNDER_EVAL_DROP_CP", 
 # usernames every time — CLI flags (Final Pass 6) always override these.
 LICHESS_USERNAME = os.environ.get("LICHESS_USERNAME")
 CHESSCOM_USERNAME = os.environ.get("CHESSCOM_USERNAME")
+
+
+# --- Lichess OAuth (Web platform, Section 1) --------------------------------
+
+# Register a Lichess OAuth app at https://lichess.org/account/oauth/app — no
+# client secret is issued for it (Lichess's OAuth apps are "public clients"),
+# since this flow uses PKCE instead: the code_verifier proves possession of
+# the original request instead of a shared secret, which is also why this
+# app is safe to run without ever storing a Lichess client secret at all.
+LICHESS_OAUTH_CLIENT_ID = os.environ.get("LICHESS_OAUTH_CLIENT_ID", "chess-mistake-tracker")
+LICHESS_OAUTH_REDIRECT_URI = os.environ.get(
+    "LICHESS_OAUTH_REDIRECT_URI", f"{BASE_URL}/auth/lichess/callback"
+)
+LICHESS_OAUTH_SCOPES = os.environ.get("LICHESS_OAUTH_SCOPES", "")  # "" = public profile only
+
+SESSION_COOKIE_NAME = os.environ.get("SESSION_COOKIE_NAME", "cmt_session")
+SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "30"))
+
+# Set to true once the app is served over HTTPS (a real deployment) so the
+# session cookie is marked Secure. False by default since local dev over
+# plain http://127.0.0.1 is the common case for this app.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+
+
+# --- Celery / Redis (Web platform, Section 4) -------------------------------
+
+# Decouples Stockfish analysis (CPU-bound, can take minutes for a big batch)
+# from the request/response cycle. Redis doubles as both the task broker and
+# the result backend here — one moving part instead of two for a project
+# this size.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")

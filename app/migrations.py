@@ -308,6 +308,159 @@ def _migration_009_goals(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_010_users_and_sessions(conn: sqlite3.Connection) -> None:
+    """Web platform, Section 1 — Multi-User Authentication. `users` holds
+    one row per Lichess account that has ever logged in (identified by
+    Lichess's own immutable account id, not the mutable display username).
+    `sessions` backs the login cookie: a random token whose SHA-256 hash is
+    stored here (never the raw token — same reasoning as a password hash,
+    since this table is the bearer credential for a logged-in user).
+    `oauth_states` is a short-lived table for the OAuth2 PKCE handshake
+    (state + code_verifier) — needed because the app has no session yet at
+    the point it must remember the verifier between the redirect to Lichess
+    and the callback coming back.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            lichess_id TEXT NOT NULL UNIQUE,
+            username TEXT NOT NULL,
+            email TEXT,
+            lichess_title TEXT,
+            created_at TEXT NOT NULL,
+            last_login_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+
+        CREATE TABLE IF NOT EXISTS oauth_states (
+            state TEXT PRIMARY KEY,
+            code_verifier TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+    """)
+
+
+def _migration_011_user_ownership(conn: sqlite3.Connection) -> None:
+    """Web platform, Section 1 — attach every profile/game/puzzle to the
+    user that owns it. Left NULL for pre-existing local data rather than
+    guessed at migration time (which user owns it isn't something a schema
+    migration can know) — `auth.claim_unowned_data()` is the deliberate,
+    user-triggered way to assign a first-time Lichess login's existing
+    local history to their new account.
+
+    `puzzles.user_id` duplicates what's derivable via puzzles.game_id ->
+    games.user_id; it's kept as a direct column (backfilled from the
+    parent game, and set alongside game_id at puzzle-creation time) purely
+    so ownership-scoped puzzle queries don't need a join on every request —
+    it must never diverge from the parent game's owner.
+    """
+    for table in ("profiles", "games", "puzzles"):
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "user_id" not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER REFERENCES users(id)")
+
+    conn.execute("""
+        UPDATE puzzles SET user_id = (
+            SELECT g.user_id FROM games g WHERE g.id = puzzles.game_id
+        ) WHERE user_id IS NULL
+    """)
+
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_profiles_user_id ON profiles(user_id);
+        CREATE INDEX IF NOT EXISTS idx_games_user_id ON games(user_id);
+        CREATE INDEX IF NOT EXISTS idx_puzzles_user_id ON puzzles(user_id);
+    """)
+
+
+def _migration_012_puzzle_progress_sm2(conn: sqlite3.Connection) -> None:
+    """Web platform, Section 2 — per-user SuperMemo-2 scheduling state, one
+    row per (user, puzzle). This is deliberately separate from the existing
+    `puzzle_review_state` table (migration 5): that table's Leitner-box
+    state is keyed by puzzle_id ALONE, which only ever worked because the
+    app had exactly one implicit user — it can't express "user A has seen
+    this puzzle 4 times, user B has never seen it" for a puzzle two users
+    both have access to. `puzzle_progress` is the multi-user-correct
+    replacement surface (see srs_sm2.py); the older table and srs.py are
+    left in place for any single-profile/local-only code path still using
+    them, rather than ripped out as part of this migration.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS puzzle_progress (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            puzzle_id INTEGER NOT NULL REFERENCES puzzles(id),
+            repetition_count INTEGER NOT NULL DEFAULT 0,
+            easiness_factor REAL NOT NULL DEFAULT 2.5,
+            interval_days INTEGER NOT NULL DEFAULT 0,
+            next_review_date TEXT NOT NULL,
+            last_reviewed_at TEXT,
+            PRIMARY KEY (user_id, puzzle_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_puzzle_progress_due ON puzzle_progress(user_id, next_review_date);
+    """)
+
+
+def _migration_013_eco_codes(conn: sqlite3.Connection) -> None:
+    """Web platform, Section 3 — a local copy of the standard ECO
+    (Encyclopedia of Chess Openings) reference data, plus a column on
+    `games` to store the exact classification computed from it. `pgn` here
+    is the ECO entry's own move sequence in plain SAN, space-separated, no
+    move numbers (e.g. "e4 e5 Nf3 Nc6 Bc4") — matching the format of the
+    canonical lichess-org/chess-openings dataset this table is populated
+    from (see eco_import.py), so classify_game_opening() can do a straight
+    string match against it.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS eco_codes (
+            id INTEGER PRIMARY KEY,
+            eco TEXT NOT NULL,
+            name TEXT NOT NULL,
+            pgn TEXT NOT NULL UNIQUE,
+            ply_count INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_eco_codes_pgn ON eco_codes(pgn);
+    """)
+
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    if "eco" not in existing:
+        conn.execute("ALTER TABLE games ADD COLUMN eco TEXT")
+
+
+def _migration_014_analysis_status(conn: sqlite3.Connection) -> None:
+    """Web platform, Section 4 — explicit lifecycle state for Stockfish
+    analysis once it runs as a Celery task instead of inline/batch: a task
+    can be queued, picked up by a worker, finish, or fail independently of
+    the request that queued it, which the old boolean `analyzed` column
+    can't represent (it's already meaningful pre-existing state — see
+    migration 1 — so it's left alone; `analysis_status` is additive, not a
+    replacement). `analysis_task_id` lets /api/analyze/status look up live
+    Celery task state instead of only trusting the last-written DB status,
+    and `analysis_error` carries a failure message to the UI instead of it
+    only living in a worker's logs.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    backfill_needed = "analysis_status" not in existing
+    for col_name, col_type in (
+        ("analysis_status", "TEXT"),
+        ("analysis_task_id", "TEXT"),
+        ("analysis_error", "TEXT"),
+    ):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {col_name} {col_type}")
+
+    if backfill_needed:
+        conn.execute("UPDATE games SET analysis_status = 'completed' WHERE analyzed = 1")
+        conn.execute("UPDATE games SET analysis_status = 'pending' WHERE analyzed = 0")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_games_analysis_status ON games(analysis_status)")
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -318,6 +471,11 @@ MIGRATIONS = [
     (7, "Add profiles/profile_usernames tables and games.profile_id", _migration_007_profiles),
     (8, "Add opening_puzzles table (Lichess-sourced opening puzzles)", _migration_008_opening_puzzles),
     (9, "Add goals table", _migration_009_goals),
+    (10, "Add users, sessions, oauth_states tables (Lichess OAuth)", _migration_010_users_and_sessions),
+    (11, "Add user_id ownership to profiles/games/puzzles", _migration_011_user_ownership),
+    (12, "Add puzzle_progress table (per-user SM-2 scheduling)", _migration_012_puzzle_progress_sm2),
+    (13, "Add eco_codes table and games.eco column", _migration_013_eco_codes),
+    (14, "Add analysis_status/analysis_task_id/analysis_error to games", _migration_014_analysis_status),
 ]
 
 
