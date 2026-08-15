@@ -891,9 +891,17 @@ def api_analyze_start(user: dict = Depends(auth.get_current_user), depth: int = 
             try:
                 async_result = analyze_game_task.apply_async(args=[game_id, user["id"], depth])
             except Exception as e:
+                # Commit whatever was already dispatched before this one
+                # failed — those tasks are already sitting in Celery
+                # regardless of what this transaction does, so losing their
+                # task_id/'processing' bookkeeping to a rollback here would
+                # leave real in-flight tasks looking like untouched
+                # 'pending' rows instead.
+                conn.commit()
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Could not reach the task queue (is Redis/the Celery worker running?): {e}",
+                    detail=f"Queued {queued} game(s) before losing the task queue "
+                    f"(is Redis/the Celery worker running?): {e}",
                 )
             conn.execute(
                 "UPDATE games SET analysis_status = 'processing', analysis_task_id = ?, analysis_error = NULL "

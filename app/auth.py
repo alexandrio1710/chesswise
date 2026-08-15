@@ -228,7 +228,14 @@ def create_session(user_id: int) -> tuple[str, datetime]:
     try:
         conn.execute(
             "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, datetime('now'), ?)",
-            (_hash_token(raw_token), user_id, expires_at.isoformat()),
+            # Stored in SQLite's own datetime() text format ("YYYY-MM-DD
+            # HH:MM:SS"), NOT datetime.isoformat() ("...T...+00:00") — the
+            # expiry check below compares this column against
+            # datetime('now') as plain strings, and isoformat()'s "T"
+            # sorts after datetime('now')'s " " (0x54 > 0x20), which made
+            # any session expiring on the same calendar day the check runs
+            # on compare as still-valid regardless of the actual time.
+            (_hash_token(raw_token), user_id, expires_at.strftime("%Y-%m-%d %H:%M:%S")),
         )
         conn.commit()
     finally:
