@@ -22,6 +22,7 @@ import auth
 import cli_state
 import clock_analysis
 import export
+import game_report
 import insights
 import manual_analysis
 import opening_explorer
@@ -49,7 +50,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Chess Mistake Tracker")
+app = FastAPI(title="Chesswise")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -368,6 +369,60 @@ def api_game_detail(game_id: int):
         "critical_moment": critical_moment,
         "notes": stats.get_notes(game_id),
     }
+
+
+# Game Report jobs, keyed by game_id — same "background thread + in-memory
+# status, poll from the frontend" shape as _refresh_status above, for the
+# same reason: generating a report costs a second Stockfish pass per move
+# (game_report.compute_enriched_classification's docstring — ~0.5s/move,
+# so 20-40s for a typical game), too slow to block a request/response
+# cycle on, and this app stays single-process/local-in-spirit so plain
+# in-memory state (not a job queue) is enough.
+_report_jobs: dict[int, dict] = {}
+
+
+def _run_game_report(game_id: int) -> None:
+    try:
+        game_report.generate_game_report(game_id, force=True)
+        _report_jobs[game_id]["error"] = None
+    except Exception as e:
+        logger.exception(f"Game report generation failed for game {game_id}")
+        _report_jobs[game_id]["error"] = str(e)
+    finally:
+        _report_jobs[game_id]["running"] = False
+
+
+@app.get("/api/games/{game_id}/report")
+def api_game_report(game_id: int, force: bool = Query(default=False)):
+    """Chess.com-style "Game Report": full ten-tier move classification,
+    an estimated performance rating, and phase-by-phase accuracy for one
+    game (see game_report.py). Poll this same endpoint until `status`
+    comes back "ready" — {"status": "computing"} means a background
+    thread is working on it (started by this same call, or an earlier
+    one); {"status": "failed", "error": ...} means the last attempt
+    raised, most commonly because the game hasn't been analyzed yet.
+    """
+    if stats.get_game_detail(game_id) is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    job = _report_jobs.get(game_id)
+    if job and job["running"]:
+        return {"status": "computing"}
+
+    if not force:
+        conn = get_connection()
+        try:
+            cached = conn.execute("SELECT game_id FROM game_reports WHERE game_id = ?", (game_id,)).fetchone()
+        finally:
+            conn.close()
+        if cached:
+            return {"status": "ready", **game_report.generate_game_report(game_id)}
+        if job and job["error"]:
+            return {"status": "failed", "error": job["error"]}
+
+    _report_jobs[game_id] = {"running": True, "error": None}
+    threading.Thread(target=_run_game_report, args=(game_id,), daemon=True).start()
+    return {"status": "computing"}
 
 
 class AnalyzeFenRequest(BaseModel):

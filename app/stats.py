@@ -493,7 +493,7 @@ def get_game_moves(game_id: int) -> list[dict]:
             """
             SELECT gm.ply, gm.move_number, gm.color_moved, gm.move_san,
                    gm.eval_cp, gm.eval_before_cp, gm.eval_drop, gm.tier,
-                   gm.clock_seconds_remaining,
+                   gm.classification, gm.clock_seconds_remaining,
                    m.severity, p.id as puzzle_id
             FROM game_moves gm
             LEFT JOIN mistakes m ON m.game_id = gm.game_id AND m.ply = gm.ply

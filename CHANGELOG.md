@@ -1,5 +1,43 @@
 # Changelog
 
+## v6 — Renamed to Chesswise; Game Report (ten-tier review, Elo estimate)
+
+**Renamed from "Chess Mistake Tracker" to "Chesswise"** — the project outgrew
+the old name a while ago (openings, endgames, insights, SRS, now a full game
+report); nothing about the rename touches the repo slug, database, or URLs.
+
+**Game Report**, this project's answer to the "Game Review" feature on sites
+like Chess.com: everything in that comparison worth building for a local,
+self-hosted tool, built from scratch against this project's own data (no
+scraping, no copied algorithm — none of those sites publish theirs anyway).
+- Four new move-classification tiers on top of the existing six (Best/
+  Excellent/Good/Inaccuracy/Mistake/Blunder, migration 4): **Brilliant** (a
+  top-choice move that offers real, uncompensated material and still holds
+  up), **Great** (a top-choice move in a position sharp enough that only it
+  kept the advantage), **Book** (matches the local ECO database's opening
+  line, see v5), and **Miss** (a mistake/blunder that specifically threw
+  away an advantage the mover already had, rather than merely making the
+  position worse). Computed by `game_report.py`'s enrichment pass — one
+  extra MultiPV engine query per move, run on demand per game rather than
+  as part of routine analysis.
+- **Estimated performance rating**: a per-game Elo estimate from that
+  game's average centipawn loss, via a documented (not proprietary, not
+  statistically fitted) interpolation table — a rough "what strength does
+  this game's move quality resemble", not a rating measurement.
+- **Phase-by-phase accuracy** (opening/middlegame/endgame) and a short
+  coach-style summary, both new fields on the existing per-game accuracy
+  score (`stats.compute_game_accuracy`, v4).
+- New `GET /api/games/{id}/report` endpoint and a "Game Report" card on the
+  game detail page; computes in a background thread and polls to ready
+  (~0.5s/move — too slow to block the request on) and caches in a new
+  `game_reports` table so repeat views are instant.
+
+Deliberately NOT attempted, since they don't fit a local/self-hosted
+analysis tool or would mean reusing another site's actual content: Puzzle
+Battle (needs live matched opponents), video lessons/opening courses
+(would mean hosting someone else's course content), coach chat, and any
+cosmetic/account features.
+
 ## v5 — Multi-user web platform foundations
 
 Four additive building blocks toward running this as a shared, multi-user

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Chess Mistake Tracker — single CLI entry point.
+Chesswise — single CLI entry point.
 
 Subcommands:
   fetch    Pull recent games for one or both sites and store them.
@@ -109,7 +109,7 @@ def cmd_serve(args) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cli.py",
-        description="Chess Mistake Tracker — fetch, analyze, and review your games.",
+        description="Chesswise — fetch, analyze, and review your games.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

@@ -67,7 +67,7 @@ def run_digest(
     takeaway = top_takeaway()
 
     message = (
-        "**Chess Mistake Tracker — weekly digest**\n"
+        "**Chesswise — weekly digest**\n"
         f"New games analyzed: {new_games}\n"
         f"New mistakes found: {new_mistakes}\n"
         f"Current takeaway: {takeaway}"

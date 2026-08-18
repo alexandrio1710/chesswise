@@ -461,6 +461,47 @@ def _migration_014_analysis_status(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_games_analysis_status ON games(analysis_status)")
 
 
+def _migration_015_game_reports(conn: sqlite3.Connection) -> None:
+    """Game Report feature — full ten-tier move classification (Brilliant/
+    Great/Best/Excellent/Good/Book/Inaccuracy/Mistake/Miss/Blunder) and a
+    per-game estimated performance rating, on top of the existing six-tier
+    Full Game Review (migration 4).
+
+    `game_moves.classification`/`is_top_choice` are left NULL until
+    game_report.compute_enriched_classification() runs for that game (an
+    on-demand, opt-in enrichment pass — see that module's docstring for why
+    it isn't part of the routine analysis pipeline). `game_moves.phase` is
+    new too: the existing `phase` classification only ever got stored on
+    flagged mistakes (the `mistakes` table), not on every move, and a
+    phase-by-phase accuracy breakdown needs it for every move.
+
+    `game_reports` caches the computed report (accuracy/rating/tier counts/
+    summary) per game so repeat views don't re-run the enrichment pass.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(game_moves)")}
+    for col_name, col_type in (
+        ("classification", "TEXT"),
+        ("is_top_choice", "INTEGER"),
+        ("phase", "TEXT"),
+    ):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE game_moves ADD COLUMN {col_name} {col_type}")
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS game_reports (
+            game_id INTEGER PRIMARY KEY REFERENCES games(id),
+            accuracy_overall REAL,
+            accuracy_opening REAL,
+            accuracy_middlegame REAL,
+            accuracy_endgame REAL,
+            estimated_rating INTEGER,
+            tier_counts TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            computed_at TEXT NOT NULL
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -476,6 +517,7 @@ MIGRATIONS = [
     (12, "Add puzzle_progress table (per-user SM-2 scheduling)", _migration_012_puzzle_progress_sm2),
     (13, "Add eco_codes table and games.eco column", _migration_013_eco_codes),
     (14, "Add analysis_status/analysis_task_id/analysis_error to games", _migration_014_analysis_status),
+    (15, "Add game_moves classification/phase columns and game_reports table", _migration_015_game_reports),
 ]
 
 

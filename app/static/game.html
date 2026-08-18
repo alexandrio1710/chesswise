@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chess Mistake Tracker — Game Analysis</title>
+<title>Chesswise — Game Analysis</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
 <style>
   :root {
@@ -24,6 +24,10 @@
     --status-warning: #fab219; /* inaccuracy dot */
     --status-good:    #0ca30c; /* best */
     --tier-excellent: #1baf7a; /* aqua */
+    --tier-brilliant: #0fb0c2; /* cyan */
+    --tier-great:     #7c5cff; /* violet */
+    --tier-book:      #8a7f6b; /* muted wood tone */
+    --tier-miss:      #d9527c; /* magenta — distinct from the mistake/blunder/inaccuracy red-orange-yellow family */
     --board-light:    #e9e5d8;
     --board-dark:     #7c9070;
   }
@@ -46,6 +50,10 @@
       --status-warning: #fab219;
       --status-good:    #0ca30c;
       --tier-excellent: #199e70;
+      --tier-brilliant: #22b8c9;
+      --tier-great:     #9580ff;
+      --tier-book:      #a89c85;
+      --tier-miss:      #e56b91;
       --board-light:    #3a3a36;
       --board-dark:     #21331f;
     }
@@ -68,6 +76,10 @@
     --status-warning: #fab219;
     --status-good:    #0ca30c;
     --tier-excellent: #199e70;
+    --tier-brilliant: #22b8c9;
+    --tier-great:     #9580ff;
+    --tier-book:      #a89c85;
+    --tier-miss:      #e56b91;
     --board-light:    #3a3a36;
     --board-dark:     #21331f;
   }
@@ -141,6 +153,22 @@
   .tier-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
   .tier-pill.mistake { background: var(--status-serious); color: #3a1400; }
   .tier-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+  .tier-pill.brilliant { background: var(--tier-brilliant); color: #00282c; }
+  .tier-pill.great { background: var(--tier-great); color: #fff; }
+  .tier-pill.book { background: var(--tier-book); color: #fff; }
+  .tier-pill.miss { background: var(--tier-miss); color: #fff; }
+
+  /* Game Report card */
+  .report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-top: 14px; }
+  .report-stat { background: var(--page-plane); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .report-stat .value { font-size: 22px; font-weight: 700; }
+  .report-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .02em; margin-top: 2px; }
+  .report-tier-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .report-tier-counts .tier-pill { font-size: 11px; padding: 4px 10px; }
+  .report-summary { font-size: 13px; color: var(--text-secondary); margin-top: 14px; line-height: 1.5; }
+  .report-cta { display: flex; align-items: center; gap: 10px; }
+  .report-cta button { font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary); cursor: pointer; }
+  .report-cta button:disabled { opacity: .6; cursor: default; }
   .practice-link { font-size: 12px; color: var(--series-1); text-decoration: none; margin-left: 6px; }
   .note-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
   .note-dot.has-note { background: var(--series-1); }
@@ -217,6 +245,11 @@
 
   <section class="card" id="meta-card">
     <p class="loading-text"><span class="spinner"></span>Loading game…</p>
+  </section>
+
+  <section class="card" id="report-card">
+    <h2 style="font-size:15px; margin:0 0 14px;">Game Report</h2>
+    <div id="report-body"></div>
   </section>
 
   <section class="card hidden" id="share-card">
@@ -339,6 +372,74 @@
     renderCriticalMoment(data.critical_moment, data.game.color);
     populateNoteSelect(data.moves);
     renderNotes(data.notes);
+    loadGameReport(gameId);
+  }
+
+  const TIER_LABELS = {
+    brilliant: "Brilliant", great: "Great", best: "Best", excellent: "Excellent",
+    good: "Good", book: "Book", inaccuracy: "Inaccuracy", mistake: "Mistake",
+    miss: "Miss", blunder: "Blunder",
+  };
+  // Chess.com-style Game Report: full 10-tier move classification plus an
+  // estimated performance rating — this endpoint runs a second Stockfish
+  // pass (see game_report.py) that's too slow to block page load on, so it
+  // computes in the background and this polls until it's ready.
+  async function loadGameReport(gameId, force) {
+    const body = document.getElementById("report-body");
+    const res = await fetch(`/api/games/${gameId}/report${force ? "?force=true" : ""}`);
+    if (!res.ok) {
+      body.innerHTML = `<p class="empty-note">Couldn't load the Game Report.</p>`;
+      return;
+    }
+    const data = await res.json();
+
+    if (data.status === "computing") {
+      body.innerHTML = `<p class="loading-text"><span class="spinner"></span>Generating your Game Report — this runs a deeper engine pass and can take a minute for a long game…</p>`;
+      setTimeout(() => { if (currentGameId === gameId) loadGameReport(gameId); }, 4000);
+      return;
+    }
+
+    if (data.status === "failed") {
+      body.innerHTML = `
+        <p class="empty-note">${escapeHtml(data.error || "Couldn't generate a report for this game.")}</p>
+        <div class="report-cta"><button onclick="loadGameReport('${gameId}', true)">Try again</button></div>
+      `;
+      return;
+    }
+
+    // status === "ready"
+    // re-fetch the move list too, now that classification/phase are populated
+    if (currentGameId === gameId) {
+      fetch(`/api/games/${gameId}`).then(r => r.json()).then(d => renderMoveList(d.moves));
+    }
+
+    const phases = [
+      ["opening", data.accuracy_opening], ["middlegame", data.accuracy_middlegame],
+      ["endgame", data.accuracy_endgame],
+    ].filter(([, v]) => v != null);
+
+    const tierChips = Object.entries(data.tier_counts)
+      .sort((a, b) => Object.keys(TIER_LABELS).indexOf(a[0]) - Object.keys(TIER_LABELS).indexOf(b[0]))
+      .map(([tier, n]) => `<span class="tier-pill ${tier}">${n} ${TIER_LABELS[tier] || tier}</span>`)
+      .join("");
+
+    body.innerHTML = `
+      <div class="report-grid">
+        ${data.estimated_rating != null ? `
+          <div class="report-stat">
+            <div class="value">${data.estimated_rating}</div>
+            <div class="label">Estimated rating</div>
+          </div>` : ""}
+        ${phases.map(([phase, acc]) => `
+          <div class="report-stat">
+            <div class="value">${acc}%</div>
+            <div class="label">${phase} accuracy</div>
+          </div>
+        `).join("")}
+      </div>
+      ${tierChips ? `<div class="report-tier-counts">${tierChips}</div>` : ""}
+      <p class="report-summary">${escapeHtml(data.summary)}</p>
+    `;
   }
 
   function renderMeta(game, accuracy) {
@@ -494,7 +595,8 @@
     body.innerHTML = moves.map(m => {
       const flagClass = m.severity ? `flagged` : "";
       const flagStyle = m.severity ? `style="--flag-color: var(--status-${m.severity === 'blunder' ? 'critical' : m.severity === 'mistake' ? 'serious' : 'warning'})"` : "";
-      const tierPill = m.tier ? `<span class="tier-pill ${m.tier}">${m.tier}</span>` : "";
+      const tierLabel = m.classification || m.tier;
+      const tierPill = tierLabel ? `<span class="tier-pill ${tierLabel}">${tierLabel}</span>` : "";
       const practiceLink = m.puzzle_id ? `<a class="practice-link" href="/puzzles?id=${m.puzzle_id}">Practice →</a>` : "";
       return `
         <tr class="move-row ${flagClass}" ${flagStyle} data-ply="${m.ply}">
@@ -654,7 +756,7 @@
     // Header
     ctx.fillStyle = C.muted;
     ctx.font = "600 20px system-ui, sans-serif";
-    ctx.fillText("Chess Mistake Tracker", 36, 50);
+    ctx.fillText("Chesswise", 36, 50);
 
     const date = new Date(currentGame.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
     ctx.fillStyle = currentGame.source === "lichess" ? C.blue : C.orange;
