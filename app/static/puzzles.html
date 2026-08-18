@@ -8,62 +8,68 @@
 <style>
   :root {
     color-scheme: light;
-    --surface-1:      #fcfcfb;
-    --page-plane:     #f9f9f7;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --gridline:       #e1e0d9;
-    --border:         rgba(11,11,11,0.10);
-    --series-1:       #2a78d6;
-    --series-2:       #eb6834;
-    --status-good:    #0ca30c;
-    --status-critical:#d03b3b;
+    --surface-1: #ffffff;
+    --page-plane: #eff1f5;
+    --text-primary: #4c4f69;
+    --text-secondary: #6c6f85;
+    --text-muted: #8c8fa1;
+    --gridline: #ccd0da;
+    --border: rgba(76,79,105,0.12);
+    --series-1: #1e66f5;
+    --series-2: #fe640b;
+    --status-good: #40a02b;
+    --status-critical: #d20f39;
     --status-critical-text: #ffffff;
-    --board-light:    #e9e5d8;
-    --board-dark:     #7c9070;
-    --board-selected: rgba(42, 120, 214, 0.45);
-    --board-dot:      rgba(11, 11, 11, 0.28);
+    --board-light: #ece8f7;
+    --board-dark: #8874b3;
+    --board-selected: rgba(136,57,239,0.45);
+    --board-dot: rgba(76,79,105,0.32);
+    --accent:       #8839ef; /* mauve — primary accent */
+    --accent-soft:  rgba(136,57,239,0.14);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --surface-1:      #1a1a19;
-      --page-plane:     #0d0d0d;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --gridline:       #2c2c2a;
-      --border:         rgba(255,255,255,0.10);
-      --series-1:       #3987e5;
-      --series-2:       #d95926;
-      --status-good:    #0ca30c;
-      --status-critical:#e66767;
-      --status-critical-text: #2a0000;
-      --board-light:    #3a3a36;
-      --board-dark:     #21331f;
-      --board-selected: rgba(57, 135, 229, 0.5);
-      --board-dot:      rgba(255, 255, 255, 0.35);
+      --surface-1: #313244;
+      --page-plane: #1e1e2e;
+      --text-primary: #cdd6f4;
+      --text-secondary: #bac2de;
+      --text-muted: #9399b2;
+      --gridline: #45475a;
+      --border: rgba(205,214,244,0.12);
+      --series-1: #89b4fa;
+      --series-2: #fab387;
+      --status-good: #a6e3a1;
+      --status-critical: #f38ba8;
+      --status-critical-text: #2a0011;
+      --board-light: #4f4a6b;
+      --board-dark: #241f30;
+      --board-selected: rgba(203,166,247,0.5);
+      --board-dot: rgba(205,214,244,0.38);
+      --accent:       #cba6f7; /* mauve — primary accent */
+      --accent-soft:  rgba(203,166,247,0.18);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --surface-1:      #1a1a19;
-    --page-plane:     #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --gridline:       #2c2c2a;
-    --border:         rgba(255,255,255,0.10);
-    --series-1:       #3987e5;
-    --series-2:       #d95926;
-    --status-good:    #0ca30c;
-    --status-critical:#e66767;
-    --status-critical-text: #2a0000;
-    --board-light:    #3a3a36;
-    --board-dark:     #21331f;
-    --board-selected: rgba(57, 135, 229, 0.5);
-    --board-dot:      rgba(255, 255, 255, 0.35);
+    --surface-1: #313244;
+    --page-plane: #1e1e2e;
+    --text-primary: #cdd6f4;
+    --text-secondary: #bac2de;
+    --text-muted: #9399b2;
+    --gridline: #45475a;
+    --border: rgba(205,214,244,0.12);
+    --series-1: #89b4fa;
+    --series-2: #fab387;
+    --status-good: #a6e3a1;
+    --status-critical: #f38ba8;
+    --status-critical-text: #2a0011;
+    --board-light: #4f4a6b;
+    --board-dark: #241f30;
+    --board-selected: rgba(203,166,247,0.5);
+    --board-dot: rgba(205,214,244,0.38);
+    --accent:       #cba6f7; /* mauve — primary accent */
+    --accent-soft:  rgba(203,166,247,0.18);
   }
 
   * { box-sizing: border-box; }
@@ -96,15 +102,15 @@
     font-size: 13px;
     padding: 7px 12px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
   }
-  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  nav.top-nav a.active { background: var(--accent); color: #fff; border-color: transparent; }
   .icon-btn {
     font: inherit;
     font-size: 15px;
     width: 34px;
     height: 34px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--surface-1);
     color: var(--text-primary);
@@ -124,8 +130,10 @@
   .card {
     background: var(--surface-1);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 18px;
     padding: 20px;
+    min-width: 0;
+    box-shadow: 0 1px 2px rgba(17, 17, 26, 0.04), 0 10px 28px -12px var(--accent-soft);
   }
 
   .mode-row {
@@ -137,20 +145,20 @@
     font: inherit;
     font-size: 13px;
     padding: 8px 14px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--surface-1);
     color: var(--text-secondary);
     cursor: pointer;
   }
-  .mode-row button.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .mode-row button.active { background: var(--accent); color: #fff; border-color: transparent; }
   .hidden { display: none !important; }
   #due-count-badge { font-size: 11px; opacity: 0.8; }
 
   .filter-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
   .filter-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
   .filter-row select {
-    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 10px;
     border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary);
   }
 
@@ -176,7 +184,7 @@
     grid-template-rows: repeat(8, 1fr);
     width: 100%;
     aspect-ratio: 1 / 1;
-    border-radius: 8px;
+    border-radius: 10px;
     overflow: hidden;
     border: 1px solid var(--border);
     user-select: none;
@@ -199,7 +207,7 @@
     background: var(--board-selected);
   }
   .square:focus-visible {
-    outline: 3px solid var(--series-1);
+    outline: 3px solid var(--accent);
     outline-offset: -3px;
     z-index: 2;
   }
@@ -216,7 +224,7 @@
   .feedback {
     margin-top: 16px;
     padding: 14px;
-    border-radius: 8px;
+    border-radius: 10px;
     font-size: 14px;
     display: none;
   }
@@ -235,7 +243,7 @@
     font: inherit;
     font-size: 13px;
     padding: 8px 16px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: none;
     background: var(--series-1);
     color: #fff;
@@ -252,13 +260,13 @@
     font: inherit;
     font-size: 13px;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--surface-1);
     color: var(--text-secondary);
     cursor: pointer;
   }
-  .queue-item.active { border-color: var(--series-1); color: var(--text-primary); }
+  .queue-item.active { border-color: var(--accent); color: var(--text-primary); }
   .queue-item .badge {
     display: inline-block;
     font-size: 10px;
@@ -278,7 +286,7 @@
     width: 14px;
     height: 14px;
     border: 2px solid var(--border);
-    border-top-color: var(--series-1);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
     vertical-align: -2px;

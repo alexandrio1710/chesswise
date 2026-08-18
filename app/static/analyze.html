@@ -8,65 +8,71 @@
 <style>
   :root {
     color-scheme: light;
-    --surface-1:      #fcfcfb;
-    --page-plane:     #f9f9f7;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --gridline:       #e1e0d9;
-    --baseline:       #c3c2b7;
-    --border:         rgba(11,11,11,0.10);
-    --series-1:       #2a78d6;
-    --series-2:       #eb6834;
-    --status-good:    #0ca30c;
-    --status-critical:#d03b3b;
+    --surface-1: #ffffff;
+    --page-plane: #eff1f5;
+    --text-primary: #4c4f69;
+    --text-secondary: #6c6f85;
+    --text-muted: #8c8fa1;
+    --gridline: #ccd0da;
+    --baseline: #bcc0cc;
+    --border: rgba(76,79,105,0.12);
+    --series-1: #1e66f5;
+    --series-2: #fe640b;
+    --status-good: #40a02b;
+    --status-critical: #d20f39;
     --status-critical-text: #ffffff;
-    --status-warning: #fab219;
-    --tier-excellent: #1baf7a;
-    --board-light:    #e9e5d8;
-    --board-dark:     #7c9070;
+    --status-warning: #df8e1d;
+    --tier-excellent: #179299;
+    --board-light: #ece8f7;
+    --board-dark: #8874b3;
+    --accent:       #8839ef; /* mauve — primary accent */
+    --accent-soft:  rgba(136,57,239,0.14);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --surface-1:      #1a1a19;
-      --page-plane:     #0d0d0d;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --gridline:       #2c2c2a;
-      --baseline:       #383835;
-      --border:         rgba(255,255,255,0.10);
-      --series-1:       #3987e5;
-      --series-2:       #d95926;
-      --status-good:    #0ca30c;
-      --status-critical:#e66767;
-      --status-critical-text: #2a0000;
-      --status-warning: #fab219;
-      --tier-excellent: #199e70;
-      --board-light:    #3a3a36;
-      --board-dark:     #21331f;
+      --surface-1: #313244;
+      --page-plane: #1e1e2e;
+      --text-primary: #cdd6f4;
+      --text-secondary: #bac2de;
+      --text-muted: #9399b2;
+      --gridline: #45475a;
+      --baseline: #585b70;
+      --border: rgba(205,214,244,0.12);
+      --series-1: #89b4fa;
+      --series-2: #fab387;
+      --status-good: #a6e3a1;
+      --status-critical: #f38ba8;
+      --status-critical-text: #2a0011;
+      --status-warning: #f9e2af;
+      --tier-excellent: #94e2d5;
+      --board-light: #4f4a6b;
+      --board-dark: #241f30;
+      --accent:       #cba6f7; /* mauve — primary accent */
+      --accent-soft:  rgba(203,166,247,0.18);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --surface-1:      #1a1a19;
-    --page-plane:     #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --gridline:       #2c2c2a;
-    --baseline:       #383835;
-    --border:         rgba(255,255,255,0.10);
-    --series-1:       #3987e5;
-    --series-2:       #d95926;
-    --status-good:    #0ca30c;
-    --status-critical:#e66767;
-    --status-critical-text: #2a0000;
-    --status-warning: #fab219;
-    --tier-excellent: #199e70;
-    --board-light:    #3a3a36;
-    --board-dark:     #21331f;
+    --surface-1: #313244;
+    --page-plane: #1e1e2e;
+    --text-primary: #cdd6f4;
+    --text-secondary: #bac2de;
+    --text-muted: #9399b2;
+    --gridline: #45475a;
+    --baseline: #585b70;
+    --border: rgba(205,214,244,0.12);
+    --series-1: #89b4fa;
+    --series-2: #fab387;
+    --status-good: #a6e3a1;
+    --status-critical: #f38ba8;
+    --status-critical-text: #2a0011;
+    --status-warning: #f9e2af;
+    --tier-excellent: #94e2d5;
+    --board-light: #4f4a6b;
+    --board-dark: #241f30;
+    --accent:       #cba6f7; /* mauve — primary accent */
+    --accent-soft:  rgba(203,166,247,0.18);
   }
 
   * { box-sizing: border-box; }
@@ -84,22 +90,29 @@
   h1 { font-size: 20px; margin: 0; }
   nav.top-nav a {
     color: var(--text-secondary); text-decoration: none; font-size: 13px;
-    padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 12px; border: 1px solid var(--border); border-radius: 10px;
   }
-  nav.top-nav a.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  nav.top-nav a.active { background: var(--accent); color: #fff; border-color: transparent; }
   .icon-btn {
-    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 8px;
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 10px;
     border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
   }
-  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px;
+    min-width: 0;
+    box-shadow: 0 1px 2px rgba(17, 17, 26, 0.04), 0 10px 28px -12px var(--accent-soft);
+  }
 
   textarea#pgn-input {
     width: 100%; min-height: 160px; font: 13px/1.5 ui-monospace, monospace; padding: 12px;
-    border-radius: 8px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary); resize: vertical;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary); resize: vertical;
   }
   .input-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
   .input-row button, .input-row label.file-btn {
-    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border);
     background: var(--surface-1); color: var(--text-primary); cursor: pointer;
   }
   #analyze-btn { background: var(--series-1); color: #fff; border-color: transparent; }
@@ -136,7 +149,7 @@
 
   #board {
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-    width: 100%; max-width: 380px; aspect-ratio: 1/1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+    width: 100%; max-width: 380px; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
   }
   .square { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 32px); }
   .square.light { background: var(--board-light); }
@@ -147,7 +160,7 @@
   .loading-text { color: var(--text-secondary); font-size: 13px; }
   .spinner {
     display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
-    border-top-color: var(--series-1); border-radius: 50%; animation: spin .7s linear infinite;
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
     vertical-align: -2px; margin-right: 6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
