@@ -717,24 +717,48 @@
     });
   });
 
+  async function fetchJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${res.status})`);
+    }
+    return res.json();
+  }
+
   async function loadOverview(source) {
     const q = qs(source, currentProfileId);
-    const [summary, phaseCounts, worstGames, trend] = await Promise.all([
-      fetch(`/api/summary${q}`).then(r => r.json()),
-      fetch(`/api/mistakes-by-phase${q}`).then(r => r.json()),
-      fetch(`/api/worst-games${q}`).then(r => r.json()),
-      fetch(`/api/trend${q}`).then(r => r.json()),
-    ]);
-    renderSummary(summary);
-    renderBarChart(phaseCounts);
-    renderWorstGames(worstGames);
-    renderTrend(trend);
+    try {
+      const [summary, phaseCounts, worstGames, trend] = await Promise.all([
+        fetchJson(`/api/summary${q}`),
+        fetchJson(`/api/mistakes-by-phase${q}`),
+        fetchJson(`/api/worst-games${q}`),
+        fetchJson(`/api/trend${q}`),
+      ]);
+      renderSummary(summary);
+      renderBarChart(phaseCounts);
+      renderWorstGames(worstGames);
+      renderTrend(trend);
+    } catch (err) {
+      // Previously any one of these four failing (network error, or a
+      // non-2xx response .then(r => r.json()) happily "succeeded" parsing
+      // as the wrong shape) left every card on this page stuck on its
+      // initial "Loading…" spinner forever, with no error shown.
+      document.getElementById("takeaway").innerHTML = `<span class="loading-text">Couldn't load the dashboard — check your connection and reload.</span>`;
+    }
   }
 
   async function loadOpenings(source) {
     const q = qs(source, currentProfileId);
-    const data = await fetch(`/api/openings${q}`).then(r => r.json());
-    renderOpenings(data);
+    try {
+      const data = await fetchJson(`/api/openings${q}`);
+      renderOpenings(data);
+    } catch (err) {
+      const errorMsg = "Couldn't load openings — check your connection and reload.";
+      document.getElementById("review-body").innerHTML = `<tr><td colspan="4" class="empty-note">${errorMsg}</td></tr>`;
+      document.getElementById("most-played-list").innerHTML = `<li class="empty-note">${errorMsg}</li>`;
+      document.getElementById("best-winrate-list").innerHTML = `<li class="empty-note">${errorMsg}</li>`;
+    }
   }
 
   function renderSummary(summary) {

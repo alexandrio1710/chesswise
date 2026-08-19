@@ -270,16 +270,35 @@
     runSearch();
   });
 
+  let searchRequestId = 0;
+
   async function runSearch() {
     const filters = currentFilters();
     const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir });
     for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
 
-    const res = await fetch(`/api/search?${params}`);
-    const data = await res.json();
-    renderStats(data.stats);
-    renderResults(data.games);
-    document.getElementById("result-count").textContent = `${data.games.length} game${data.games.length === 1 ? "" : "s"}`;
+    // Text filters debounce, but selects/dates fire runSearch() immediately
+    // — two overlapping requests (e.g. typing an opponent name then
+    // quickly changing the Result dropdown) could otherwise resolve out of
+    // order and let the older, now-stale response overwrite the table
+    // with results that don't match the current filters. Same
+    // request-id-supersession guard explorer.html's loadPosition uses for
+    // the identical reason.
+    const thisRequestId = ++searchRequestId;
+    try {
+      const res = await fetch(`/api/search?${params}`);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const data = await res.json();
+      if (thisRequestId !== searchRequestId) return; // superseded by a newer search
+
+      renderStats(data.stats);
+      renderResults(data.games);
+      document.getElementById("result-count").textContent = `${data.games.length} game${data.games.length === 1 ? "" : "s"}`;
+    } catch (err) {
+      if (thisRequestId !== searchRequestId) return;
+      document.getElementById("results-body").innerHTML =
+        `<tr><td colspan="9" class="empty-note">Couldn't load results — check your connection and try again.</td></tr>`;
+    }
   }
 
   function renderStats(stats) {

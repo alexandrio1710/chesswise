@@ -235,7 +235,7 @@
         <div>
           ${p.usernames.map(u => `
             <span class="link-chip">${u.source === "lichess" ? "Lichess" : "Chess.com"}: ${escapeHtml(u.username)}
-              <button data-unlink="${p.id}|${u.source}|${escapeHtml(u.username)}" title="Unlink">✕</button>
+              <button data-unlink-profile="${p.id}" data-unlink-source="${escapeHtml(u.source)}" data-unlink-username="${escapeAttr(u.username)}" title="Unlink">✕</button>
             </span>
           `).join("")}
         </div>
@@ -263,10 +263,10 @@
       });
     });
 
-    list.querySelectorAll("[data-unlink]").forEach(btn => {
+    list.querySelectorAll("[data-unlink-profile]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        const [profileId, source, username] = btn.dataset.unlink.split("|");
-        await fetch(`/api/profiles/${profileId}/links?source=${source}&username=${encodeURIComponent(username)}`, { method: "DELETE" });
+        const { unlinkProfile: profileId, unlinkSource: source, unlinkUsername: username } = btn.dataset;
+        await fetch(`/api/profiles/${profileId}/links?source=${encodeURIComponent(source)}&username=${encodeURIComponent(username)}`, { method: "DELETE" });
         loadProfiles();
       });
     });
@@ -422,6 +422,17 @@
     const div = document.createElement("div");
     div.textContent = s ?? "";
     return div.innerHTML;
+  }
+
+  function escapeAttr(s) {
+    // escapeHtml only escapes for a text-content context — the browser's
+    // HTML serializer doesn't treat '"' as special there, so it passes
+    // through unescaped. That's not enough for a double-quoted ATTRIBUTE
+    // value: a linked username (server only requires it non-empty, no
+    // character restrictions — see api_link_username) containing a
+    // literal '"' could otherwise break out of data-unlink-username="..."
+    // and inject arbitrary attributes/handlers on that button.
+    return escapeHtml(s).replace(/"/g, "&quot;");
   }
 
   function applyTheme(theme) {

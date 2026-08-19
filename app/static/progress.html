@@ -289,7 +289,7 @@
     list.innerHTML = goals.map(g => {
       const statusClass = g.current_value == null ? "unknown" : g.met ? "met" : "unmet";
       const statusText = g.current_value == null ? "no data yet" : g.met ? "met" : "in progress";
-      const currentText = g.current_value == null ? "–" : `${g.current_value}${suffixFor(g.metric)}`;
+      const currentText = g.current_value == null ? "–" : `${g.current_value}${suffixFor()}`;
       const progress = g.progress_pct ?? 0;
       return `
         <div class="goal-item">
@@ -299,7 +299,7 @@
           </div>
           <div class="goal-track"><div class="goal-fill ${g.met ? 'met' : ''}" style="width:${progress}%"></div></div>
           <div class="goal-meta">
-            <span>Currently ${currentText} · target ${g.comparison} ${g.target_value}${suffixFor(g.metric)}</span>
+            <span>Currently ${currentText} · target ${g.comparison} ${g.target_value}${suffixFor()}</span>
             <button data-delete-goal="${g.id}">Delete</button>
           </div>
         </div>
@@ -314,6 +314,12 @@
     });
   }
 
+  // Every goal metric progress.py currently supports (METRICS in
+  // progress.py) is a percentage — blunder rate, accuracy, win rate — so
+  // this has no actual per-metric branching to do. Takes no argument on
+  // purpose: it previously took (and ignored) `metric`, which implied
+  // logic that didn't exist. Revisit if a non-percentage metric is ever
+  // added.
   function suffixFor() { return "%"; }
 
   function suggestDescription() {

@@ -239,8 +239,15 @@
   }
 
   async function loadQueue() {
-    const res = await fetch("/api/endgame-trainer/positions?limit=8");
-    queue = await res.json();
+    try {
+      const res = await fetch("/api/endgame-trainer/positions?limit=8");
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      queue = await res.json();
+    } catch (err) {
+      document.getElementById("position-meta").innerHTML = `<p class="empty-note">Couldn't load the endgame trainer queue — check your connection and reload.</p>`;
+      document.getElementById("board").innerHTML = "";
+      return;
+    }
     renderQueueList();
     if (queue.length) loadPosition(0);
     else {
@@ -334,33 +341,42 @@
   async function attemptMove(from, to) {
     isLoading = true;
     document.getElementById("board").classList.add("loading-disabled");
-    const res = await fetch("/api/endgame-trainer/move", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fen: currentFen, uci: `${from}${to}` }),
-    });
-    isLoading = false;
-    document.getElementById("board").classList.remove("loading-disabled");
+    try {
+      const res = await fetch("/api/endgame-trainer/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen: currentFen, uci: `${from}${to}` }),
+      });
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      showTransientError(body.detail || "That move didn't work — try another.");
-      return;
-    }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        showTransientError(body.detail || "That move didn't work — try another.");
+        return;
+      }
 
-    const result = await res.json();
-    showFeedback(result);
+      const result = await res.json();
+      showFeedback(result);
 
-    if (result.game_over || !result.correct) {
-      solved = true;
-      document.getElementById("next-btn").classList.add("show");
-      currentFen = result.fen_final;
-      renderBoard();
-    } else {
-      // Correct and the game continues: show the tablebase's reply, then
-      // let the human keep playing from there.
-      currentFen = result.fen_final;
-      renderBoard();
+      if (result.game_over || !result.correct) {
+        solved = true;
+        document.getElementById("next-btn").classList.add("show");
+        currentFen = result.fen_final;
+        renderBoard();
+      } else {
+        // Correct and the game continues: show the tablebase's reply, then
+        // let the human keep playing from there.
+        currentFen = result.fen_final;
+        renderBoard();
+      }
+    } catch (err) {
+      // A dropped connection (fetch itself rejecting, not just a non-2xx
+      // response) used to leave isLoading/loading-disabled stuck forever —
+      // the old code only cleared them on the line right after a
+      // successful fetch, never reached if fetch throws.
+      showTransientError("Couldn't reach the server — check your connection and try again.");
+    } finally {
+      isLoading = false;
+      document.getElementById("board").classList.remove("loading-disabled");
     }
   }
 

@@ -341,7 +341,17 @@
       return;
     }
 
-    const res = await fetch(`/api/games/${gameId}`);
+    let res;
+    try {
+      res = await fetch(`/api/games/${gameId}`);
+    } catch (err) {
+      // fetch() itself rejecting (network error) — not just a non-2xx
+      // response, which the branch below already handles — used to throw
+      // uncaught here and leave "Loading game…" on screen forever.
+      document.getElementById("meta-card").innerHTML =
+        `<p class="empty-note">Couldn't reach the server — check your connection and reload.</p>`;
+      return;
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       document.getElementById("meta-card").innerHTML =
@@ -379,7 +389,17 @@
   // computes in the background and this polls until it's ready.
   async function loadGameReport(gameId, force) {
     const body = document.getElementById("report-body");
-    const res = await fetch(`/api/games/${gameId}/report${force ? "?force=true" : ""}`);
+    let res;
+    try {
+      res = await fetch(`/api/games/${gameId}/report${force ? "?force=true" : ""}`);
+    } catch (err) {
+      // fetch() itself rejecting used to throw uncaught here, silently
+      // leaving the Game Report card blank forever (it starts with no
+      // loading indicator of its own, so there was nothing to even show
+      // as "stuck" — just nothing, ever).
+      body.innerHTML = `<p class="empty-note">Couldn't reach the server for the Game Report — check your connection and reload.</p>`;
+      return;
+    }
     if (!res.ok) {
       body.innerHTML = `<p class="empty-note">Couldn't load the Game Report.</p>`;
       return;
@@ -393,10 +413,14 @@
     }
 
     if (data.status === "failed") {
-      body.innerHTML = `
-        <p class="empty-note">${escapeHtml(data.error || "Couldn't generate a report for this game.")}</p>
-        <div class="report-cta"><button onclick="loadGameReport('${gameId}', true)">Try again</button></div>
-      `;
+      const retryBtn = document.createElement("button");
+      retryBtn.textContent = "Try again";
+      retryBtn.addEventListener("click", () => loadGameReport(gameId, true));
+      body.innerHTML = `<p class="empty-note">${escapeHtml(data.error || "Couldn't generate a report for this game.")}</p>`;
+      const cta = document.createElement("div");
+      cta.className = "report-cta";
+      cta.appendChild(retryBtn);
+      body.appendChild(cta);
       return;
     }
 

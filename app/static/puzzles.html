@@ -579,7 +579,7 @@
     const evalText = line.mate_in !== null
       ? `mate in ${Math.abs(line.mate_in)}`
       : `${line.eval_cp > 0 ? "+" : ""}${(line.eval_cp / 100).toFixed(2)}`;
-    return `<div>${idx + 1}. ${line.move_san} (${evalText})</div>`;
+    return `<div>${idx + 1}. ${escapeHtml(line.move_san)} (${evalText})</div>`;
   }
 
   function showFeedback(result) {
@@ -821,10 +821,23 @@
     openingMoveIndex = 0;
     openingSolved = false;
     openingSelectedSquare = null;
-    document.getElementById("opening-puzzle-meta").innerHTML =
+    const openingMeta = document.getElementById("opening-puzzle-meta");
+    openingMeta.innerHTML =
       `<span class="severity">${escapeHtml(openingPuzzle.opening_family)}</span>` +
       (openingPuzzle.lichess_rating ? ` · puzzle rating ${openingPuzzle.lichess_rating}` : "") +
-      ` · <a href="${openingPuzzle.game_url}" target="_blank" rel="noopener">source game ↗</a>`;
+      " · ";
+    // Built via DOM properties, not string interpolation into innerHTML:
+    // escapeHtml() only escapes for a text-content context (browsers don't
+    // treat `"` as special there), which isn't enough for an href
+    // *attribute* value — a game_url containing a literal `"` could break
+    // out of the attribute. .href/.textContent assignment sidesteps the
+    // question entirely.
+    const openingLink = document.createElement("a");
+    openingLink.href = openingPuzzle.game_url;
+    openingLink.target = "_blank";
+    openingLink.rel = "noopener";
+    openingLink.textContent = "source game ↗";
+    openingMeta.appendChild(openingLink);
     renderOpeningBoard();
   }
 

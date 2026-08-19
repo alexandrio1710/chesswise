@@ -277,22 +277,36 @@
     document.getElementById("mine-summary").innerHTML = `<span class="loading-text"><span class="spinner"></span>Loading…</span>`;
     document.getElementById("community-summary").innerHTML = `<span class="loading-text"><span class="spinner"></span>Loading…</span>`;
 
-    const movesParam = movePath.map(m => m.uci).join(",");
-    const res = await fetch(`/api/explorer?moves=${movesParam}`);
-    const data = await res.json();
-    if (thisRequestId !== loadRequestId) return; // superseded by a newer load
+    try {
+      const movesParam = movePath.map(m => m.uci).join(",");
+      const res = await fetch(`/api/explorer?moves=${movesParam}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Request failed (${res.status})`);
+      }
+      const data = await res.json();
+      if (thisRequestId !== loadRequestId) return; // superseded by a newer load
 
-    currentData = data;
-    renderPath();
-    renderBoard();
-    renderStats();
-    renderMovesTable();
-    renderDivergence();
-
-    isLoading = false;
-    document.getElementById("board").classList.remove("loading-disabled");
-    document.getElementById("moves-body").classList.remove("loading-disabled");
-    document.getElementById("path-row").classList.remove("loading-disabled");
+      currentData = data;
+      renderPath();
+      renderBoard();
+      renderStats();
+      renderMovesTable();
+      renderDivergence();
+    } catch (err) {
+      if (thisRequestId !== loadRequestId) return; // superseded — a newer load owns the UI now
+      document.getElementById("mine-summary").innerHTML = `<span class="loading-text">Couldn't load this position. ${escapeHtml(err.message || "")}</span>`;
+      document.getElementById("community-summary").innerHTML = "";
+    } finally {
+      // Same supersession guard as above: only the still-current request
+      // is allowed to clear the loading state a newer one already re-set.
+      if (thisRequestId === loadRequestId) {
+        isLoading = false;
+        document.getElementById("board").classList.remove("loading-disabled");
+        document.getElementById("moves-body").classList.remove("loading-disabled");
+        document.getElementById("path-row").classList.remove("loading-disabled");
+      }
+    }
   }
 
   function renderPath() {

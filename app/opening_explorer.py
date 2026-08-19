@@ -242,6 +242,25 @@ def flag_divergence(my_moves: list[dict], community_moves: list[dict]) -> list[d
     return flags
 
 
+def _legal_moves_deduped(board: chess.Board) -> list[dict]:
+    """One entry per (from, to) square pair — collapses a promotion
+    square's four piece variants (queen/rook/bishop/knight, all sharing
+    the same from/to) into one, always the queen variant. This app has no
+    promotion picker anywhere in its UI (same "assume queen" convention as
+    puzzles.legal_moves_for_fen) — without this, all four promotion moves
+    landed on the same destination square with nothing to distinguish
+    them, so whichever one happened to come first in board.legal_moves'
+    iteration order (not a documented/stable ordering) silently decided
+    what a click there would actually play.
+    """
+    best_by_squares: dict[tuple[int, int], chess.Move] = {}
+    for move in board.legal_moves:
+        key = (move.from_square, move.to_square)
+        if key not in best_by_squares or move.promotion in (None, chess.QUEEN):
+            best_by_squares[key] = move
+    return [{"uci": m.uci(), "san": board.san(m)} for m in best_by_squares.values()]
+
+
 def explore_position(move_ucis: list[str], source: str | None = None) -> dict:
     board = _board_at_moves(move_ucis)
     fen = board.fen()
@@ -250,7 +269,7 @@ def explore_position(move_ucis: list[str], source: str | None = None) -> dict:
     community_moves = _community_move_stats(community, white_to_move=board.turn == chess.WHITE) if community else []
     mine = get_my_stats_at_position(move_ucis, source=source)
 
-    legal_moves = [{"uci": m.uci(), "san": board.san(m)} for m in board.legal_moves]
+    legal_moves = _legal_moves_deduped(board)
 
     return {
         "fen": fen,
