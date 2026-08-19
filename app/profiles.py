@@ -28,10 +28,21 @@ def _profile_usernames(conn, profile_id: int) -> list[dict]:
     ]
 
 
-def list_profiles() -> list[dict]:
+def list_profiles(user_id: int | None = None) -> list[dict]:
+    """Every profile visible to the requester: unowned ones (every profile
+    from a local/never-logged-in install, or anything not yet claimed) plus
+    — when `user_id` is given — that user's own. Without this filter, any
+    caller could see every profile ever created on a shared multi-user
+    deployment, including other users' profile names.
+    """
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM profiles ORDER BY id").fetchall()
+        if user_id is None:
+            rows = conn.execute("SELECT * FROM profiles WHERE user_id IS NULL ORDER BY id").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM profiles WHERE user_id IS NULL OR user_id = ? ORDER BY id", (user_id,)
+            ).fetchall()
         profiles = [dict(r) for r in rows]
         for p in profiles:
             p["usernames"] = _profile_usernames(conn, p["id"])

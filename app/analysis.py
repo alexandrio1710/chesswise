@@ -89,55 +89,64 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
         return []
 
     engine = get_engine(depth)
-    board = game.board()
-    results = []
+    try:
+        board = game.board()
+        results = []
 
-    # Eval of the starting position, before any move has been made, so
-    # move 1 has a real "before" value instead of an assumed 0.
-    engine.set_fen_position(board.fen())
-    prev_eval_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
+        # Eval of the starting position, before any move has been made, so
+        # move 1 has a real "before" value instead of an assumed 0.
+        engine.set_fen_position(board.fen())
+        prev_eval_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
 
-    node = game
-    ply = 0
-    while node.variations:
-        next_node = node.variations[0]
-        move = next_node.move
-        san = board.san(move)
-        color_moved = "white" if board.turn == chess.WHITE else "black"
+        node = game
+        ply = 0
+        while node.variations:
+            next_node = node.variations[0]
+            move = next_node.move
+            san = board.san(move)
+            color_moved = "white" if board.turn == chess.WHITE else "black"
 
-        board.push(move)
-        ply += 1
+            board.push(move)
+            ply += 1
 
-        if board.is_checkmate():
-            # Stockfish can't evaluate a position with no legal moves.
-            # The side to move (board.turn) is the one who just got mated.
-            eval_after_cp = -MATE_SCORE_CP if board.turn == chess.WHITE else MATE_SCORE_CP
-        elif board.is_game_over():
-            # Stalemate, insufficient material, repetition, 50-move rule, etc.
-            eval_after_cp = 0.0
-        else:
-            engine.set_fen_position(board.fen())
-            eval_after_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
+            if board.is_checkmate():
+                # Stockfish can't evaluate a position with no legal moves.
+                # The side to move (board.turn) is the one who just got mated.
+                eval_after_cp = -MATE_SCORE_CP if board.turn == chess.WHITE else MATE_SCORE_CP
+            elif board.is_game_over():
+                # Stalemate, insufficient material, repetition, 50-move rule, etc.
+                eval_after_cp = 0.0
+            else:
+                engine.set_fen_position(board.fen())
+                eval_after_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
 
-        full_move_number = (ply + 1) // 2
-        non_king_piece_count = len(board.piece_map()) - 2  # exclude both kings
+            full_move_number = (ply + 1) // 2
+            non_king_piece_count = len(board.piece_map()) - 2  # exclude both kings
 
-        results.append({
-            "move_number": full_move_number,
-            "ply": ply,
-            "color_moved": color_moved,
-            "move_san": san,
-            "eval_before_cp": prev_eval_cp,
-            "eval_after_cp": eval_after_cp,
-            "eval_cp": eval_after_cp,
-            "non_king_piece_count": non_king_piece_count,
-            "clock_seconds_remaining": _extract_clock_seconds(next_node),
-        })
+            results.append({
+                "move_number": full_move_number,
+                "ply": ply,
+                "color_moved": color_moved,
+                "move_san": san,
+                "eval_before_cp": prev_eval_cp,
+                "eval_after_cp": eval_after_cp,
+                "eval_cp": eval_after_cp,
+                "non_king_piece_count": non_king_piece_count,
+                "clock_seconds_remaining": _extract_clock_seconds(next_node),
+            })
 
-        prev_eval_cp = eval_after_cp
-        node = next_node
+            prev_eval_cp = eval_after_cp
+            node = next_node
 
-    return results
+        return results
+    finally:
+        # Stockfish.__del__ would eventually quit this subprocess via plain
+        # refcounting, but an exception raised mid-loop keeps `engine`
+        # alive for as long as its traceback is (e.g. a caller collecting
+        # per-game errors across a batch — see batch_analyze.py) — explicit
+        # cleanup here means a malformed game can't leak a running Stockfish
+        # process for the lifetime of that error.
+        engine.send_quit_command()
 
 
 def _extract_clock_seconds(node: chess.pgn.GameNode) -> int | None:

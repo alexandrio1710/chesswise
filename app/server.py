@@ -224,20 +224,20 @@ def api_refresh_status(user: dict | None = Depends(auth.get_current_user_optiona
 
 
 @app.get("/api/summary")
-def api_summary(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_summary(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     return {"takeaway": stats.top_takeaway(source, profile_id), **stats.overall_summary(source, profile_id)}
 
 
 @app.get("/api/mistakes-by-phase")
-def api_mistakes_by_phase(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_mistakes_by_phase(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     counts = stats.mistakes_by_phase(source, profile_id)
     return {phase: counts.get(phase, 0) for phase in PHASES}
 
 
 @app.get("/api/trend")
-def api_trend(source: str | None = Query(default=None), profile_id: int | None = Query(default=None), n_months: int = 6):
+def api_trend(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access), n_months: int = 6):
     source = _normalize_source(source)
     return {
         "takeaway": stats.trend_takeaway(source, profile_id),
@@ -246,7 +246,7 @@ def api_trend(source: str | None = Query(default=None), profile_id: int | None =
 
 
 @app.get("/api/openings")
-def api_openings(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_openings(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     return {
         "most_played": stats.most_played_openings(source, profile_id, limit=8),
@@ -259,7 +259,7 @@ def api_openings(source: str | None = Query(default=None), profile_id: int | Non
 
 
 @app.get("/api/insights")
-def api_insights(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_insights(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     return {
         "top_insights": insights.top_insights(source, profile_id),
@@ -283,7 +283,7 @@ def api_search_games(
     result: str | None = Query(default=None),
     time_control: str | None = Query(default=None),
     source: str | None = Query(default=None),
-    profile_id: int | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
     color: str | None = Query(default=None),
     has_blunder: bool | None = Query(default=None),
     sort_by: str = Query(default="date"),
@@ -312,7 +312,7 @@ def api_export_games(
     result: str | None = Query(default=None),
     time_control: str | None = Query(default=None),
     source: str | None = Query(default=None),
-    profile_id: int | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
     color: str | None = Query(default=None),
     has_blunder: bool | None = Query(default=None),
     sort_by: str = Query(default="date"),
@@ -342,7 +342,7 @@ def api_export_games(
 
 
 @app.get("/api/export/stats")
-def api_export_stats(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_export_stats(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     """Aggregate stats as a single JSON download — nested structure
     (per-phase/per-severity/per-opening breakdowns) doesn't flatten to a
     meaningful CSV, so this is JSON-only, unlike the games export.
@@ -383,7 +383,7 @@ def api_explorer(moves: str = Query(default=""), source: str | None = Query(defa
 
 
 @app.get("/api/worst-games")
-def api_worst_games(source: str | None = Query(default=None), profile_id: int | None = Query(default=None), limit: int = 5):
+def api_worst_games(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access), limit: int = 5):
     source = _normalize_source(source)
     return stats.worst_games(source, profile_id, limit=limit)
 
@@ -634,7 +634,7 @@ def api_puzzle_review_stats(source: str | None = Query(default=None)):
 
 
 @app.get("/api/puzzles/{puzzle_id}")
-def api_get_puzzle(puzzle_id: int):
+def api_get_puzzle(puzzle_id: int, _access: dict | None = Depends(auth.require_puzzle_access)):
     puzzle = puzzles.get_puzzle(puzzle_id)
     if puzzle is None:
         raise HTTPException(status_code=404, detail="Puzzle not found")
@@ -665,7 +665,7 @@ class PuzzleAttempt(BaseModel):
 
 
 @app.post("/api/puzzles/{puzzle_id}/attempt")
-def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt):
+def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt, _access: dict | None = Depends(auth.require_puzzle_access)):
     puzzle = puzzles.get_puzzle(puzzle_id)
     if puzzle is None:
         raise HTTPException(status_code=404, detail="Puzzle not found")
@@ -690,7 +690,7 @@ def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt):
 @app.get("/api/opening-puzzles")
 def api_opening_puzzles(
     source: str | None = Query(default=None),
-    profile_id: int | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
     limit: int = 12,
 ):
     """Puzzles for the openings the player actually plays most and makes
@@ -783,7 +783,7 @@ def insights_page():
 
 
 @app.get("/api/clock-analysis")
-def api_clock_analysis(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_clock_analysis(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     return {
         "avg_thinking_time_by_tier": clock_analysis.avg_thinking_time_by_tier(source, profile_id),
@@ -808,8 +808,8 @@ class UsernameLink(BaseModel):
 
 
 @app.get("/api/profiles")
-def api_list_profiles():
-    return profiles.list_profiles()
+def api_list_profiles(user: dict | None = Depends(auth.get_current_user_optional)):
+    return profiles.list_profiles(user_id=user["id"] if user else None)
 
 
 @app.post("/api/profiles")
@@ -849,7 +849,11 @@ def api_unlink_username(
 
 
 @app.get("/api/profiles/compare")
-def api_compare_profiles(a: int = Query(...), b: int = Query(...)):
+def api_compare_profiles(
+    a: int = Query(...), b: int = Query(...), user: dict | None = Depends(auth.get_current_user_optional),
+):
+    auth.verify_can_access_profile(a, user)
+    auth.verify_can_access_profile(b, user)
     try:
         return profiles.compare_profiles(a, b)
     except ValueError as e:
@@ -864,7 +868,7 @@ def profiles_page():
 # --- Progress, goals, auto-reports (Section 10) -----------------------------
 
 @app.get("/api/progress")
-def api_progress(source: str | None = Query(default=None), profile_id: int | None = Query(default=None)):
+def api_progress(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access)):
     source = _normalize_source(source)
     return {
         "weekly_summary": progress.weekly_summary(source, profile_id),
@@ -884,9 +888,11 @@ class GoalCreate(BaseModel):
 
 
 @app.post("/api/goals")
-def api_create_goal(body: GoalCreate):
+def api_create_goal(body: GoalCreate, user: dict | None = Depends(auth.get_current_user_optional)):
     if not body.description.strip():
         raise HTTPException(status_code=400, detail="Description can't be empty")
+    if body.profile_id is not None:
+        auth.verify_can_access_profile(body.profile_id, user)
     try:
         return progress.create_goal(
             body.description.strip(), body.metric, body.comparison, body.target_value,
@@ -912,19 +918,25 @@ def progress_page():
 # Additive, not a rewrite: every route above this line still works with no
 # login for a local install, exactly as it did before OAuth existed —
 # they're now gated by auth.require_*_access (games, notes, goals,
-# profiles, mistakes), which lets unowned rows (user_id IS NULL: every row
-# from a local/never-logged-in install) through to anyone, but 404s an
-# owned row for anyone except the user who owns it. The routes below are
-# the fully multi-user-aware surface: they all require a session
+# profiles, puzzles, mistakes), which lets unowned rows (user_id IS NULL:
+# every row from a local/never-logged-in install) through to anyone, but
+# 404s an owned row for anyone except the user who owns it. The routes
+# below are the fully multi-user-aware surface: they all require a session
 # unconditionally (a request with no/expired cookie gets a 401 from
 # auth.get_current_user) and are scoped to the requesting user's own data
 # via auth.require_game_owner / auth.require_puzzle_owner or an explicit
 # `WHERE user_id = ?` filter.
 #
-# Note: list/aggregate endpoints above (stats, insights, search, puzzle
-# queue) are NOT yet user-scoped — they'd need a `user_id` filter threaded
-# through stats.py/insights.py/srs.py the same way `profile_id` already is,
-# which is a larger, mostly-mechanical follow-up beyond these four features.
+# Note: every route above that takes an explicit `profile_id` FILTER
+# (dashboard, insights, search, export, puzzle queue, progress/goals) now
+# validates it through auth.require_profile_filter_access, so
+# `?profile_id=<someone else's>` can't be used to read another user's
+# profile-scoped data. What's still NOT user-scoped is the UNFILTERED
+# case: calling one of these with no profile_id and no source at all still
+# aggregates every profile's data in the database together, local install
+# or not — narrowing that default would mean threading `user_id` through
+# stats.py/insights.py/srs.py themselves (not just validating a parameter),
+# which is a larger, mostly-mechanical follow-up beyond this pass.
 #
 # Bigger caveat than either of the above: nothing on the *ingestion* side
 # (fetch_and_store/save_games, the /api/refresh path) tags a freshly-fetched

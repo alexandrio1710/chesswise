@@ -243,43 +243,48 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
 
     move_rows_by_ply = {r["ply"]: r for r in move_rows}
     engine = get_engine(depth)
-    board = game.board()
+    try:
+        board = game.board()
 
-    updates = []
-    node = game
-    ply = 0
-    while node.variations:
-        next_node = node.variations[0]
-        move = next_node.move
-        ply += 1
-        row = move_rows_by_ply.get(ply)
-        if row is None:
-            # A move without a stored eval trace (shouldn't normally
-            # happen for a fully analyzed game) — skip rather than crash
-            # the whole report over one gap.
+        updates = []
+        node = game
+        ply = 0
+        while node.variations:
+            next_node = node.variations[0]
+            move = next_node.move
+            ply += 1
+            row = move_rows_by_ply.get(ply)
+            if row is None:
+                # A move without a stored eval trace (shouldn't normally
+                # happen for a fully analyzed game) — skip rather than crash
+                # the whole report over one gap.
+                board.push(move)
+                node = next_node
+                continue
+
+            white_to_move = board.turn == chess.WHITE
+            engine.set_fen_position(board.fen())
+            top = _top_moves_cp(engine, white_to_move, n=2)
+            is_top_choice = bool(top) and top[0][0] == move.uci()
+            gap = abs(top[0][1] - top[1][1]) if len(top) >= 2 else None
+            sac = _is_sacrifice(board, move) if is_top_choice else False
+
+            classification = _classify_enriched(
+                tier=row["tier"], eval_before_cp=row["eval_before_cp"],
+                is_top_choice=is_top_choice, gap_to_runner_up=gap,
+                is_book=ply <= book_ply_cutoff, is_sacrifice=sac,
+            )
+
             board.push(move)
+            non_king_piece_count = len(board.piece_map()) - 2
+            phase = classify_phase(row["move_number"], non_king_piece_count)
+
+            updates.append((classification, int(is_top_choice), phase, game_id, ply))
             node = next_node
-            continue
-
-        white_to_move = board.turn == chess.WHITE
-        engine.set_fen_position(board.fen())
-        top = _top_moves_cp(engine, white_to_move, n=2)
-        is_top_choice = bool(top) and top[0][0] == move.uci()
-        gap = abs(top[0][1] - top[1][1]) if len(top) >= 2 else None
-        sac = _is_sacrifice(board, move) if is_top_choice else False
-
-        classification = _classify_enriched(
-            tier=row["tier"], eval_before_cp=row["eval_before_cp"],
-            is_top_choice=is_top_choice, gap_to_runner_up=gap,
-            is_book=ply <= book_ply_cutoff, is_sacrifice=sac,
-        )
-
-        board.push(move)
-        non_king_piece_count = len(board.piece_map()) - 2
-        phase = classify_phase(row["move_number"], non_king_piece_count)
-
-        updates.append((classification, int(is_top_choice), phase, game_id, ply))
-        node = next_node
+    finally:
+        # See analysis.analyze_game_moves's matching comment: explicit
+        # cleanup instead of relying on __del__/refcounting timing.
+        engine.send_quit_command()
 
     conn = get_connection()
     try:

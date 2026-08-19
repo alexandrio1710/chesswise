@@ -100,8 +100,13 @@ def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_T
     `stockfish` package's default turn-relative convention.
     """
     engine = get_engine(depth)
-    engine.set_fen_position(fen)
-    top_moves = engine.get_top_moves(num_lines)
+    try:
+        engine.set_fen_position(fen)
+        top_moves = engine.get_top_moves(num_lines)
+    finally:
+        # See analysis.analyze_game_moves's matching comment: explicit
+        # cleanup instead of relying on __del__/refcounting timing.
+        engine.send_quit_command()
 
     board = chess.Board(fen)
     lines = []

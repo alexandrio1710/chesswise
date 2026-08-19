@@ -316,3 +316,140 @@ class TestRefreshStatusPerUser:
 
         resp_a = client.get("/api/refresh/status", cookies=_cookie(user_a))
         assert resp_a.json()["running"] is True
+
+
+def _insert_puzzle(user_id: int | None) -> int:
+    conn = get_connection()
+    try:
+        game_id = conn.execute(
+            "INSERT INTO games (source, source_game_id, date, result, color, analyzed, user_id) "
+            "VALUES ('manual', ?, datetime('now'), 'win', 'white', 1, ?)",
+            (f"test-puzzle-game-{next(_id_counter)}", user_id),
+        ).lastrowid
+        mistake_id = conn.execute(
+            "INSERT INTO mistakes (game_id, ply, move_number, move_san, color_moved, phase, "
+            "severity, eval_before, eval_after, eval_drop) "
+            "VALUES (?, 1, 1, 'e4', 'white', 'opening', 'blunder', 0, -500, 500)",
+            (game_id,),
+        ).lastrowid
+        puzzle_id = conn.execute(
+            "INSERT INTO puzzles (mistake_id, game_id, fen_before, side_to_move, played_move_san, "
+            "best_move_uci, best_move_san, top_lines, phase, severity, created_at, user_id) "
+            "VALUES (?, ?, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', 'white', "
+            "'e4', 'd4', 'd4', '[]', 'opening', 'blunder', datetime('now'), ?)",
+            (mistake_id, game_id, user_id),
+        ).lastrowid
+        conn.commit()
+        return puzzle_id
+    finally:
+        conn.close()
+
+
+class TestPuzzleAccess:
+    def test_unowned_puzzle_visible_without_login(self):
+        puzzle_id = _insert_puzzle(user_id=None)
+        resp = client.get(f"/api/puzzles/{puzzle_id}")
+        assert resp.status_code == 200
+
+    def test_owned_puzzle_hidden_from_other_user(self):
+        owner = _make_user("owner-puzzle-1")
+        other = _make_user("other-puzzle-1")
+        puzzle_id = _insert_puzzle(user_id=owner["id"])
+
+        resp = client.get(f"/api/puzzles/{puzzle_id}")
+        assert resp.status_code == 404
+
+        resp = client.get(f"/api/puzzles/{puzzle_id}", cookies=_cookie(other))
+        assert resp.status_code == 404
+
+        resp = client.get(f"/api/puzzles/{puzzle_id}", cookies=_cookie(owner))
+        assert resp.status_code == 200
+
+    def test_attempt_route_is_also_gated(self):
+        owner = _make_user("owner-puzzle-2")
+        other = _make_user("other-puzzle-2")
+        puzzle_id = _insert_puzzle(user_id=owner["id"])
+        resp = client.post(
+            f"/api/puzzles/{puzzle_id}/attempt", json={"from": "e2", "to": "e4"}, cookies=_cookie(other),
+        )
+        assert resp.status_code == 404
+
+
+class TestProfileFilterAccess:
+    """profile_id is an optional FILTER on ~12 stats/insights/search/export
+    routes, not a path resource — one representative route (/api/summary)
+    is enough to exercise the shared auth.require_profile_filter_access
+    dependency; every other route wires the exact same dependency.
+    """
+
+    def test_no_filter_is_never_blocked(self):
+        resp = client.get("/api/summary")
+        assert resp.status_code == 200
+
+    def test_unowned_profile_filter_is_allowed(self):
+        profile_id = _insert_profile(None)
+        resp = client.get(f"/api/summary?profile_id={profile_id}")
+        assert resp.status_code == 200
+
+    def test_someone_elses_profile_filter_is_rejected(self):
+        owner = _make_user("owner-filter-1")
+        other = _make_user("other-filter-1")
+        profile_id = _insert_profile(owner["id"])
+
+        resp = client.get(f"/api/summary?profile_id={profile_id}")
+        assert resp.status_code == 404
+
+        resp = client.get(f"/api/summary?profile_id={profile_id}", cookies=_cookie(other))
+        assert resp.status_code == 404
+
+        resp = client.get(f"/api/summary?profile_id={profile_id}", cookies=_cookie(owner))
+        assert resp.status_code == 200
+
+    def test_progress_and_export_routes_use_the_same_gate(self):
+        owner = _make_user("owner-filter-2")
+        profile_id = _insert_profile(owner["id"])
+
+        assert client.get(f"/api/progress?profile_id={profile_id}").status_code == 404
+        assert client.get(f"/api/export/stats?profile_id={profile_id}").status_code == 404
+        assert client.get(f"/api/progress?profile_id={profile_id}", cookies=_cookie(owner)).status_code == 200
+
+
+class TestProfileListingAndCompare:
+    def test_listing_only_shows_unowned_and_own_profiles(self):
+        owner = _make_user("owner-list-1")
+        other = _make_user("other-list-1")
+        owned_id = _insert_profile(owner["id"])
+
+        resp = client.get("/api/profiles", cookies=_cookie(other))
+        ids = {p["id"] for p in resp.json()}
+        assert owned_id not in ids
+
+        resp = client.get("/api/profiles", cookies=_cookie(owner))
+        ids = {p["id"] for p in resp.json()}
+        assert owned_id in ids
+
+    def test_compare_requires_access_to_both_profiles(self):
+        owner = _make_user("owner-compare-1")
+        other = _make_user("other-compare-1")
+        profile_a = _insert_profile(owner["id"])
+        profile_b = _insert_profile(None)
+
+        resp = client.get(f"/api/profiles/compare?a={profile_a}&b={profile_b}", cookies=_cookie(other))
+        assert resp.status_code == 404
+
+        resp = client.get(f"/api/profiles/compare?a={profile_a}&b={profile_b}", cookies=_cookie(owner))
+        assert resp.status_code == 200
+
+
+class TestGoalCreateAccess:
+    def test_creating_a_goal_on_someone_elses_profile_is_rejected(self):
+        owner = _make_user("owner-goalcreate-1")
+        other = _make_user("other-goalcreate-1")
+        profile_id = _insert_profile(owner["id"])
+
+        body = {"description": "test", "metric": "accuracy_avg", "comparison": "above", "target_value": 80, "profile_id": profile_id}
+        resp = client.post("/api/goals", json=body, cookies=_cookie(other))
+        assert resp.status_code == 404
+
+        resp = client.post("/api/goals", json=body, cookies=_cookie(owner))
+        assert resp.status_code == 200

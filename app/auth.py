@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import requests
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Query, Request
 
 from config import (
     LICHESS_OAUTH_CLIENT_ID,
@@ -394,6 +394,41 @@ def verify_can_access_profile(profile_id: int, user: dict | None) -> None:
 
 def require_profile_access(profile_id: int, user: dict | None = Depends(get_current_user_optional)) -> dict | None:
     verify_can_access_profile(profile_id, user)
+    return user
+
+
+def require_profile_filter_access(
+    profile_id: int | None = Query(default=None), user: dict | None = Depends(get_current_user_optional),
+) -> int | None:
+    """For the many dashboard/insights/search-style routes that take
+    `profile_id` as an OPTIONAL filter rather than a path resource — same
+    unowned-or-mine rule as require_profile_access, just shaped for a query
+    param: no filter (None) always passes through untouched, but a given
+    profile_id must be accessible, so `?profile_id=<someone else's>` can't
+    be used to read another user's profile-scoped stats. Doesn't change
+    what happens with NO filter at all (still every profile's data
+    combined) — see server.py's Section-1 comment block for why that's a
+    separate, larger piece of work.
+    """
+    if profile_id is not None:
+        verify_can_access_profile(profile_id, user)
+    return profile_id
+
+
+def verify_can_access_puzzle(puzzle_id: int, user: dict | None) -> None:
+    _owned_row(
+        "SELECT user_id AS owner_user_id FROM puzzles WHERE id = ?",
+        (puzzle_id,), "Puzzle not found", user,
+    )
+
+
+def require_puzzle_access(puzzle_id: int, user: dict | None = Depends(get_current_user_optional)) -> dict | None:
+    """Route dependency for the legacy (pre-OAuth) puzzle routes — same
+    unowned-or-mine shape as require_game_access, not require_puzzle_owner
+    (which always requires login, for the newer always-multi-user srs2
+    routes).
+    """
+    verify_can_access_puzzle(puzzle_id, user)
     return user
 
 
