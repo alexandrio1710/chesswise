@@ -4,7 +4,7 @@
 # it is not a Python package. Redis is likewise a separate service, not a
 # Python package — see celery_app.py's docstring.)
 #
-# Top-level: requests, python-chess, stockfish, fastapi, uvicorn, python-dotenv,
+# Top-level: requests, chess, stockfish, fastapi, uvicorn, python-dotenv,
 # celery, redis (client).
 # Everything else below is their transitive dependencies, pinned so a fresh
 # install can't silently drift to an incompatible version.
@@ -34,7 +34,6 @@ httptools==0.8.0
 idna==3.18
 pydantic==2.13.4
 pydantic_core==2.46.4
-python-chess==1.999
 python-dotenv==1.2.2
 PyYAML==6.0.3
 requests==2.34.2
