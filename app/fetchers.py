@@ -124,16 +124,26 @@ def fetch_lichess_games(username: str, max_games: int = 20, since_ms: int | None
     `since_ms`: only fetch games played after this Unix timestamp in
     milliseconds (Lichess API's own `since` filter — Stage C's --refresh
     uses this so an incremental run doesn't re-download the full history).
+    `max_games` is ignored whenever `since_ms` is given — same "no cap on
+    an incremental catch-up" contract fetch_chesscom_games already has for
+    its own `since_epoch` path (see that function's docstring). Lichess's
+    `max` param is a hard cap independent of `since`, so combining both
+    used to mean: more than `max_games` new games since the last refresh
+    silently truncated the fetch to the most recent `max_games` of them,
+    and — since the next refresh's cutoff (db.get_latest_game_date) then
+    advances to the newest of only those returned — permanently skipped
+    the older ones in the gap rather than catching them up next time.
     """
     url = f"https://lichess.org/api/games/user/{username}"
     params = {
-        "max": max_games,
         "clocks": "true",
         "opening": "true",
         "pgnInJson": "false",
     }
     if since_ms is not None:
         params["since"] = since_ms
+    else:
+        params["max"] = max_games
     headers = {
         "Accept": "application/x-chess-pgn",
         "User-Agent": USER_AGENT,

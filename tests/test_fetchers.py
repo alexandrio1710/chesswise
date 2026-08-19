@@ -5,12 +5,14 @@ downstream needs to know which site a game came from.
 """
 
 import json
+from unittest.mock import MagicMock, patch
 
 from fetchers import (
     _combine_lichess_datetime,
     _normalize_chesscom_game,
     _normalize_lichess_game,
     _split_pgn_blobs,
+    fetch_lichess_games,
 )
 
 from conftest import FIXTURES_DIR
@@ -116,6 +118,36 @@ class TestCombineLichessDatetime:
 
     def test_garbage_date_returns_empty_string(self):
         assert _combine_lichess_datetime("not-a-date", "") == ""
+
+
+class TestLichessRefreshHasNoMaxCap:
+    """A `max` param is Lichess's hard cap independent of `since` — sending
+    both on an incremental refresh silently truncated a large backlog and
+    permanently skipped the older games in the gap (the next refresh's
+    cutoff advances past only what was actually returned). `max` must be
+    omitted whenever `since_ms` is given, mirroring
+    fetch_chesscom_games' own "no cap on an incremental catch-up" contract.
+    """
+
+    def _mock_response(self):
+        return MagicMock(status_code=200, text='[Event "A"]\n[Result "*"]\n\n1. e4', raise_for_status=lambda: None)
+
+    def test_since_ms_given_omits_max_param(self):
+        with patch("fetchers._request_with_retry", return_value=self._mock_response()) as mock_req:
+            fetch_lichess_games("testuser", max_games=20, since_ms=1234567890000)
+        params = mock_req.call_args.kwargs["params"]
+        assert "max" not in params
+        assert params["since"] == 1234567890000
+
+    def test_no_since_ms_still_sends_max_param(self):
+        # A first-ever fetch (no prior stored games, so no cutoff to fetch
+        # "since") should stay bounded — this is the normal, non-refresh
+        # fetch path, not the one the bug was in.
+        with patch("fetchers._request_with_retry", return_value=self._mock_response()) as mock_req:
+            fetch_lichess_games("testuser", max_games=20, since_ms=None)
+        params = mock_req.call_args.kwargs["params"]
+        assert params["max"] == 20
+        assert "since" not in params
 
 
 class TestSplitPgnBlobs:
