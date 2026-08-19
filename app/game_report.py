@@ -359,17 +359,25 @@ def _report_row_to_dict(row) -> dict:
 
 def generate_game_report(game_id: int, force: bool = False) -> dict:
     """The main entry point: returns a cached report if one already exists
-    (unless `force`), otherwise runs compute_enriched_classification() and
-    builds+caches a new one. Raises ValueError if the game doesn't exist or
-    hasn't been analyzed yet.
+    AND is still fresh (unless `force`), otherwise runs
+    compute_enriched_classification() and builds+caches a new one. Raises
+    ValueError if the game doesn't exist or hasn't been analyzed yet.
     """
     conn = get_connection()
     try:
-        if not force:
-            cached = conn.execute("SELECT * FROM game_reports WHERE game_id = ?", (game_id,)).fetchone()
-            if cached:
-                return _report_row_to_dict(cached)
         game = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if not force and game is not None:
+            cached = conn.execute("SELECT * FROM game_reports WHERE game_id = ?", (game_id,)).fetchone()
+            # analyzed_at is bumped on every analyze_and_store_game() call,
+            # including a forced re-analysis of an already-analyzed game
+            # (mistakes.py's own docstring calls this out as a supported,
+            # deliberate use). Without this comparison, a game re-analyzed
+            # after its report was cached kept showing the stale report
+            # (old accuracy/rating/tier_counts/summary) indefinitely —
+            # /api/games/{id} (uncached, reads game_moves live) and
+            # /api/games/{id}/report (cached) would silently disagree.
+            if cached and (game["analyzed_at"] is None or cached["computed_at"] >= game["analyzed_at"]):
+                return _report_row_to_dict(cached)
     finally:
         conn.close()
 

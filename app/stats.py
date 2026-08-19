@@ -9,6 +9,7 @@ duplicating query logic.
 import json
 import math
 import re
+from datetime import datetime, timedelta
 
 from db import get_connection
 
@@ -304,6 +305,19 @@ def monthly_trend(source: str | None = None, profile_id: int | None = None, n_mo
         conn.close()
 
 
+def _is_immediately_preceding_month(month_label: str, candidate_label: str) -> bool:
+    """True if `candidate_label` ("YYYY-MM") is the calendar month right
+    before `month_label`. monthly_trend skips months with zero analyzed
+    games rather than zero-filling them, so trend[1] isn't guaranteed to
+    be adjacent to trend[0] — a gap (games in July, then May, with no
+    analyzed games in June) would otherwise get mislabeled "last month".
+    """
+    this_dt = datetime.strptime(month_label, "%Y-%m")
+    candidate_dt = datetime.strptime(candidate_label, "%Y-%m")
+    preceding = (this_dt.replace(day=1) - timedelta(days=1)).replace(day=1)
+    return (candidate_dt.year, candidate_dt.month) == (preceding.year, preceding.month)
+
+
 def trend_takeaway(source: str | None = None, profile_id: int | None = None) -> str:
     """Plain-English month-over-month comparison, e.g. 'Blunders per game
     are down from 3.5 last month to 2.1 this month.' Needs at least two
@@ -313,19 +327,24 @@ def trend_takeaway(source: str | None = None, profile_id: int | None = None) -> 
     if len(trend) < 2:
         return "Not enough months of analyzed games yet to show a trend."
 
-    this_month, last_month = trend[0], trend[1]
+    this_month, previous_month = trend[0], trend[1]
     this_rate = this_month["blunders_per_game"]
-    last_rate = last_month["blunders_per_game"]
+    previous_rate = previous_month["blunders_per_game"]
 
-    if this_rate < last_rate:
+    period_label = (
+        "last month" if _is_immediately_preceding_month(this_month["month"], previous_month["month"])
+        else f"in {previous_month['month']}"
+    )
+
+    if this_rate < previous_rate:
         direction = "down"
-    elif this_rate > last_rate:
+    elif this_rate > previous_rate:
         direction = "up"
     else:
-        return f"Blunders per game are unchanged at {this_rate} this month vs. last month."
+        return f"Blunders per game are unchanged at {this_rate} this month vs. {period_label}."
 
     return (
-        f"Blunders per game are {direction} from {last_rate} last month "
+        f"Blunders per game are {direction} from {previous_rate} {period_label} "
         f"to {this_rate} this month."
     )
 
@@ -391,11 +410,20 @@ def opening_stats(source: str | None = None, profile_id: int | None = None) -> l
             f"""
             SELECT g.opening_name, COUNT(*) as opening_mistakes
             FROM mistakes m JOIN games g ON m.game_id = g.id
-            WHERE m.phase = 'opening' {where}
+            WHERE m.phase = 'opening' AND g.opening_name != '' {where}
             GROUP BY g.opening_name
             """,
             params,
         ).fetchall()
+        # Same opening_name != '' filter as game_rows above. Without it,
+        # this query still produces a correct per-opening breakdown (SQL's
+        # GROUP BY already keeps '' as its own bucket, so it can't corrupt
+        # any real opening's count) — but it wastefully computes
+        # mistake_map[''] for a key game_rows never looks up (game_rows
+        # already excludes opening_name == ''), and leaves the two
+        # queries' WHERE clauses looking like they filter "the same
+        # population" when they didn't. Aligning them is a consistency
+        # fix, not a behavior change to what's returned today.
         mistake_map = {r["opening_name"]: r["opening_mistakes"] for r in mistake_rows}
 
         results = []

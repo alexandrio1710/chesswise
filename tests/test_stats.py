@@ -1,6 +1,11 @@
-"""Unit tests for opening-family grouping (Stage D)."""
+"""Unit tests for opening-family grouping (Stage D) and other stats.py fixes."""
 
-from stats import opening_family
+import itertools
+
+from db import get_connection
+from stats import _is_immediately_preceding_month, opening_family, opening_stats
+
+_id_counter = itertools.count(1)
 
 
 class TestOpeningFamilyLichessStyle:
@@ -56,3 +61,70 @@ class TestOpeningFamilyEdgeCases:
 
     def test_none_returns_unknown(self):
         assert opening_family(None) == "Unknown"
+
+
+class TestIsImmediatelyPrecedingMonth:
+    def test_adjacent_months_same_year(self):
+        assert _is_immediately_preceding_month("2026-08", "2026-07") is True
+
+    def test_adjacent_months_across_year_boundary(self):
+        assert _is_immediately_preceding_month("2026-01", "2025-12") is True
+
+    def test_non_adjacent_months_with_a_gap(self):
+        # trend_takeaway's own bug: monthly_trend skips months with zero
+        # analyzed games rather than zero-filling, so trend[1] can be two
+        # or more months back, not necessarily "last month".
+        assert _is_immediately_preceding_month("2026-07", "2026-05") is False
+
+    def test_same_month_is_not_preceding(self):
+        assert _is_immediately_preceding_month("2026-07", "2026-07") is False
+
+
+def _insert_game(opening_name: str, date: str = None) -> int:
+    conn = get_connection()
+    try:
+        game_id = conn.execute(
+            "INSERT INTO games (source, source_game_id, date, result, color, opening_name, analyzed) "
+            "VALUES ('manual', ?, ?, 'win', 'white', ?, 1)",
+            (f"stats-test-{next(_id_counter)}", date or "2026-01-01T00:00:00+00:00", opening_name),
+        ).lastrowid
+        conn.commit()
+        return game_id
+    finally:
+        conn.close()
+
+
+def _insert_opening_mistake(game_id: int, phase: str = "opening") -> int:
+    conn = get_connection()
+    try:
+        mistake_id = conn.execute(
+            "INSERT INTO mistakes (game_id, ply, move_number, move_san, color_moved, phase, "
+            "severity, eval_before, eval_after, eval_drop) "
+            "VALUES (?, 1, 1, 'e4', 'white', ?, 'blunder', 0, -500, 500)",
+            (game_id, phase),
+        ).lastrowid
+        conn.commit()
+        return mistake_id
+    finally:
+        conn.close()
+
+
+class TestOpeningStatsEmptyOpeningName:
+    def test_a_real_openings_mistake_count_is_unaffected_by_unclassified_games(self):
+        # game_rows already excludes opening_name == '' games entirely
+        # (nothing to attribute an unclassified opening to), so their
+        # mistakes were never going to surface in the output either way —
+        # the fix here is aligning mistake_rows' WHERE clause with
+        # game_rows' (both now filter opening_name != ''), which stops a
+        # wasted, unused aggregate rather than changing what's returned.
+        # This test locks in that a real opening's own count stays correct
+        # regardless of empty-opening-name games/mistakes elsewhere in the
+        # DB — true before and after, worth guarding either way.
+        game_id = _insert_game("Test Opening XYZ")
+        _insert_opening_mistake(game_id)
+        empty_game_id = _insert_game("")
+        _insert_opening_mistake(empty_game_id)
+
+        results = {r["opening_name"]: r for r in opening_stats()}
+        assert results["Test Opening XYZ"]["opening_phase_mistakes"] == 1
+        assert "" not in results

@@ -116,11 +116,17 @@ def win_rate_by_day_of_week(source: str | None = None, profile_id: int | None = 
                    COUNT(*) as games,
                    SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins
             FROM games g
-            WHERE analyzed = 1 AND skip_reason IS NULL {where}
+            WHERE analyzed = 1 AND skip_reason IS NULL AND strftime('%w', date) IS NOT NULL {where}
             GROUP BY dow
             """,
             params,
         ).fetchall()
+        # The strftime(...) IS NOT NULL clause above excludes any game
+        # whose stored `date` isn't a format SQLite's date functions can
+        # parse (pre-existing data from before fetchers.py always
+        # normalized to ISO) — without it, `dow` is None for such a row
+        # and _DAY_NAMES[None] below raises TypeError, 500ing this whole
+        # dashboard over one bad game rather than just omitting it.
         return {
             _DAY_NAMES[r["dow"]]: {
                 "games": r["games"], "wins": r["wins"],
@@ -151,13 +157,17 @@ def win_rate_by_time_of_day(source: str | None = None, profile_id: int | None = 
             SELECT CAST(strftime('%H', date) as INTEGER) as hour,
                    result
             FROM games g
-            WHERE analyzed = 1 AND skip_reason IS NULL {where}
+            WHERE analyzed = 1 AND skip_reason IS NULL AND strftime('%H', date) IS NOT NULL {where}
             """,
             params,
         ).fetchall()
     finally:
         conn.close()
 
+    # Same reasoning as win_rate_by_day_of_week's IS NOT NULL clause: a
+    # game whose `date` isn't parseable by SQLite's date functions would
+    # otherwise make `hour` None here, and `start <= None < end` raises
+    # TypeError — excluded at the query level rather than crashing.
     buckets = {label: {"games": 0, "wins": 0} for _, _, label in _TIME_BUCKETS}
     for r in rows:
         for start, end, label in _TIME_BUCKETS:
