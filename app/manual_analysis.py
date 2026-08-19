@@ -159,7 +159,14 @@ def save_manual_game(pgn_text: str, player_color: str, opponent_override: str | 
     black = headers.get("Black", "Unknown")
     opponent = opponent_override or (black if player_color == "white" else white)
 
-    result = _lichess_result_to_outcome(headers.get("Result", "*"), player_color)
+    # Unlike the bulk Lichess/Chess.com fetch (where an unrecognized Result
+    # tag means "skip this game entirely" — see fetchers.py), this is a
+    # single, deliberate "save this exact game" action: silently dropping
+    # or 400ing it over a missing/unclear Result tag (common for a
+    # manually-typed-out OTB game) would be worse than a best-effort
+    # default, since the moves/analysis themselves are still perfectly
+    # valid and exactly what the user asked to save.
+    result = _lichess_result_to_outcome(headers.get("Result", "*"), player_color) or "draw"
     date_iso = _parse_pgn_date(headers.get("Date", ""))
 
     # No natural external id for a pasted game — hash the content plus a

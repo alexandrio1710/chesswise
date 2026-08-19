@@ -36,26 +36,52 @@ logger = logging.getLogger(__name__)
 # practice there too, so the same header is sent to both.
 USER_AGENT = "ChessMistakeTracker/1.0 (personal project)"
 
-# Retry/backoff for transient failures (429 rate limits, connection blips),
-# and the pause between consecutive requests when pulling multiple Chess.com
-# archive months in a loop. Tunable via .env — see config.py.
+# Retry/backoff for transient failures (429 rate limits, 5xx, connection
+# blips), and the pause between consecutive requests when pulling multiple
+# Chess.com archive months in a loop. Tunable via .env — see config.py.
 MAX_RETRIES = API_MAX_RETRIES
 BACKOFF_BASE_SECONDS = API_BACKOFF_BASE_SECONDS
 INTER_REQUEST_DELAY_SECONDS = API_INTER_REQUEST_DELAY_SECONDS
 
+# One shared connection pool for every request this module makes (Lichess,
+# Chess.com, and — via alerts.py/digest.py/eco_import.py reusing
+# _request_with_retry — Discord and GitHub) rather than a fresh TCP+TLS
+# handshake per call, which matters most for the Chess.com per-month
+# archive loop that repeatedly hits the same host.
+_session = requests.Session()
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Retry-After is allowed by HTTP to be either delta-seconds ("120")
+    or an HTTP-date ("Wed, 21 Oct 2026 07:28:00 GMT") — float(value) raises
+    ValueError on the date form, which previously crashed the whole fetch
+    instead of just falling back to exponential backoff.
+    """
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(value)
+            return max(0.0, (dt - datetime.now(dt.tzinfo)).total_seconds())
+        except (TypeError, ValueError):
+            return None
+
 
 def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
-    """requests.get/post with retry-with-backoff on 429s and transient
-    network errors. Raises the underlying exception (or the last HTTP
-    error) if every retry is exhausted, so callers still see a real
-    failure rather than this silently swallowing a persistent outage.
+    """requests.get/post with retry-with-backoff on 429s, 5xx, and
+    transient network errors. Raises the underlying exception (or returns
+    the last response) if every retry is exhausted, so callers still see a
+    real failure rather than this silently swallowing a persistent outage.
     """
     kwargs.setdefault("timeout", 30)
     last_exception: Exception | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.request(method, url, **kwargs)
+            resp = _session.request(method, url, **kwargs)
         except requests.exceptions.RequestException as e:
             last_exception = e
             if attempt == MAX_RETRIES:
@@ -65,10 +91,14 @@ def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
             time.sleep(wait)
             continue
 
-        if resp.status_code == 429 and attempt < MAX_RETRIES:
-            retry_after = resp.headers.get("Retry-After")
-            wait = float(retry_after) if retry_after else BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
-            logger.warning(f"Rate limited (429) on {url} (attempt {attempt}/{MAX_RETRIES}). Retrying in {wait:.1f}s...")
+        retryable = resp.status_code == 429 or resp.status_code >= 500
+        if retryable and attempt < MAX_RETRIES:
+            wait = _parse_retry_after(resp.headers.get("Retry-After"))
+            if wait is None:
+                wait = BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                f"{resp.status_code} on {url} (attempt {attempt}/{MAX_RETRIES}). Retrying in {wait:.1f}s..."
+            )
             time.sleep(wait)
             continue
 
@@ -145,6 +175,11 @@ def _normalize_lichess_game(pgn: str, username: str) -> dict | None:
 
     result_tag = tags.get("Result", "*")
     result = _lichess_result_to_outcome(result_tag, color)
+    if result is None:
+        # Aborted/unterminated game ("*", or anything not one of the three
+        # recognized result tags) — nothing meaningful to store or count,
+        # and every downstream stat assumes result is always win/loss/draw.
+        return None
 
     site_id = tags.get("Site", "")
     source_game_id = site_id.rstrip("/").split("/")[-1] if site_id else tags.get("GameId", "")
@@ -177,24 +212,46 @@ def _normalize_lichess_game(pgn: str, username: str) -> dict | None:
     }
 
 
-def _lichess_result_to_outcome(result_tag: str, color: str) -> str:
+def _lichess_result_to_outcome(result_tag: str, color: str) -> str | None:
     if result_tag == "1/2-1/2":
         return "draw"
     if result_tag == "1-0":
         return "win" if color == "white" else "loss"
     if result_tag == "0-1":
         return "win" if color == "black" else "loss"
-    return "draw"  # unknown/aborted, treat as draw-ish fallback
+    # "*" (aborted/unterminated) or anything else unrecognized — None
+    # rather than a "draw" fallback, so the caller can skip storing/
+    # counting a game with no real result instead of silently mixing it
+    # into draw statistics.
+    return None
 
 
 def _combine_lichess_datetime(date_str: str, time_str: str) -> str:
+    """Always returns either a valid ISO 8601 string or "" (never the raw,
+    dot-separated PGN tag) — every caller that stores/compares this value
+    (db.save_games, db.get_latest_game_date's MAX(date), insights.py's
+    strftime()-based day-of-week/time-of-day breakdowns) assumes one of
+    those two shapes. Returning the raw "2026.08.10" on a parse failure
+    used to violate that: '.' (0x2E) sorts after '-' (0x2D), so a mix of
+    ISO and dot-formatted dates for one source made MAX(date) pick the
+    wrong "latest" game, and SQLite's strftime() returns NULL for a
+    dot-formatted date, which crashed insights.py's day-of-week/time-of-day
+    breakdowns outright for any game carrying one.
+    """
     if not date_str:
         return ""
     try:
         dt = datetime.strptime(f"{date_str} {time_str}".strip(), "%Y.%m.%d %H:%M:%S")
         return dt.replace(tzinfo=timezone.utc).isoformat()
     except ValueError:
-        return date_str
+        pass
+    try:
+        # UTCTime missing/malformed but the date itself is fine — still
+        # worth a date-only ISO value rather than discarding it entirely.
+        dt = datetime.strptime(date_str, "%Y.%m.%d")
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +291,12 @@ def fetch_chesscom_games(
     if since_epoch is not None:
         since_month_key = datetime.fromtimestamp(since_epoch, tz=timezone.utc).strftime("%Y/%m")
         recent_archive_urls = [u for u in archive_urls if u.rstrip("/")[-7:] >= since_month_key]
-    else:
+    elif months_back > 0:
         recent_archive_urls = archive_urls[-months_back:]
+    else:
+        # archive_urls[-0:] is a Python slicing gotcha: -0 == 0, so it
+        # would return every archive month ever played instead of none.
+        recent_archive_urls = []
 
     raw_games = []
     for i, archive_url in enumerate(reversed(recent_archive_urls)):  # most recent month first
@@ -292,7 +353,15 @@ def _normalize_chesscom_game(raw: dict, username: str) -> dict | None:
         else ""
     )
 
-    source_game_id = str(raw.get("uuid") or raw.get("url", "").rstrip("/").split("/")[-1])
+    source_game_id = raw.get("uuid") or raw.get("url", "").rstrip("/").split("/")[-1]
+    if not source_game_id:
+        # No uuid and no usable url — nothing to dedupe on. Storing this
+        # under an empty-string id would collide with every other game
+        # missing both fields (db.save_games dedupes on (source,
+        # source_game_id): INSERT OR IGNORE would silently drop every one
+        # after the first as a false "duplicate"), so skip it instead.
+        logger.warning("Chess.com game has neither a uuid nor a parseable url — skipping.")
+        return None
 
     time_control = _classify_chesscom_time_control(raw.get("time_class", ""))
 
@@ -364,8 +433,17 @@ def _normalize_chesscom_clock_format(pgn: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _split_pgn_blobs(pgn_text: str) -> list[str]:
-    """Split a multi-game PGN export into individual game blobs."""
-    blobs = re.split(r"\n\n(?=\[Event )", pgn_text.strip())
+    """Split a multi-game PGN export into individual game blobs.
+
+    Normalizes CRLF to LF first: the split pattern requires two literal
+    "\n"s directly before "[Event ", which a CRLF-terminated export
+    ("\r\n\r\n") wouldn't contain at all — the whole response would
+    silently become a single blob, and _parse_pgn_tags' dict-assignment
+    tag parsing would then let each game's tags overwrite the previous
+    one's, producing one Frankenstein row mixing one game's PGN text with
+    a different game's metadata.
+    """
+    blobs = re.split(r"\n\n(?=\[Event )", pgn_text.replace("\r\n", "\n").strip())
     return [b for b in blobs if b.strip()]
 
 

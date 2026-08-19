@@ -502,6 +502,31 @@ def _migration_015_game_reports(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_016_fix_leitner_srs_datetime_format(conn: sqlite3.Connection) -> None:
+    """Bug fix — srs.record_attempt originally stored next_review_at via
+    Python's datetime.isoformat() ("2026-08-19T06:00:00.123456", local
+    time), compared against SQLite's own datetime('now')
+    ("2026-08-19 20:00:00", space-separated, UTC) via plain TEXT `<=`.
+    Since 'T' (0x54) sorts after ' ' (0x20), every row written by the old
+    code compared as "not yet due" regardless of the actual date/time —
+    same root cause and fix as auth.py's create_session (see its own
+    comment), independently present here since the two modules were
+    written separately. See srs.py's record_attempt for the corrected
+    version.
+
+    Rewrites existing rows into SQLite's own datetime() text format so
+    already-scheduled reviews compare correctly again. This can't (and
+    doesn't try to) correct the local-vs-UTC offset those old values were
+    originally computed in — only the separator/format that was breaking
+    every comparison outright, unconditionally, regardless of timezone.
+    """
+    conn.execute(
+        "UPDATE puzzle_review_state "
+        "SET next_review_at = substr(replace(next_review_at, 'T', ' '), 1, 19) "
+        "WHERE next_review_at LIKE '%T%'"
+    )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -518,6 +543,7 @@ MIGRATIONS = [
     (13, "Add eco_codes table and games.eco column", _migration_013_eco_codes),
     (14, "Add analysis_status/analysis_task_id/analysis_error to games", _migration_014_analysis_status),
     (15, "Add game_moves classification/phase columns and game_reports table", _migration_015_game_reports),
+    (16, "Fix Leitner SRS next_review_at datetime format", _migration_016_fix_leitner_srs_datetime_format),
 ]
 
 
@@ -542,10 +568,30 @@ def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
 
 def backup_database() -> Path | None:
     """Copy the DB file to a timestamped backup. Returns the backup path,
-    or None if there's no DB file yet (fresh install — nothing to lose).
+    or None if there's no real DB file yet (fresh install — nothing to
+    lose). Checks size, not just existence: run_migrations() opens a
+    connection to DB_PATH before calling this, and sqlite3.connect()
+    creates a 0-byte file as a side effect on a path that doesn't exist
+    yet — without the size check, a fresh install's very first run would
+    see DB_PATH "exist" by the time this runs and back up that empty file
+    instead of skipping, as the fresh-install case is meant to.
+
+    Runs a WAL checkpoint first — db.py's WAL mode (needed for concurrent
+    writers: parallel batch analysis, Celery workers, the background
+    refresh thread) means recently committed rows can live only in the
+    -wal sidecar file rather than the main .db file; a plain copy of just
+    DB_PATH could silently omit them from what's supposed to be the
+    recovery point if the migration about to run goes wrong.
     """
-    if not DB_PATH.exists():
+    if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
         return None
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = DB_PATH.parent / f"{DB_PATH.stem}_backup_{timestamp}{DB_PATH.suffix}"
     shutil.copy2(DB_PATH, backup_path)

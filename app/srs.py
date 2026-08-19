@@ -11,7 +11,7 @@ eye, which matters more here than optimizing review scheduling to the
 last percent for a personal tool with a few hundred puzzles.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from db import get_connection
 
@@ -48,7 +48,15 @@ def record_attempt(puzzle_id: int, correct: bool, time_taken_ms: int | None = No
         total_correct = (row["total_correct"] if row else 0) + int(correct)
 
         box = min(MAX_BOX, box + 1) if correct else MIN_BOX
-        next_review_at = (datetime.now() + timedelta(days=LEITNER_INTERVALS_DAYS[box])).isoformat()
+        # SQLite's own datetime() text format ("YYYY-MM-DD HH:MM:SS", UTC),
+        # NOT datetime.isoformat() ("...T...", local time) — get_due_puzzle_ids
+        # compares this column against datetime('now') as plain strings, and
+        # isoformat()'s "T" sorts after datetime('now')'s " " (0x54 > 0x20),
+        # which made every scheduled review compare as not-yet-due regardless
+        # of the actual date/time (same bug/fix as auth.py's create_session).
+        next_review_at = (
+            datetime.now(timezone.utc) + timedelta(days=LEITNER_INTERVALS_DAYS[box])
+        ).strftime("%Y-%m-%d %H:%M:%S")
 
         conn.execute(
             """

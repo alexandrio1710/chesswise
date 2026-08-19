@@ -18,7 +18,7 @@ SM-2 reference: https://en.wikipedia.org/wiki/SuperMemo#Description_of_SM-2_algo
     0 = complete blackout
 """
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 from db import get_connection
 
@@ -76,7 +76,12 @@ def record_puzzle_attempt(user_id: int, puzzle_id: int, quality: int) -> dict:
         new_repetition_count, new_ef, new_interval = _next_state(
             repetition_count, easiness_factor, interval_days, quality
         )
-        next_review_date = (date.today() + timedelta(days=new_interval)).isoformat()
+        # UTC, not local time — get_due_puzzles/get_progress_summary compare
+        # this against SQLite's date('now'), which SQLite documents as UTC.
+        # date.today() (local) could shift next_review_date a day off from
+        # what "now" resolves to server-side, depending on timezone and
+        # time of day.
+        next_review_date = (datetime.now(timezone.utc).date() + timedelta(days=new_interval)).isoformat()
 
         conn.execute(
             """

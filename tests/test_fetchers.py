@@ -6,7 +6,12 @@ downstream needs to know which site a game came from.
 
 import json
 
-from fetchers import _normalize_chesscom_game, _normalize_lichess_game
+from fetchers import (
+    _combine_lichess_datetime,
+    _normalize_chesscom_game,
+    _normalize_lichess_game,
+    _split_pgn_blobs,
+)
 
 from conftest import FIXTURES_DIR
 
@@ -75,3 +80,54 @@ class TestBothSourcesMatch:
         assert set(lichess_game.keys()) == set(chesscom_game.keys())
         for key in NORMALIZED_KEYS:
             assert type(lichess_game[key]) is type(chesscom_game[key])
+
+
+class TestAbortedGamesAreSkipped:
+    def test_lichess_star_result_is_skipped_not_stored_as_draw(self):
+        pgn = _load_lichess_fixture().replace('[Result "1-0"]', '[Result "*"]')
+        assert _normalize_lichess_game(pgn, "testuser") is None
+
+    def test_chesscom_missing_uuid_and_url_is_skipped(self):
+        raw = _load_chesscom_fixture()
+        raw.pop("uuid", None)
+        raw["url"] = ""
+        assert _normalize_chesscom_game(raw, "testuser") is None
+
+
+class TestCombineLichessDatetime:
+    def test_full_date_and_time(self):
+        assert _combine_lichess_datetime("2026.01.15", "14:32:00") == "2026-01-15T14:32:00+00:00"
+
+    def test_missing_time_falls_back_to_date_only_iso(self):
+        # Must still be a valid ISO string (not the raw "2026.01.15") since
+        # every caller assumes date is either ISO or "" — never dot-format —
+        # see _combine_lichess_datetime's own docstring for what broke
+        # downstream when it wasn't (MAX(date) ordering, insights.py crashes).
+        result = _combine_lichess_datetime("2026.01.15", "")
+        assert result == "2026-01-15T00:00:00+00:00"
+
+    def test_garbage_time_falls_back_to_date_only_iso(self):
+        result = _combine_lichess_datetime("2026.01.15", "not-a-time")
+        assert result.startswith("2026-01-15")
+        assert "." not in result
+
+    def test_no_date_returns_empty_string(self):
+        assert _combine_lichess_datetime("", "") == ""
+
+    def test_garbage_date_returns_empty_string(self):
+        assert _combine_lichess_datetime("not-a-date", "") == ""
+
+
+class TestSplitPgnBlobs:
+    def test_splits_on_lf(self):
+        text = '[Event "A"]\n[Result "*"]\n\n1. e4\n\n[Event "B"]\n[Result "*"]\n\n1. d4'
+        assert len(_split_pgn_blobs(text)) == 2
+
+    def test_splits_on_crlf(self):
+        # A CRLF-terminated export has no literal "\n\n" before "[Event ",
+        # so the whole response used to collapse into a single blob.
+        text = '[Event "A"]\r\n[Result "*"]\r\n\r\n1. e4\r\n\r\n[Event "B"]\r\n[Result "*"]\r\n\r\n1. d4'
+        blobs = _split_pgn_blobs(text)
+        assert len(blobs) == 2
+        assert '[Event "A"]' in blobs[0]
+        assert '[Event "B"]' in blobs[1]
