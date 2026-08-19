@@ -1,5 +1,88 @@
 # Changelog
 
+## v8 — Full-codebase correctness audit
+
+A systematic pass over the entire codebase (backend, frontend, infra, tests)
+looking for bugs rather than adding features — five parallel reviews (data
+ingestion, analysis/stats, puzzles/SRS/CLI, frontend, infra/migrations) each
+independently reading their area in full, every finding re-verified against
+the actual code (and, where practical, empirically reproduced) before being
+treated as real. Grouped by theme; each item below shipped with test
+coverage where the app's existing test infrastructure could exercise it.
+
+**Two independent instances of the same datetime-format bug** already fixed
+once in v5's `auth.create_session` (SQLite `datetime('now')` is
+space-separated UTC text; Python's `datetime.isoformat()` is `T`-separated
+and often local time — comparing the two as plain strings silently breaks):
+`srs.py`'s Leitner `next_review_at` (puzzles never surfaced as due until a
+full calendar day late — migration 16 backfills existing rows) and
+`srs_sm2.py`'s SM-2 `next_review_date` (local `date.today()` vs. SQLite's
+UTC `date('now')`, shifting due dates by up to a day depending on server
+timezone/time of day).
+
+**Fetch/ingestion hardening** (`fetchers.py`): `_combine_lichess_datetime`
+used to fall back to the raw, un-normalized `"2026.08.10"`-style PGN tag on
+any parse failure — broke incremental-refresh ordering (dot sorts after
+dash) and crashed `insights.py`'s day-of-week/time-of-day breakdowns
+outright (SQLite's `strftime()` returns NULL for a non-ISO date; now
+guarded there too). `_request_with_retry` now retries 5xx (previously only
+429s), a malformed `Retry-After` HTTP-date no longer crashes the retry loop,
+a shared `requests.Session` replaces one-off connections, an aborted
+Lichess game (`"*"` result) is skipped instead of silently counted as a
+draw, a Chess.com game with neither a `uuid` nor a parseable `url` is
+skipped instead of risking a dedup collision, a CRLF-terminated multi-game
+PGN export no longer collapses into one corrupted blob, and a Lichess
+incremental refresh no longer silently truncates (and then permanently
+skips) a backlog larger than `max_games`. `alerts.py` and `eco_import.py`
+now retry their outbound calls like every other one in the app;
+`digest.py`'s game/mistake counts are derived from what a run actually did
+instead of a global before/after diff that leaked in other local profiles'
+activity, and it raises instead of calling `sys.exit()` from library code.
+
+**Analysis pipeline**: `game_report.py` served a cached report forever with
+no comparison against the game's last analysis time, so a re-analyzed game
+silently kept showing stale accuracy/rating/summary. `batch_analyze.py`
+no longer lets one dead worker process abort a whole batch's summary, and a
+narrow post-upgrade migration race between parallel workers degrades to a
+warning instead of crashing. `tablebase.py` now honors its own "never
+crashes on a bad position" contract for malformed FENs, caps its
+previously-unbounded cache, and the Endgame Trainer can finally accept a
+promotion move (it always 400'd before — the feature was unusable for its
+own core use case). `puzzles.py`'s puzzle-generation sweep no longer
+misattributes an unrelated game's PGN-fetch failure onto whatever game
+triggered it. `opening_puzzles.py` no longer 500s on an out-of-range
+`move_index` and no longer silently accepts a queen-promotion attempt as
+"correct" when the puzzle's actual solution needs a different piece.
+
+**Frontend**: fixed two real attribute-injection gaps (a Lichess `game_url`
+written unescaped into an `href`, and a linked username escaped with a
+text-content-only helper that doesn't cover `"` — verified live in-browser
+against the real page before and after), six places where a network
+failure left the page frozen on its loading spinner forever instead of
+showing an error (verified live by forcing `fetch()` to reject and
+confirming recovery), a request-race in the Search page's filters, the
+Opening Explorer silently playing a non-deterministic promotion piece, and
+a `"`-delimited data attribute that truncated on a `|` character.
+
+**Ownership/access control** (server.py, auth.py — see v7): puzzle detail/
+attempt routes and every route taking `profile_id` as an optional filter
+now go through the same unowned-or-mine check the rest of the app already
+had.
+
+Deliberately not touched, and why: Dockerfile's root user (no Docker
+available to verify a build in this environment, and getting a mounted-
+volume permission fix wrong risks breaking real deployments); the
+concurrent-attempt read-then-write race in `srs.py`/`srs_sm2.py` (a correct
+fix means expressing the scheduling math as raw SQL `CASE` expressions,
+trading real clarity for a low-probability edge case); `opening_puzzles.py`
+attempt idempotency (needs a real idempotency-key mechanism); `puzzles.py`
+`check_attempt`'s unused `promotion` parameter (would need an API/frontend
+change for a rare underpromotion-puzzle scenario); keyboard accessibility
+for the Explorer/Endgame/Rush boards (real gap, larger scope than this
+pass); and `get_mistakes_without_puzzles` running unscoped on every Celery
+task (a scale concern for a future multi-user deployment, not a
+correctness bug today).
+
 ## v7 — Ownership enforcement for the pre-OAuth routes; Analyze Board hardening
 
 A follow-up to v5's OAuth/session foundations: `games.user_id` /
