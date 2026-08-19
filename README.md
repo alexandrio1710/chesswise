@@ -1,6 +1,6 @@
 # Chesswise
 
-[![Tests](https://github.com/alexandrio1710/chess-mistake-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/alexandrio1710/chess-mistake-tracker/actions/workflows/tests.yml)
+[![Tests](https://github.com/alexandrio1710/chesswise/actions/workflows/tests.yml/badge.svg)](https://github.com/alexandrio1710/chesswise/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Pulls your own game history from Lichess and/or Chess.com, runs every game
@@ -37,8 +37,8 @@ not a Python package).
 1. **Clone and install dependencies**
 
    ```
-   git clone https://github.com/alexandrio1710/chess-mistake-tracker.git
-   cd chess-mistake-tracker
+   git clone https://github.com/alexandrio1710/chesswise.git
+   cd chesswise
    python -m venv venv
    venv\Scripts\activate          # Windows
    source venv/bin/activate       # macOS/Linux
@@ -121,8 +121,8 @@ the whole local setup above. A `Dockerfile` is included for deploying to
 Fly.io, Railway, or any other container host:
 
 ```
-docker build -t chess-mistake-tracker .
-docker run -p 8000:8000 chess-mistake-tracker
+docker build -t chesswise .
+docker run -p 8000:8000 chesswise
 ```
 
 **Persistence matters**: the SQLite database lives inside the container by
