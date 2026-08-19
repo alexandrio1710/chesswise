@@ -16,7 +16,7 @@ import time
 import chess
 import requests
 
-from config import API_BACKOFF_BASE_SECONDS, API_MAX_RETRIES
+from config import API_BACKOFF_BASE_SECONDS, API_INTER_REQUEST_DELAY_SECONDS, API_MAX_RETRIES
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,14 @@ TABLEBASE_MAX_PIECES = 7
 
 # Cached per FEN for the server process's lifetime — tablebase results
 # never change, so there's no reason to ever re-fetch the same position.
+# Capped rather than left unbounded: a long-running server/worker process
+# would otherwise accumulate one entry per distinct FEN ever queried across
+# every game/user for its entire lifetime. Not a real LRU (no access-order
+# tracking) — just a blunt "stop growing, start over" cap, which is enough
+# for what this cache is for (avoiding a redundant network call for a
+# position looked at twice in the same session, not long-term persistence).
 _tablebase_cache: dict[str, dict | None] = {}
+_TABLEBASE_CACHE_MAX_SIZE = 5000
 
 # A tablebase move-list's `category` is reported for the position AFTER
 # that move — i.e. from the perspective of whoever moves next (the
@@ -42,15 +49,21 @@ INVERSE_CATEGORY = {
 
 
 def is_tablebase_eligible(fen: str) -> bool:
-    return len(chess.Board(fen).piece_map()) <= TABLEBASE_MAX_PIECES
+    try:
+        return len(chess.Board(fen).piece_map()) <= TABLEBASE_MAX_PIECES
+    except ValueError:
+        # Malformed FEN — chess.Board(fen) raises rather than returning
+        # something query_tablebase's docstring can treat as "just not
+        # tablebase-backed right now".
+        return False
 
 
 def query_tablebase(fen: str) -> dict | None:
     """Raw tablebase lookup for a FEN. Returns None if the position isn't
-    eligible (too many pieces), the position has no tablebase entry, or
-    the service is unreachable — callers should treat all three the same
-    way (this game/position just isn't tablebase-backed right now), not
-    crash the page around it.
+    eligible (too many pieces, or not a well-formed FEN at all), the
+    position has no tablebase entry, or the service is unreachable —
+    callers should treat all of those the same way (this game/position
+    just isn't tablebase-backed right now), not crash the page around it.
     """
     if fen in _tablebase_cache:
         return _tablebase_cache[fen]
@@ -58,6 +71,9 @@ def query_tablebase(fen: str) -> dict | None:
     if not is_tablebase_eligible(fen):
         _tablebase_cache[fen] = None
         return None
+
+    if len(_tablebase_cache) >= _TABLEBASE_CACHE_MAX_SIZE:
+        _tablebase_cache.clear()
 
     headers = {"User-Agent": TABLEBASE_USER_AGENT}
     last_error = None
@@ -187,6 +203,7 @@ def find_endgame_trainer_positions(source: str | None = None, limit: int = 8, sc
 
     found = []
     pgn_cache: dict[int, str] = {}
+    made_a_network_call = False
     for row in rows:
         if len(found) >= limit:
             break
@@ -198,6 +215,14 @@ def find_endgame_trainer_positions(source: str | None = None, limit: int = 8, sc
         except ValueError:
             continue
         fen = board.fen()
+        # Only pace actual network calls, not cache hits — up to scan_limit
+        # (default 40) lookups fired back-to-back is exactly the kind of
+        # tight loop the Chess.com archive-month loop paces for the same
+        # reason (fetchers.py's INTER_REQUEST_DELAY_SECONDS), and this
+        # endpoint has no such pacing of its own otherwise.
+        if fen not in _tablebase_cache and made_a_network_call:
+            time.sleep(API_INTER_REQUEST_DELAY_SECONDS)
+        made_a_network_call = made_a_network_call or fen not in _tablebase_cache
         result = get_tablebase_result(fen)
         if result is None:
             continue
@@ -222,10 +247,28 @@ def trainer_attempt_move(fen: str, move_uci: str) -> dict:
     if before is None:
         raise ValueError("Position is not tablebase-solvable")
 
+    # fen is guaranteed well-formed here: get_tablebase_result (above)
+    # already ran it through is_tablebase_eligible, which would have made
+    # query_tablebase return None (raising the ValueError above) for a
+    # malformed FEN. move_uci is separate, unvalidated client input though.
     board = chess.Board(fen)
-    move = chess.Move.from_uci(move_uci)
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        raise ValueError(f"'{move_uci}' is not a valid move")
+
     if move not in board.legal_moves:
-        raise ValueError(f"{move_uci} is not legal here")
+        # Auto-promote to queen if the raw move needs a promotion piece and
+        # the caller sent a bare 4-char UCI (no promotion letter) — same
+        # convention as puzzles.check_attempt, and the only one that makes
+        # sense here: this is exactly the K+P-type position the Endgame
+        # Trainer targets, so a pawn reaching the last rank is the common
+        # case, not an edge case, and there's no promotion picker in the UI.
+        queen_move = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
+        if queen_move in board.legal_moves:
+            move = queen_move
+        else:
+            raise ValueError(f"{move_uci} is not legal here")
     played_san = board.san(move)
     board.push(move)
 
