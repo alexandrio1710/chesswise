@@ -214,14 +214,20 @@ def generate_all_puzzles() -> None:
 
     for i, row in enumerate(todo, start=1):
         game_id = row["game_id"]
-        if game_id not in pgn_cache:
-            pgn_cache[game_id] = get_pgn(game_id)
-
         try:
+            if game_id not in pgn_cache:
+                pgn_cache[game_id] = get_pgn(game_id)
             puzzle = generate_puzzle_for_mistake(row, pgn_cache[game_id])
             store_puzzle(puzzle)
             generated += 1
         except Exception as e:
+            # get_pgn() used to run outside this try block — a failure
+            # fetching ANY one game's PGN (a deleted row, a DB hiccup)
+            # aborted this whole function for every OTHER mistake/game
+            # still queued behind it, not just the one that failed. Since
+            # tasks.py calls this after every single game's analysis
+            # (regardless of which game), that misattributed an unrelated
+            # failure onto whichever game happened to trigger this run.
             failed += 1
             logger.warning(f"Puzzle generation failed for mistake_id={row['id']} (game_id={game_id}): {e}")
             continue

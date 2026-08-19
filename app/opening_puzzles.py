@@ -252,6 +252,13 @@ def attempt_move(puzzle_id: int, move_index: int, from_square: str, to_square: s
         raise ValueError(f"Opening puzzle {puzzle_id} not found")
 
     solution = puzzle["solution_uci"]
+    if not 0 <= move_index < len(solution):
+        # Client-supplied, unvalidated — solution[move_index] below would
+        # otherwise raise an uncaught IndexError (a raw 500) instead of the
+        # clean 404 the route's own error handling implies for a bad
+        # puzzle_id (server.py only catches ValueError here).
+        raise ValueError(f"move_index {move_index} is out of range for this puzzle's solution")
+
     board = _board_after(puzzle["fen"], solution, move_index)
 
     try:
@@ -263,9 +270,14 @@ def attempt_move(puzzle_id: int, move_index: int, from_square: str, to_square: s
         move = queen_move if queen_move in board.legal_moves else None
 
     expected = chess.Move.from_uci(solution[move_index])
-    is_correct = move is not None and (
-        move == expected or (move.from_square, move.to_square) == (expected.from_square, expected.to_square)
-    )
+    # Exact match only — NOT just (from_square, to_square) — so a queen-
+    # auto-promotion attempt is correctly graded wrong (not silently
+    # accepted then secretly replaced with a different move) when the
+    # puzzle's actual solution needs a different promotion piece. This
+    # already handles the common "solution IS a queen promotion" case
+    # correctly, since `move` gets auto-filled to the queen-promotion UCI
+    # above when the bare move isn't legal.
+    is_correct = move is not None and move == expected
 
     if not is_correct:
         solved_board = _board_after(puzzle["fen"], solution, 0)

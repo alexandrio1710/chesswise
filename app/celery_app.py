@@ -47,4 +47,20 @@ celery_app.conf.update(
     # being repeated.
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    # Bounds a HUNG (not crashed) worker — a Stockfish subprocess that
+    # deadlocks or gets stuck on a corrupted position leaves the worker
+    # process itself alive, so task_acks_late/task_reject_on_worker_lost
+    # above (which only help once a worker actually dies) never trigger,
+    # and games.analysis_status stays "processing" forever with nothing to
+    # ever notice or report it. Deliberately generous — normal analysis is
+    # "under a minute" per config.py's own STOCKFISH_DEPTH comment, even a
+    # long game at a high custom `depth` (this endpoint's own query param)
+    # shouldn't remotely approach this; it's a backstop for a genuinely
+    # stuck process, not a performance budget. The soft limit raises
+    # SoftTimeLimitExceeded inside the task, caught by
+    # analyze_game_task's own except Exception (same retry-or-fail path as
+    # any other analysis error); the hard limit past that is a last-resort
+    # kill if even the soft-limit handling itself hangs.
+    task_soft_time_limit=600,
+    task_time_limit=660,
 )
