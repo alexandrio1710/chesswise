@@ -10,6 +10,8 @@ without the backend knowing anything about how it's rendered.
 import json
 import logging
 import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,16 +60,25 @@ PHASES = ("opening", "middlegame", "endgame")
 
 # Web-triggered refresh runs in a plain background thread (not a
 # multiprocessing pool — spawning one from a request handler that isn't
-# behind a `__main__` guard is asking for trouble on Windows), so the
-# whole app stays single-user/local-only in spirit. State lives in memory
-# since it only needs to survive one server process's lifetime.
-_refresh_status = {
-    "running": False,
-    "started_at": None,
-    "finished_at": None,
-    "error": None,
-    "result": None,
-}
+# behind a `__main__` guard is asking for trouble on Windows). State lives
+# in memory since it only needs to survive one server process's lifetime.
+#
+# Keyed per logged-in user id (or _LOCAL_KEY for the no-login/local-install
+# case), NOT one shared dict — a single global status here would mean two
+# different users on a shared deployment triggering a refresh around the
+# same time read and overwrite each other's progress and results. Keying
+# still serializes a given user (or the local install) against itself, same
+# as the original single-refresh-at-a-time behavior; different users can now
+# run refreshes concurrently, which the DB layer already supports (db.py's
+# WAL mode note) and the CLI/batch path already relies on.
+_LOCAL_KEY = "local"
+
+
+def _empty_refresh_status() -> dict:
+    return {"running": False, "started_at": None, "finished_at": None, "error": None, "result": None}
+
+
+_refresh_status: dict[object, dict] = {_LOCAL_KEY: _empty_refresh_status()}
 
 
 def _normalize_source(source: str | None) -> str | None:
@@ -106,23 +117,51 @@ class SettingsUpdate(BaseModel):
     chesscom_user: str | None = None
 
 
+# Per-user override for /api/settings and /api/refresh: cli_state.json
+# (a single shared file, by design — see its own docstring) stays the
+# CLI-parity store for the no-login/local-install case, unchanged. When a
+# session IS logged in, remembered usernames go in this in-memory,
+# per-user-id dict instead — otherwise two different logged-in users on a
+# shared deployment would read and overwrite the same shared file's
+# usernames. Same "survives one process's lifetime" tradeoff as
+# _refresh_status above.
+_user_settings: dict[int, dict] = {}
+
+
+def _settings_for(user: dict | None) -> dict:
+    return cli_state.load_state() if user is None else dict(_user_settings.get(user["id"], {}))
+
+
+def _save_settings_for(user: dict | None, lichess_user: str | None, chesscom_user: str | None) -> dict:
+    if user is None:
+        cli_state.save_state(lichess_user=lichess_user, chesscom_user=chesscom_user)
+        return cli_state.load_state()
+    current = _user_settings.setdefault(user["id"], {})
+    if lichess_user is not None:
+        current["lichess_user"] = lichess_user
+    if chesscom_user is not None:
+        current["chesscom_user"] = chesscom_user
+    return dict(current)
+
+
 @app.get("/api/settings")
-def api_get_settings():
-    """Currently remembered usernames — same file the CLI's `refresh`/
-    `digest` commands read from and write to (cli_state.py), so setting a
-    username here also makes `python cli.py refresh` work without
-    retyping it, and vice versa.
+def api_get_settings(user: dict | None = Depends(auth.get_current_user_optional)):
+    """Currently remembered usernames. Logged out (or no OAuth in play at
+    all): the same file the CLI's `refresh`/`digest` commands read from and
+    write to (cli_state.py), so setting a username here also makes
+    `python cli.py refresh` work without retyping it, and vice versa.
+    Logged in: this session's own remembered usernames instead — see
+    _user_settings above for why.
     """
-    return cli_state.load_state()
+    return _settings_for(user)
 
 
 @app.post("/api/settings")
-def api_save_settings(settings: SettingsUpdate):
-    cli_state.save_state(lichess_user=settings.lichess_user, chesscom_user=settings.chesscom_user)
-    return cli_state.load_state()
+def api_save_settings(settings: SettingsUpdate, user: dict | None = Depends(auth.get_current_user_optional)):
+    return _save_settings_for(user, settings.lichess_user, settings.chesscom_user)
 
 
-def _run_refresh(lichess_user: str | None, chesscom_user: str | None) -> None:
+def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None) -> None:
     from batch_analyze import run_batch_analysis
     from db import fetch_and_store
     from puzzles import generate_all_puzzles
@@ -136,26 +175,29 @@ def _run_refresh(lichess_user: str | None, chesscom_user: str | None) -> None:
         newly_analyzed = run_batch_analysis(workers=1)
         generate_all_puzzles()
         alerts.send_alerts_for_games(newly_analyzed)
-        _refresh_status["result"] = result
-        _refresh_status["error"] = None
+        _refresh_status[key]["result"] = result
+        _refresh_status[key]["error"] = None
     except Exception as e:
         logger.exception("Web-triggered refresh failed")
-        _refresh_status["error"] = str(e)
+        _refresh_status[key]["error"] = str(e)
     finally:
-        _refresh_status["running"] = False
-        _refresh_status["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _refresh_status[key]["running"] = False
+        _refresh_status[key]["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
 @app.post("/api/refresh")
-def api_trigger_refresh(settings: SettingsUpdate = SettingsUpdate()):
+def api_trigger_refresh(
+    settings: SettingsUpdate = SettingsUpdate(), user: dict | None = Depends(auth.get_current_user_optional),
+):
     """Kick off fetch (incremental) + analyze in the background and
     return immediately — poll /api/refresh/status for progress. Any
     username given here is saved for next time, same as the CLI.
     """
-    if _refresh_status["running"]:
+    key = user["id"] if user else _LOCAL_KEY
+    if _refresh_status.get(key, {}).get("running"):
         raise HTTPException(status_code=409, detail="A refresh is already running.")
 
-    state = cli_state.load_state()
+    state = _settings_for(user)
     lichess_user = settings.lichess_user or state.get("lichess_user")
     chesscom_user = settings.chesscom_user or state.get("chesscom_user")
     if not lichess_user and not chesscom_user:
@@ -165,19 +207,20 @@ def api_trigger_refresh(settings: SettingsUpdate = SettingsUpdate()):
         )
 
     if settings.lichess_user or settings.chesscom_user:
-        cli_state.save_state(lichess_user=settings.lichess_user, chesscom_user=settings.chesscom_user)
+        _save_settings_for(user, settings.lichess_user, settings.chesscom_user)
 
-    _refresh_status.update({
+    _refresh_status[key] = {
         "running": True, "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None, "error": None, "result": None,
-    })
-    threading.Thread(target=_run_refresh, args=(lichess_user, chesscom_user), daemon=True).start()
+    }
+    threading.Thread(target=_run_refresh, args=(key, lichess_user, chesscom_user), daemon=True).start()
     return {"status": "started"}
 
 
 @app.get("/api/refresh/status")
-def api_refresh_status():
-    return _refresh_status
+def api_refresh_status(user: dict | None = Depends(auth.get_current_user_optional)):
+    key = user["id"] if user else _LOCAL_KEY
+    return _refresh_status.get(key, _empty_refresh_status())
 
 
 @app.get("/api/summary")
@@ -346,7 +389,7 @@ def api_worst_games(source: str | None = Query(default=None), profile_id: int | 
 
 
 @app.get("/api/games/{game_id}")
-def api_game_detail(game_id: int):
+def api_game_detail(game_id: int, _access: dict | None = Depends(auth.require_game_access)):
     game = stats.get_game_detail(game_id)
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -393,7 +436,7 @@ def _run_game_report(game_id: int) -> None:
 
 
 @app.get("/api/games/{game_id}/report")
-def api_game_report(game_id: int, force: bool = Query(default=False)):
+def api_game_report(game_id: int, force: bool = Query(default=False), _access: dict | None = Depends(auth.require_game_access)):
     """Chess.com-style "Game Report": full ten-tier move classification,
     an estimated performance rating, and phase-by-phase accuracy for one
     game (see game_report.py). Poll this same endpoint until `status`
@@ -425,12 +468,42 @@ def api_game_report(game_id: int, force: bool = Query(default=False)):
     return {"status": "computing"}
 
 
+# Coarse per-IP throttle on the two unauthenticated, Stockfish-backed
+# Analyze Board endpoints below: each request costs real engine time (a
+# full pass per ply for /pgn — see manual_analysis.MAX_ANALYSIS_PLIES),
+# and neither route requires login, so without SOME limit here any client
+# with network access can pin every core just by looping requests.
+# In-memory/per-process, same tradeoff as _refresh_status/_report_jobs
+# above — not a substitute for a real rate limiter (e.g. at a reverse
+# proxy) in front of a public multi-tenant deployment.
+_ANALYZE_RATE_LIMIT = 10
+_ANALYZE_RATE_WINDOW_SECONDS = 60.0
+_analyze_request_log: dict[str, deque] = defaultdict(deque)
+_analyze_rate_lock = threading.Lock()
+
+
+def _rate_limit_analysis(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _analyze_rate_lock:
+        log = _analyze_request_log[client_ip]
+        while log and now - log[0] > _ANALYZE_RATE_WINDOW_SECONDS:
+            log.popleft()
+        if len(log) >= _ANALYZE_RATE_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many analysis requests — max {_ANALYZE_RATE_LIMIT} per "
+                f"{int(_ANALYZE_RATE_WINDOW_SECONDS)}s. Try again shortly.",
+            )
+        log.append(now)
+
+
 class AnalyzeFenRequest(BaseModel):
     fen: str
 
 
 @app.post("/api/analyze/fen")
-def api_analyze_fen(req: AnalyzeFenRequest):
+def api_analyze_fen(req: AnalyzeFenRequest, _rl: None = Depends(_rate_limit_analysis)):
     try:
         return manual_analysis.analyze_fen(req.fen)
     except ValueError as e:
@@ -445,7 +518,7 @@ class AnalyzePgnRequest(BaseModel):
 
 
 @app.post("/api/analyze/pgn")
-def api_analyze_pgn(req: AnalyzePgnRequest):
+def api_analyze_pgn(req: AnalyzePgnRequest, _rl: None = Depends(_rate_limit_analysis)):
     if req.save:
         if req.player_color not in ("white", "black"):
             raise HTTPException(status_code=400, detail="player_color ('white' or 'black') is required to save.")
@@ -462,7 +535,7 @@ def api_analyze_pgn(req: AnalyzePgnRequest):
 
 
 @app.get("/api/mistakes/{mistake_id}/tablebase")
-def api_mistake_tablebase(mistake_id: int):
+def api_mistake_tablebase(mistake_id: int, _access: dict | None = Depends(auth.require_mistake_access)):
     """For a flagged endgame mistake: was the position tablebase-solvable,
     and did the move played change the theoretical result. On-demand
     (not bundled into /api/games/{id}) since it costs a couple of
@@ -514,16 +587,14 @@ class NoteCreate(BaseModel):
 
 
 @app.post("/api/games/{game_id}/notes")
-def api_add_note(game_id: int, note: NoteCreate):
-    if stats.get_game_detail(game_id) is None:
-        raise HTTPException(status_code=404, detail="Game not found")
+def api_add_note(game_id: int, note: NoteCreate, _access: dict | None = Depends(auth.require_game_access)):
     if not note.text.strip():
         raise HTTPException(status_code=400, detail="Note text can't be empty")
     return stats.add_note(game_id, note.text.strip(), note.ply)
 
 
 @app.delete("/api/notes/{note_id}")
-def api_delete_note(note_id: int):
+def api_delete_note(note_id: int, _access: int = Depends(auth.require_note_access)):
     stats.delete_note(note_id)
     return {"status": "deleted"}
 
@@ -753,17 +824,13 @@ def api_create_profile(body: ProfileCreate):
 
 
 @app.delete("/api/profiles/{profile_id}")
-def api_delete_profile(profile_id: int):
-    if profiles.get_profile(profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+def api_delete_profile(profile_id: int, _access: dict | None = Depends(auth.require_profile_access)):
     profiles.delete_profile(profile_id)
     return {"status": "deleted"}
 
 
 @app.post("/api/profiles/{profile_id}/links")
-def api_link_username(profile_id: int, body: UsernameLink):
-    if profiles.get_profile(profile_id) is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+def api_link_username(profile_id: int, body: UsernameLink, _access: dict | None = Depends(auth.require_profile_access)):
     if body.source not in ("lichess", "chesscom"):
         raise HTTPException(status_code=400, detail="source must be 'lichess' or 'chesscom'")
     username = body.username.strip()
@@ -773,7 +840,10 @@ def api_link_username(profile_id: int, body: UsernameLink):
 
 
 @app.delete("/api/profiles/{profile_id}/links")
-def api_unlink_username(profile_id: int, source: str = Query(...), username: str = Query(...)):
+def api_unlink_username(
+    profile_id: int, source: str = Query(...), username: str = Query(...),
+    _access: dict | None = Depends(auth.require_profile_access),
+):
     profiles.unlink_username(profile_id, source, username)
     return {"status": "unlinked"}
 
@@ -827,7 +897,7 @@ def api_create_goal(body: GoalCreate):
 
 
 @app.delete("/api/goals/{goal_id}")
-def api_delete_goal(goal_id: int):
+def api_delete_goal(goal_id: int, _access: None = Depends(auth.require_goal_access)):
     progress.delete_goal(goal_id)
     return {"status": "deleted"}
 
@@ -839,18 +909,32 @@ def progress_page():
 
 # --- Web platform: Lichess OAuth, per-user SM-2 SRS, background analysis --
 #
-# Additive, not a rewrite: every route above this line is untouched, so the
-# app keeps working exactly as it did — no login, one implicit local user —
-# for anyone who just wants to run it on their own machine. The routes below
-# are the multi-user-aware surface: they all require a session (a request
-# with no/expired cookie gets a 401 from auth.get_current_user) and are
-# scoped to the requesting user's own data via auth.require_game_owner /
-# auth.require_puzzle_owner or an explicit `WHERE user_id = ?` filter.
+# Additive, not a rewrite: every route above this line still works with no
+# login for a local install, exactly as it did before OAuth existed —
+# they're now gated by auth.require_*_access (games, notes, goals,
+# profiles, mistakes), which lets unowned rows (user_id IS NULL: every row
+# from a local/never-logged-in install) through to anyone, but 404s an
+# owned row for anyone except the user who owns it. The routes below are
+# the fully multi-user-aware surface: they all require a session
+# unconditionally (a request with no/expired cookie gets a 401 from
+# auth.get_current_user) and are scoped to the requesting user's own data
+# via auth.require_game_owner / auth.require_puzzle_owner or an explicit
+# `WHERE user_id = ?` filter.
 #
 # Note: list/aggregate endpoints above (stats, insights, search, puzzle
 # queue) are NOT yet user-scoped — they'd need a `user_id` filter threaded
 # through stats.py/insights.py/srs.py the same way `profile_id` already is,
 # which is a larger, mostly-mechanical follow-up beyond these four features.
+#
+# Bigger caveat than either of the above: nothing on the *ingestion* side
+# (fetch_and_store/save_games, the /api/refresh path) tags a freshly-fetched
+# game with user_id yet — only claim_unowned_data does, and only in one
+# retroactive bulk sweep triggered by /api/me/claim. So on a real multi-user
+# deployment, games pulled in after login via the existing Refresh button
+# still land unowned (and therefore world-readable by the rule above) until
+# someone claims them. The access checks here are necessary but not
+# sufficient for safe multi-tenant use; making ingestion itself user_id-aware
+# is a separate, larger follow-up.
 
 @app.get("/auth/lichess/login")
 def auth_lichess_login():
@@ -898,18 +982,6 @@ def api_me_claim(user: dict = Depends(auth.get_current_user)):
     auth.claim_unowned_data's docstring for why this is opt-in, not automatic.
     """
     return auth.claim_unowned_data(user["id"])
-
-
-@app.get("/api/games/{game_id}/owned")
-def api_game_owned_example(game_id: int, user: dict = Depends(auth.require_game_owner)):
-    """Reference implementation of the ownership dependency requested for
-    Section 1: `auth.require_game_owner` resolves `game_id` from the path,
-    404s unless it belongs to the logged-in user, and hands the route the
-    verified user — the same pattern to apply to any other per-game/per-
-    puzzle route that needs to guarantee "your data, not someone else's".
-    """
-    game = stats.get_game_detail(game_id)
-    return {"game": game}
 
 
 @app.post("/api/analyze/start")

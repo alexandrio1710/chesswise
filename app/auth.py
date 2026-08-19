@@ -331,3 +331,113 @@ def require_game_owner(game_id: int, user: dict = Depends(get_current_user)) -> 
 def require_puzzle_owner(puzzle_id: int, user: dict = Depends(get_current_user)) -> dict:
     verify_owns_puzzle(puzzle_id, user)
     return user
+
+
+# --- Optional-login access (pre-OAuth routes) -------------------------------
+#
+# require_game_owner/require_puzzle_owner above always require login — right
+# for routes built OAuth-first (srs2). But most of the app's routes
+# (games, notes, goals, profiles) predate OAuth and must keep working with
+# zero login for a local install, where nothing has an owner at all. The
+# rule these enforce: a row with no owner (user_id IS NULL — every row from
+# a local/never-logged-in install, or anything not yet claimed via
+# /api/me/claim) stays visible to anyone, same as before OAuth existed; a
+# row that DOES have an owner is visible only to that same logged-in user.
+# Same 404-not-403 shape as verify_owns_game, for the same reason.
+
+def _check_owner_or_unowned(owner_user_id: int | None, user: dict | None, not_found_detail: str) -> None:
+    if owner_user_id is None:
+        return
+    if user is None or user["id"] != owner_user_id:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+
+
+def _owned_row(query: str, params: tuple, not_found_detail: str, user: dict | None):
+    """Runs `query` (must SELECT an `owner_user_id` column) and applies the
+    unowned-or-mine rule above. Returns the full row so callers needing more
+    than just the owner id (verify_can_access_note's game_id) don't need a
+    second query.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(query, params).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    _check_owner_or_unowned(row["owner_user_id"], user, not_found_detail)
+    return row
+
+
+def verify_can_access_game(game_id: int, user: dict | None) -> None:
+    _owned_row(
+        "SELECT user_id AS owner_user_id FROM games WHERE id = ?",
+        (game_id,), "Game not found", user,
+    )
+
+
+def require_game_access(game_id: int, user: dict | None = Depends(get_current_user_optional)) -> dict | None:
+    """Route dependency for legacy game routes: 404s on a nonexistent game
+    or one owned by someone else, but — unlike require_game_owner — lets an
+    unauthenticated request through when the game has no owner at all.
+    """
+    verify_can_access_game(game_id, user)
+    return user
+
+
+def verify_can_access_profile(profile_id: int, user: dict | None) -> None:
+    _owned_row(
+        "SELECT user_id AS owner_user_id FROM profiles WHERE id = ?",
+        (profile_id,), "Profile not found", user,
+    )
+
+
+def require_profile_access(profile_id: int, user: dict | None = Depends(get_current_user_optional)) -> dict | None:
+    verify_can_access_profile(profile_id, user)
+    return user
+
+
+def verify_can_access_note(note_id: int, user: dict | None) -> int:
+    """Notes have no owner column of their own — ownership is inherited
+    from the game they're attached to. Returns the note's game_id on
+    success, since callers (delete) already need it.
+    """
+    row = _owned_row(
+        "SELECT g.user_id AS owner_user_id, n.game_id FROM notes n "
+        "JOIN games g ON g.id = n.game_id WHERE n.id = ?",
+        (note_id,), "Note not found", user,
+    )
+    return row["game_id"]
+
+
+def require_note_access(note_id: int, user: dict | None = Depends(get_current_user_optional)) -> int:
+    return verify_can_access_note(note_id, user)
+
+
+def verify_can_access_goal(goal_id: int, user: dict | None) -> None:
+    """Goals have no owner column either, and aren't required to have a
+    profile_id at all (progress.create_goal). No profile, or a profile
+    with no owner, both mean "unowned" — visible to anyone, same as any
+    other pre-OAuth local data.
+    """
+    _owned_row(
+        "SELECT p.user_id AS owner_user_id FROM goals g "
+        "LEFT JOIN profiles p ON p.id = g.profile_id WHERE g.id = ?",
+        (goal_id,), "Goal not found", user,
+    )
+
+
+def require_goal_access(goal_id: int, user: dict | None = Depends(get_current_user_optional)) -> None:
+    verify_can_access_goal(goal_id, user)
+
+
+def verify_can_access_mistake(mistake_id: int, user: dict | None) -> None:
+    _owned_row(
+        "SELECT g.user_id AS owner_user_id FROM mistakes m "
+        "JOIN games g ON g.id = m.game_id WHERE m.id = ?",
+        (mistake_id,), "Mistake not found", user,
+    )
+
+
+def require_mistake_access(mistake_id: int, user: dict | None = Depends(get_current_user_optional)) -> None:
+    verify_can_access_mistake(mistake_id, user)

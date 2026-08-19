@@ -30,6 +30,28 @@ from mistakes import STANDARD_VARIANT_TAGS, classify_phase, classify_tier, get_p
 from puzzles import get_top_lines
 from stats import compute_game_accuracy
 
+# This endpoint takes arbitrary pasted text with no login required (Advanced
+# features, Section 5 keeps the Analyze board zero-login, same as the rest
+# of the local app) and runs a full Stockfish pass per ply — real CPU cost,
+# not bounded by anything else in the request. 400 plies is ~200 full
+# moves, generous headroom over any real game (even long GM games rarely
+# clear 150), so this only ever rejects input that isn't a single
+# well-formed game — while still capping the worst-case cost of a request
+# to a fixed number of engine calls.
+MAX_ANALYSIS_PLIES = 400
+
+
+def _count_plies(pgn_text: str) -> int:
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    if game is None:
+        return 0
+    n = 0
+    node = game
+    while node.variations:
+        node = node.variations[0]
+        n += 1
+    return n
+
 
 def looks_like_fen(text: str) -> bool:
     """A FEN is one line with exactly 6 space-separated fields and no PGN
@@ -59,6 +81,13 @@ def _graded_moves(pgn_text: str, depth: int) -> list[dict]:
     variant = get_pgn_variant(pgn_text)
     if variant not in STANDARD_VARIANT_TAGS:
         raise ValueError(f"Unsupported variant: {variant} — Stockfish can only analyze standard chess.")
+
+    ply_count = _count_plies(pgn_text)
+    if ply_count > MAX_ANALYSIS_PLIES:
+        raise ValueError(
+            f"This game has {ply_count} half-moves, over the {MAX_ANALYSIS_PLIES}-ply limit for "
+            "on-demand analysis — check the PGN is a single well-formed game."
+        )
 
     moves_raw = analyze_game_moves(pgn_text, depth=depth)
     if not moves_raw:

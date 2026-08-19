@@ -1,5 +1,66 @@
 # Changelog
 
+## v7 — Ownership enforcement for the pre-OAuth routes; Analyze Board hardening
+
+A follow-up to v5's OAuth/session foundations: `games.user_id` /
+`profiles.user_id` / `puzzles.user_id` existed and were populated by
+`auth.claim_unowned_data()`, but almost none of the legacy (pre-OAuth)
+routes actually checked them — `GET /api/games/{id}`, its `/report` and
+`/notes` routes, `DELETE /api/notes/{id}`, `DELETE /api/goals/{id}`,
+`DELETE /api/profiles/{id}`, `POST /api/profiles/{id}/links`, and
+`GET /api/mistakes/{id}/tablebase` would all read or delete any row by id
+regardless of who was asking. Harmless for a single local install, but a
+real bug the day this runs as the shared multi-user service the README's
+roadmap describes.
+
+- New `auth.require_*_access` dependencies (game, profile, note, goal,
+  mistake) enforce one rule: a row with no owner (`user_id IS NULL` —
+  everything from a local, never-logged-in install) stays visible to
+  anyone, same as before OAuth existed; an owned row is visible only to
+  the logged-in user who owns it, 404 (not 403) otherwise — same shape as
+  the existing `require_game_owner`/`require_puzzle_owner`, just usable
+  without forcing a login. Notes/goals have no owner column of their own;
+  ownership is resolved through the game/profile they're attached to.
+- Removed `GET /api/games/{id}/owned`, the "reference implementation"
+  route left in the router from v5 — the pattern it demonstrated is now
+  the real routes above, not a standalone example.
+- `_refresh_status` (the in-memory `/api/refresh` progress dict) is now
+  keyed per logged-in user (or one shared key for the no-login/local
+  case), so two different users on a shared deployment triggering a
+  refresh around the same time no longer read or overwrite each other's
+  progress. `/api/settings` gets the same per-user split for remembered
+  usernames, while staying on the original shared `cli_config.json` file
+  for the no-login case (so CLI/web parity for a local install is
+  unchanged).
+- Known remaining gap, called out where it lives
+  (`server.py`'s Section-1 comment block): fetch/ingestion
+  (`fetch_and_store`/`save_games`) still doesn't tag new games with
+  `user_id` — only the one-time `/api/me/claim` sweep does. So on a real
+  multi-user deployment, games pulled in after login via the existing
+  Refresh button land unowned (world-readable by the rule above) until
+  claimed. These access checks are necessary but not sufficient for safe
+  multi-tenant use; making ingestion itself user_id-aware is a separate,
+  larger follow-up.
+- **Analyze Board** (`POST /api/analyze/pgn`, `/api/analyze/fen`) takes
+  arbitrary pasted input with no login required, and each request costs
+  real Stockfish time — unbounded before this. Now: pasted PGNs over 400
+  plies (`manual_analysis.MAX_ANALYSIS_PLIES`, ~200 full moves — well past
+  any real game) are rejected before any engine work runs, and both
+  routes are behind a coarse in-memory per-IP rate limit (10 requests /
+  60s). Neither is a substitute for a real rate limiter at a reverse proxy
+  in front of a public deployment, but both close the "one client loops
+  requests and pins every core" case for a local/small deployment.
+- `DELETE /api/notes/{id}` and `DELETE /api/goals/{id}` used to report
+  `{"status": "deleted"}` even for a nonexistent id (unlike
+  `DELETE /api/profiles/{id}`, which already 404'd). Fixed as a side
+  effect of the access-check dependency, which resolves and 404s on a
+  missing row before the route body runs.
+- New `tests/test_auth.py` and `tests/test_server.py` — the app's HTTP
+  layer (`server.py`, 1000+ lines) and session/OAuth layer (`auth.py`) had
+  zero test coverage before this; both are now exercised via
+  `fastapi.testclient.TestClient` against a throwaway DB, covering every
+  access-check permutation above plus the ply cap and rate limit.
+
 ## v6 — Renamed to Chesswise; Game Report (ten-tier review, Elo estimate)
 
 **Renamed from "Chess Mistake Tracker" to "Chesswise"** — the project outgrew
