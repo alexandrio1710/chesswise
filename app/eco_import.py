@@ -15,9 +15,8 @@ after upstream publishes corrections just updates the affected rows.
 import logging
 import re
 
-import requests
-
 from db import get_connection
+from fetchers import _request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,12 @@ def import_eco_codes() -> int:
     all_rows: list[tuple[str, str, str]] = []
     for volume in _VOLUMES:
         url = _BASE_URL.format(volume=volume)
-        resp = requests.get(url, timeout=30)
+        # Retries on a transient GitHub-raw hiccup (429/5xx/network error)
+        # instead of a bare one-shot request — previously, one transient
+        # failure on any volume (e.g. d.tsv, 4 of 5) discarded every
+        # already-downloaded volume in all_rows too, since nothing is
+        # written to the DB until the whole loop finishes.
+        resp = _request_with_retry("GET", url, timeout=30)
         resp.raise_for_status()
         rows = _parse_tsv(resp.text)
         logger.info(f"Fetched {len(rows)} openings from {volume}.tsv")

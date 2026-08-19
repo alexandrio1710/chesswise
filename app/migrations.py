@@ -625,6 +625,31 @@ def run_migrations() -> None:
                 migration_fn(conn)
                 _set_schema_version(conn, version)
                 conn.commit()
+            except sqlite3.OperationalError as e:
+                # batch_analyze.py spawns one worker process per core on
+                # Windows (ProcessPoolExecutor's `spawn` method), and each
+                # freshly imports db.py, which runs this same
+                # run_migrations() at import time. In the narrow window
+                # right after an upgrade — a migration genuinely pending
+                # when a parallel batch run starts — more than one worker
+                # can see the same column missing and both issue the same
+                # ALTER TABLE. The loser isn't a real failure, just this
+                # migration having already been applied by a sibling
+                # process a moment earlier; treat it as done rather than
+                # crashing that worker.
+                if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                    conn.rollback()
+                    logger.warning(
+                        f"Migration {version} ({description}) appears to already be applied "
+                        f"(likely a concurrent worker process got there first): {e}. Continuing."
+                    )
+                    _set_schema_version(conn, version)
+                    conn.commit()
+                    continue
+                conn.rollback()
+                restore_hint = f" Restore it from {backup_path}." if backup_path else ""
+                logger.error(f"Migration {version} ({description}) failed: {e}.{restore_hint}")
+                raise
             except Exception as e:
                 conn.rollback()
                 restore_hint = f" Restore it from {backup_path}." if backup_path else ""

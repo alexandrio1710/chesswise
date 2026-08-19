@@ -22,6 +22,7 @@ import logging
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
 from config import ANALYSIS_WORKERS, STOCKFISH_DEPTH
 from db import get_connection, get_pgn
@@ -109,7 +110,21 @@ def run_batch_analysis(depth: int = STOCKFISH_DEPTH, workers: int = ANALYSIS_WOR
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_analyze_one, gid, depth): gid for gid in game_ids}
             for future in as_completed(futures):
-                game_id, status, payload = future.result()
+                game_id = futures[future]
+                try:
+                    _, status, payload = future.result()
+                except BrokenProcessPool as e:
+                    # A worker process died at the OS level (killed, OOM,
+                    # etc.) rather than raising a normal Python exception —
+                    # _analyze_one's own try/except only covers the latter.
+                    # Every future submitted to this now-dead pool raises
+                    # the same way, so this fires once per remaining game
+                    # rather than crashing the whole batch on the first one.
+                    logger.warning(
+                        f"Worker process died analyzing game_id={game_id}: {e}. "
+                        "Leaving it unanalyzed — it'll be retried next run."
+                    )
+                    status, payload = "failed", str(e)
                 completed += 1
                 total_mistakes, skipped = _handle_result(
                     game_id, status, payload, labels, completed, total, total_mistakes, skipped

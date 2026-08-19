@@ -19,16 +19,32 @@ import requests
 import config
 from alerts import send_alerts_for_games
 from batch_analyze import run_batch_analysis
-from db import count_games, fetch_and_store, get_connection
+from db import fetch_and_store, get_connection
+from fetchers import _request_with_retry
 from stats import top_takeaway
 
 logger = logging.getLogger(__name__)
 
 
-def _total_mistakes() -> int:
+class DigestError(Exception):
+    """Raised on a configuration or delivery failure — a plain exception
+    rather than sys.exit(), so run_digest() stays safe to call from
+    anywhere (this module's own __main__ block, but also potentially a
+    longer-lived caller like a future web-triggered digest) without
+    sys.exit()'s SystemExit tearing down the whole calling process. Only
+    __main__ below turns this into a process exit code.
+    """
+
+
+def _mistakes_for_games(game_ids: list[int]) -> int:
+    if not game_ids:
+        return 0
     conn = get_connection()
     try:
-        return conn.execute("SELECT COUNT(*) as n FROM mistakes").fetchone()["n"]
+        placeholders = ",".join("?" * len(game_ids))
+        return conn.execute(
+            f"SELECT COUNT(*) as n FROM mistakes WHERE game_id IN ({placeholders})", game_ids
+        ).fetchone()["n"]
     finally:
         conn.close()
 
@@ -40,17 +56,13 @@ def run_digest(
 ) -> None:
     webhook_url = webhook_url or config.DISCORD_WEBHOOK_URL
     if not webhook_url:
-        logger.error(
+        raise DigestError(
             "No Discord webhook URL configured. Set DISCORD_WEBHOOK_URL in "
             "your environment (or .env), or pass --webhook-url."
         )
-        sys.exit(1)
-
-    games_before = sum(count_games().values())
-    mistakes_before = _total_mistakes()
 
     logger.info("Refreshing games...")
-    fetch_and_store(lichess_user, chesscom_user, refresh=True)
+    fetch_result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
 
     logger.info("Analyzing new games...")
     newly_analyzed = run_batch_analysis()
@@ -62,8 +74,15 @@ def run_digest(
     if alert_count:
         logger.info(f"Posted {alert_count} individual game alert(s).")
 
-    new_games = sum(count_games().values()) - games_before
-    new_mistakes = _total_mistakes() - mistakes_before
+    # Derived directly from what THIS run did (fetch_and_store's own
+    # "inserted" count, and mistakes scoped to exactly the games this run
+    # analyzed) rather than a before/after global COUNT(*) diff — this app
+    # supports multiple local profiles sharing one DB (profiles.py), and a
+    # global diff would have folded in any other profile's games/mistakes
+    # that happened to get fetched/analyzed around the same time, not just
+    # this run's own.
+    new_games = fetch_result["inserted"]
+    new_mistakes = _mistakes_for_games(newly_analyzed)
     takeaway = top_takeaway()
 
     message = (
@@ -76,11 +95,13 @@ def run_digest(
     logger.info(f"Posting to Discord:\n{message}")
 
     try:
-        resp = requests.post(webhook_url, json={"content": message}, timeout=15)
+        resp = _request_with_retry("POST", webhook_url, json={"content": message}, timeout=15)
         resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to post digest to Discord: {e}")
-        sys.exit(1)
+    except (requests.exceptions.RequestException, ConnectionError) as e:
+        # _request_with_retry raises a plain (builtin) ConnectionError, not
+        # a requests.exceptions one, once retries are exhausted on a
+        # network error — not caught by RequestException alone.
+        raise DigestError(f"Failed to post digest to Discord: {e}") from e
 
     logger.info("Done.")
 
@@ -104,4 +125,8 @@ if __name__ == "__main__":
                       "LICHESS_USERNAME/CHESSCOM_USERNAME in your environment.")
         sys.exit(1)
 
-    run_digest(args.lichess_user, args.chesscom_user, args.webhook_url)
+    try:
+        run_digest(args.lichess_user, args.chesscom_user, args.webhook_url)
+    except DigestError as e:
+        logger.error(str(e))
+        sys.exit(1)

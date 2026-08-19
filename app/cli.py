@@ -88,7 +88,7 @@ def cmd_puzzles(args) -> None:
 
 
 def cmd_digest(args) -> None:
-    from digest import run_digest
+    from digest import DigestError, run_digest
 
     lichess_user, chesscom_user = _resolve_usernames(args)
     if not lichess_user and not chesscom_user:
@@ -96,7 +96,18 @@ def cmd_digest(args) -> None:
                       "Pass --lichess-user and/or --chesscom-user.")
         sys.exit(1)
 
-    run_digest(lichess_user, chesscom_user, args.webhook_url)
+    try:
+        run_digest(lichess_user, chesscom_user, args.webhook_url)
+    except DigestError as e:
+        # Still remember the usernames even though the digest itself
+        # failed (webhook post, etc.) — they were valid enough to run the
+        # fetch/analyze half successfully, and previously a mid-function
+        # sys.exit() here skipped save_state() entirely, silently losing
+        # this convenience on any digest failure, not just a bad username.
+        logger.error(str(e))
+        save_state(lichess_user=lichess_user, chesscom_user=chesscom_user)
+        sys.exit(1)
+
     save_state(lichess_user=lichess_user, chesscom_user=chesscom_user)
 
 

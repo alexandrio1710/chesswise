@@ -18,6 +18,7 @@ import logging
 import requests
 
 import config
+from fetchers import _request_with_retry
 from stats import compute_game_accuracy, get_game_detail, get_game_moves
 
 logger = logging.getLogger(__name__)
@@ -83,9 +84,18 @@ def send_alerts_for_games(game_ids: list[int], webhook_url: str | None = None) -
         if alert is None:
             continue
         try:
-            resp = requests.post(webhook_url, json={"content": format_alert_message(alert)}, timeout=15)
+            # Retries on 429/5xx/transient network errors, same as every
+            # other outbound call in this app (fetchers.py) — previously a
+            # plain one-shot requests.post, the only outbound call in the
+            # whole codebase with no retry/backoff at all, despite this
+            # loop being able to fire several of these back-to-back after a
+            # batch analysis flags multiple rough games.
+            resp = _request_with_retry("POST", webhook_url, json={"content": format_alert_message(alert)}, timeout=15)
             resp.raise_for_status()
             sent += 1
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, ConnectionError) as e:
+            # _request_with_retry raises a plain (builtin) ConnectionError,
+            # not a requests.exceptions one, once retries are exhausted on
+            # a network error — not caught by RequestException alone.
             logger.warning(f"Failed to post game alert for game {game_id}: {e}")
     return sent
