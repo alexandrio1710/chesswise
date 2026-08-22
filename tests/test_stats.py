@@ -3,9 +3,14 @@
 import itertools
 
 from db import get_connection
-from stats import _is_immediately_preceding_month, opening_family, opening_stats
+from stats import _is_immediately_preceding_month, annotate_fen, get_starting_fen, opening_family, opening_stats
 
 _id_counter = itertools.count(1)
+
+_SAMPLE_PGN = (
+    '[Event "Test"]\n[White "A"]\n[Black "B"]\n[Result "1-0"]\n\n'
+    "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 1-0\n"
+)
 
 
 class TestOpeningFamilyLichessStyle:
@@ -128,3 +133,40 @@ class TestOpeningStatsEmptyOpeningName:
         results = {r["opening_name"]: r for r in opening_stats()}
         assert results["Test Opening XYZ"]["opening_phase_mistakes"] == 1
         assert "" not in results
+
+
+class TestAnnotateFen:
+    """Backs the game page's interactive board — the client only ever
+    renders a FEN it's given, so these must line up exactly with the moves
+    actually played.
+    """
+
+    def test_starting_fen_is_the_standard_position(self):
+        assert get_starting_fen(_SAMPLE_PGN) == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+    def test_fen_after_first_move(self):
+        moves = [{"ply": 1}]
+        result = annotate_fen(moves, _SAMPLE_PGN)
+        assert result[0]["fen_after"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+
+    def test_fen_after_matches_every_ply_in_order(self):
+        moves = [{"ply": i} for i in range(1, 7)]  # 1.e4 e5 2.Nf3 Nc6 3.Bb5 a6
+        result = annotate_fen(moves, _SAMPLE_PGN)
+        assert result[-1]["fen_after"] == "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4"
+
+    def test_empty_pgn_text_returns_none_rather_than_raising(self):
+        # chess.pgn.read_game returns None only for a genuinely empty
+        # stream — garbage text like "not a pgn" is parsed leniently as an
+        # empty game at the standard starting position, not a parse error.
+        moves = [{"ply": 1}]
+        result = annotate_fen(moves, "")
+        assert result[0]["fen_after"] is None
+        assert get_starting_fen("") is None
+
+    def test_garbage_pgn_text_is_parsed_leniently_as_an_empty_game(self):
+        assert get_starting_fen("not a pgn") == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+    def test_does_not_mutate_the_input_list(self):
+        moves = [{"ply": 1}]
+        annotate_fen(moves, _SAMPLE_PGN)
+        assert "fen_after" not in moves[0]

@@ -6,10 +6,13 @@ Every function accepts an optional `source` filter ('lichess' | 'chesscom'
 duplicating query logic.
 """
 
+import io
 import json
 import math
 import re
 from datetime import datetime, timedelta
+
+import chess.pgn
 
 from db import get_connection
 
@@ -534,6 +537,55 @@ def get_game_moves(game_id: int) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def annotate_fen(moves: list[dict], pgn_text: str) -> list[dict]:
+    """Copy of `moves` with a "fen_after" key added: the board position
+    (FEN) immediately after that move. Lets the game page render an actual
+    board the player can step through move-by-move (previously the only
+    board on that page was a single static snapshot of the critical
+    moment) without the client doing any chess logic of its own — same
+    "server does chess logic, client only renders FEN" split already used
+    everywhere else a board appears in this app (puzzles.py,
+    opening_explorer.py, the Endgame Trainer).
+
+    None for a move whose ply doesn't turn up in a fresh replay of `pgn_text`
+    (shouldn't normally happen for a game that's already been analyzed from
+    this same PGN, but a client rendering a board must not silently show
+    the wrong position if it ever does).
+    """
+    result = [dict(m) for m in moves]
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    if game is None:
+        for m in result:
+            m["fen_after"] = None
+        return result
+
+    fen_by_ply = {}
+    board = game.board()
+    node = game
+    ply = 0
+    while node.variations:
+        next_node = node.variations[0]
+        board.push(next_node.move)
+        ply += 1
+        fen_by_ply[ply] = board.fen()
+        node = next_node
+
+    for m in result:
+        m["fen_after"] = fen_by_ply.get(m["ply"])
+    return result
+
+
+def get_starting_fen(pgn_text: str) -> str | None:
+    """The board position before any move — usually the standard starting
+    position, but respects a custom [FEN]/[SetUp] header (a "From
+    Position" game — see mistakes.STANDARD_VARIANT_TAGS) the same way
+    annotate_fen's per-move FENs do, since both read it via
+    chess.pgn.read_game(...).board().
+    """
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    return game.board().fen() if game else None
 
 
 # ACPL->accuracy decay constant — this project's own calibration (not

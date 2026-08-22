@@ -399,6 +399,7 @@ def api_game_detail(game_id: int, _access: dict | None = Depends(auth.require_ga
         raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
 
     moves = clock_analysis.annotate_time_spent(stats.get_game_moves(game_id), game["pgn"])
+    moves = stats.annotate_fen(moves, game["pgn"])
     critical_moment = stats.get_critical_moment(game_id, game["pgn"], game["color"])
 
     return {
@@ -408,6 +409,7 @@ def api_game_detail(game_id: int, _access: dict | None = Depends(auth.require_ga
             "time_control": game["time_control"], "opening_name": game["opening_name"],
         },
         "moves": moves,
+        "start_fen": stats.get_starting_fen(game["pgn"]),
         "accuracy": stats.compute_game_accuracy(moves, game["color"]),
         "critical_moment": critical_moment,
         "notes": stats.get_notes(game_id),
