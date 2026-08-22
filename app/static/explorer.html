@@ -98,6 +98,26 @@
   }
   nav.top-nav a:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
   nav.top-nav a.active { background: var(--accent); color: #fff; border-color: transparent; }
+  .nav-dropdown { position: relative; display: inline-block; }
+  .nav-dropdown-toggle {
+    font: inherit; font-size: 13px; padding: 7px 14px; border: 1px solid var(--border);
+    border-radius: 999px; background: none; color: var(--text-secondary); cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .nav-dropdown-toggle:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
+  .nav-dropdown-toggle.active-section { background: var(--accent); color: #fff; border-color: transparent; }
+  .nav-dropdown-menu {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 6px; min-width: 150px; box-shadow: 0 12px 32px rgba(17,17,26,0.25);
+  }
+  .nav-dropdown.open .nav-dropdown-menu { display: block; }
+  .nav-dropdown-menu a {
+    display: block; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+    color: var(--text-secondary); text-decoration: none; white-space: nowrap;
+  }
+  .nav-dropdown-menu a:hover { background: var(--accent-soft); color: var(--text-primary); }
+  .nav-dropdown-menu a.active { background: var(--accent); color: #fff; }
   .icon-btn {
     font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 999px;
     border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
@@ -182,13 +202,25 @@
       <nav class="top-nav">
         <a href="/">Dashboard</a>
         <a href="/puzzles">Puzzles</a>
-        <a href="/explorer" class="active">Explorer</a>
-        <a href="/endgame">Endgame</a>
-        <a href="/analyze">Analyze</a>
-        <a href="/insights">Insights</a>
-        <a href="/clock">Clock</a>
+        <div class="nav-dropdown">
+          <button type="button" class="nav-dropdown-toggle active-section" aria-haspopup="true" aria-expanded="false">Train ▾</button>
+          <div class="nav-dropdown-menu">
+            <a href="/explorer" class="active">Explorer</a>
+            <a href="/endgame">Endgame</a>
+            <a href="/analyze">Analyze</a>
+          </div>
+        </div>
+        <div class="nav-dropdown">
+          <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">Insights ▾</button>
+          <div class="nav-dropdown-menu">
+            <a href="/insights">Insights</a>
+            <a href="/clock">Clock</a>
+            <a href="/progress">Progress</a>
+          </div>
+        </div>
         <a href="/search">Search</a>
       </nav>
+      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
       <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
     </div>
   </header>
@@ -515,6 +547,39 @@
     const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
     localStorage.setItem("theme", next);
     applyTheme(next);
+  });
+
+  // Nav dropdowns (Train / Insights groups) — one open at a time, closes
+  // on an outside click or Escape. Duplicated identically across every
+  // page (no shared JS include in this app), same as the theme toggle above.
+  document.querySelectorAll(".nav-dropdown-toggle").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const dropdown = btn.closest(".nav-dropdown");
+      const wasOpen = dropdown.classList.contains("open");
+      document.querySelectorAll(".nav-dropdown.open").forEach(d => {
+        d.classList.remove("open");
+        d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+      });
+      if (!wasOpen) {
+        dropdown.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".nav-dropdown.open").forEach(d => {
+      d.classList.remove("open");
+      d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+    });
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".nav-dropdown.open").forEach(d => {
+        d.classList.remove("open");
+        d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+      });
+    }
   });
 
   loadPosition();
