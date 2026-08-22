@@ -1,5 +1,40 @@
 # Changelog
 
+## v9 — Interactive game board; every board's checkering was invisible; nav consolidation
+
+**Every chessboard in the app was rendering with no light/dark square
+checkering at all.** Puzzles, the Opening Explorer, the Endgame Trainer,
+and the Analyze board's FEN viewer all referenced `--board-light`,
+`--board-dark`, `--board-selected`, and `--board-dot` in their CSS, but
+none of those custom properties were ever actually defined anywhere —
+confirmed via computed style (`backgroundColor: rgba(0,0,0,0)`), not just
+by reading the CSS. Every board in the app has been a blank grid with
+floating piece characters since the Catppuccin redesign. Defined all four
+(dark/light theme variants) on every page that uses a board.
+
+**The game analysis page had no interactive board.** The only board on it
+was a single static snapshot of the critical moment — the actual
+move-by-move review (eval chart + move list) had nothing visual to look
+at, unlike Chess.com's Game Review, which is fundamentally board-plus-
+move-list. Added `stats.annotate_fen`/`get_starting_fen` (the server
+computes every position's FEN via one PGN replay — same "server does
+chess logic, client only renders FEN" split as every other board in this
+app) and a full interactive board: step through every ply with
+prev/next/first/last controls or arrow keys, synced bidirectionally with
+the move list, last-move squares highlighted. Verified live against a
+real analyzed game, including keyboard shortcuts not hijacking arrow keys
+while typing a note.
+
+**Navigation consolidated.** Every page had its own hand-copied nav bar,
+and they'd drifted out of sync: some showed all 9 destinations, others
+only 5-6 (never linking to Puzzles/Explorer/Endgame/Analyze at all), and
+5 pages had no way to reach Profile management without detouring through
+Dashboard. Replaced with one consistent structure everywhere: Dashboard,
+Puzzles, and Search stay top-level; Explorer/Endgame/Analyze move into a
+"Train ▾" dropdown; Insights/Clock/Progress move into an "Insights ▾"
+dropdown; every page reaches Profiles via the same 👤 icon (added to the
+5 pages missing it), highlighted when it's the current page.
+
 ## v8 — Full-codebase correctness audit
 
 A systematic pass over the entire codebase (backend, frontend, infra, tests)
