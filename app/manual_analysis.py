@@ -28,7 +28,7 @@ from db import get_connection, save_games
 from fetchers import _lichess_result_to_outcome
 from mistakes import STANDARD_VARIANT_TAGS, classify_phase, classify_tier, get_pgn_variant
 from puzzles import get_top_lines
-from stats import compute_game_accuracy
+from stats import annotate_fen, compute_game_accuracy, get_starting_fen
 
 # This endpoint takes arbitrary pasted text with no login required (Advanced
 # features, Section 5 keeps the Analyze board zero-login, same as the rest
@@ -67,13 +67,23 @@ def looks_like_fen(text: str) -> bool:
 
 def analyze_fen(fen: str, depth: int = STOCKFISH_DEPTH) -> dict:
     """One-shot analysis of a bare position: evaluation + top engine
-    lines, from the perspective of whoever is about to move there.
+    lines, from the perspective of whoever is about to move there. Each
+    line carries the resulting position's FEN too, so the frontend's
+    board can preview what the position looks like after that suggested
+    move — computed here (server does chess logic, client only ever
+    renders a FEN it's given, same split as every other board in this
+    app) rather than needing a second round-trip per line clicked.
     """
     try:
-        chess.Board(fen)
+        board = chess.Board(fen)
     except ValueError as e:
         raise ValueError(f"Not a valid FEN: {e}")
     lines = get_top_lines(fen, depth=depth, num_lines=3)
+    for line in lines:
+        move = chess.Move.from_uci(line["move_uci"])
+        board.push(move)
+        line["fen_after"] = board.fen()
+        board.pop()
     return {"fen": fen, "top_lines": lines}
 
 
@@ -114,14 +124,23 @@ def analyze_pgn_oneoff(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> dict:
     database. Accuracy is reported for both colors — there's no inherent
     "my color" for an arbitrary pasted game the way there is for a synced
     one, so both are shown rather than guessing.
+
+    Each move carries its resulting position's FEN (annotate_fen), and
+    the response includes the starting one too, so the frontend can show
+    a real interactive board for a one-off analysis exactly like it does
+    for a saved game (stats.annotate_fen/get_starting_fen are the same
+    functions /api/games/{id} uses) — no separate chess logic needed
+    client-side, no second round-trip.
     """
     moves = _graded_moves(pgn_text, depth)
+    moves = annotate_fen(moves, pgn_text)
 
     game = chess.pgn.read_game(io.StringIO(pgn_text))
     headers = dict(game.headers) if game else {}
 
     return {
         "moves": moves,
+        "start_fen": get_starting_fen(pgn_text),
         "accuracy_white": compute_game_accuracy(moves, "white"),
         "accuracy_black": compute_game_accuracy(moves, "black"),
         "headers": {
