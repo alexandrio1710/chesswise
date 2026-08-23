@@ -1,5 +1,30 @@
 # Changelog
 
+## v10 — Analyze Board rebuilt as a Chess.com-style interactive board
+
+Pasting a PGN or FEN into the Analyze Board previously showed only a plain
+eval graph and move table (PGN) or a bare non-interactive board with a
+text list of engine lines (FEN) — nothing like a real analysis interface.
+Rebuilt both around an actual board: PGN gets the same full move-by-move
+interactive board added to the game page in v9 (step through with
+buttons, arrow keys, or clicking a move-list row — backend now returns
+`start_fen`/`fen_after` for a one-off unsaved analysis via the same
+`stats.annotate_fen`/`get_starting_fen` the game page uses); FEN's single
+position renders on the same board, with each top engine line clickable
+to preview the resulting position (computed server-side, so a click needs
+no round-trip). Both boards get a vertical eval bar in the Chess.com
+style — white fill grows from the bottom as White's advantage increases,
+with the FEN board's mover-relative line evals flipped to stay
+White-positive like the PGN board's.
+
+Also fixed while touching this styling: five more undefined-CSS-variable
+bugs in the same family as v9's invisible-board-checkering one —
+`--tier-brilliant`, `--tier-great`, `--tier-excellent`, `--tier-book`, and
+`--tier-miss` were referenced by the Game Report's ten-tier move
+classification but never defined anywhere, so half the tiers rendered as
+invisible pills. Confirmed via computed style, then defined for both
+themes.
+
 ## v9 — Interactive game board; every board's checkering was invisible; nav consolidation
 
 **Every chessboard in the app was rendering with no light/dark square
