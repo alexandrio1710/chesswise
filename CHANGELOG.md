@@ -1,5 +1,29 @@
 # Changelog
 
+## v11 — Fixed sub-pixel clipping on the bottom row of every board
+
+Every board in the app (Analyze, game review, puzzles, rush mode, opening
+trainer, Opening Explorer, Endgame Trainer) applied `border-radius` and
+`overflow: hidden` directly to the same element that was `display: grid`
+with 8 equal tracks. When the board's pixel width doesn't divide evenly
+by 8 (e.g. 402px / 8 = 50.25px per square), the browser's rasterizer can
+round the rounded-corner clipping mask a hair short of the last row,
+shaving a sliver off the bottom tile — reported as "the bottom tile of
+the board is cut off a little." Layout-level geometry looked fine
+(`board.bottom - lastSquare.bottom` was already 0 in idealized float
+math), so this only showed up at the rasterization layer, not in
+measurement.
+
+Fixed by separating the rounded/clipped frame from the grid itself: a new
+`.board-frame` wrapper now owns `border-radius`/`overflow: hidden`/the
+1px border, while the inner grid element just fills it at `width: 100%;
+height: 100%` with no rounding or clipping of its own. Applied to every
+board across `analyze.html`, `game.html` (both the interactive board and
+the critical-moment snapshot), `puzzles.html` (main, rush, and opening
+boards), `explorer.html`, and `endgame.html`. Verified live via
+`getBoundingClientRect()` on each page (board bottom vs. last-square
+bottom now diffs by exactly 0, down from a 1px discrepancy before).
+
 ## v10 — Analyze Board rebuilt as a Chess.com-style interactive board
 
 Pasting a PGN or FEN into the Analyze Board previously showed only a plain

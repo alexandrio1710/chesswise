@@ -197,10 +197,19 @@
   }
   .eval-bar-fill { background: #f2f2f2; width: 100%; transition: height .25s ease; }
   .eval-bar-value { font-size: 11px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* Rounding + clipping live on this wrapper, not the grid itself — 402px
+     (a typical rendered width minus the 1px border on each side) doesn't
+     divide evenly by 8, so the grid's own track edges land on fractional
+     pixels; clipping directly on the grid meant the browser's sub-pixel
+     rounding could visibly shave a sliver off the last row. Separating
+     the two lets the grid's tracks round however they need to while the
+     frame's border-radius/overflow only has to clip a plain rectangle. */
+  .board-frame {
+    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  }
   #fen-board, #pgn-board {
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
-    user-select: none;
+    width: 100%; height: 100%; user-select: none;
   }
   .square { position: relative; display: flex; align-items: center; justify-content: center; font-size: min(6vw, 40px); }
   .square.light { background: var(--board-light); }
@@ -293,7 +302,7 @@
             <div class="eval-bar"><div class="eval-bar-fill" id="fen-eval-fill"></div></div>
             <span class="eval-bar-value" id="fen-eval-value"></span>
           </div>
-          <div id="fen-board"></div>
+          <div class="board-frame"><div id="fen-board"></div></div>
         </div>
       </div>
       <div class="lines-list">
@@ -311,7 +320,7 @@
             <div class="eval-bar"><div class="eval-bar-fill" id="pgn-eval-fill"></div></div>
             <span class="eval-bar-value" id="pgn-eval-value"></span>
           </div>
-          <div id="pgn-board"></div>
+          <div class="board-frame"><div id="pgn-board"></div></div>
         </div>
         <div class="board-nav">
           <button id="board-first" title="First move (Home)" aria-label="First move">⏮</button>

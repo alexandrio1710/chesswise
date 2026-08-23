@@ -146,10 +146,12 @@
   .category-pill.draw { background: var(--text-muted); }
   .category-pill.loss { background: var(--status-critical); }
 
+  .board-frame {
+    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  }
   #board {
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
-    user-select: none;
+    width: 100%; height: 100%; user-select: none;
   }
   .square { position: relative; display: flex; align-items: center; justify-content: center; font-size: min(6vw, 40px); cursor: pointer; }
   .square.light { background: var(--board-light); }
@@ -226,7 +228,7 @@
   <div class="layout">
     <div class="card">
       <div class="position-meta" id="position-meta"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
-      <div id="board"></div>
+      <div class="board-frame"><div id="board"></div></div>
       <div class="feedback" id="feedback">
         <div class="verdict" id="feedback-verdict"></div>
         <div id="feedback-detail"></div>

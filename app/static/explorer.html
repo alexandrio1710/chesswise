@@ -146,10 +146,12 @@
   .path-row .sep { color: var(--text-muted); }
   #reset-btn { margin-left: auto; }
 
+  .board-frame {
+    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  }
   #board {
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-    width: 100%; aspect-ratio: 1/1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
-    user-select: none;
+    width: 100%; height: 100%; user-select: none;
   }
   .square { position: relative; display: flex; align-items: center; justify-content: center; font-size: min(6vw, 40px); cursor: pointer; }
   .square.light { background: var(--board-light); }
@@ -234,7 +236,7 @@
 
   <div class="layout">
     <div class="card">
-      <div id="board"></div>
+      <div class="board-frame"><div id="board"></div></div>
     </div>
 
     <div style="display:flex; flex-direction:column; gap:16px;">
