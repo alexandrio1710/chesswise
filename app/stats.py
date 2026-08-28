@@ -639,16 +639,21 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
 
     `moves` is get_game_moves()'s output; only the given `color`'s own
     moves count (the opponent's moves aren't yours to be accurate about).
-    Returns None if that color made no moves with a known eval (shouldn't
-    happen for a fully analyzed game, but a partial/corrupt trace shouldn't
-    crash the caller).
+    Returns None if that color made fewer than 2 moves with a known eval.
+    One move isn't a real sample — confirmed against real data: a game
+    the opponent abandoned right after the opening ("1. e4 c5", win by
+    abandonment) scored a meaningless 100% since that single book move
+    happened to have ~0 eval_drop. Two real analyzed accounts in this
+    project's own dataset had exactly this shape; nothing had 2 or 3, so
+    this threshold excludes only that degenerate case, not genuinely
+    short-but-real games (a 4-move Scholar's-mate loss still scores).
     """
     drops = [
         capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
         for m in moves
         if m["color_moved"] == color and m["eval_drop"] is not None and m["eval_before_cp"] is not None
     ]
-    if not drops:
+    if len(drops) < 2:
         return None
     acpl = sum(drops) / len(drops)
     accuracy = 100 * math.exp(-ACCURACY_DECAY_K * acpl)

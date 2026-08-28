@@ -272,6 +272,20 @@
      the #piece-sprites <defs> near the top of <body>). Colors are baked
      into the artwork here, so no CSS coloring is needed. */
   .piece-icon { width: 100%; height: 100%; display: block; overflow: visible; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35)); pointer-events: none; }
+  .board-with-evalbar { display: flex; gap: 12px; align-items: stretch; }
+  .eval-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 34px; flex-shrink: 0; }
+  .eval-bar {
+    width: 30px; flex: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);
+    background: var(--surface-1); display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .eval-bar-fill { background: #f2f2f2; width: 100%; transition: height .25s ease; }
+  .eval-bar-value { font-size: 11px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .explore-controls { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .explore-controls button {
+    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--page-plane); color: var(--text-primary); cursor: pointer;
+  }
+  .explore-note { text-align: center; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
   .feedback {
     margin-top: 16px;
@@ -432,12 +446,23 @@
   <div class="layout" id="normal-layout">
     <div class="card">
       <div class="puzzle-meta" id="puzzle-meta"><span class="spinner"></span>Loading puzzle…</div>
-      <div class="board-frame"><div id="board"></div></div>
+      <div class="board-with-evalbar">
+        <div class="eval-bar-wrap">
+          <div class="eval-bar"><div class="eval-bar-fill" id="puzzle-eval-fill"></div></div>
+          <span class="eval-bar-value" id="puzzle-eval-value"></span>
+        </div>
+        <div class="board-frame"><div id="board"></div></div>
+      </div>
       <div class="feedback" id="feedback">
         <div class="verdict" id="feedback-verdict"></div>
         <div id="feedback-detail"></div>
         <div class="lines" id="feedback-lines"></div>
       </div>
+      <div class="explore-controls hidden" id="explore-controls">
+        <button type="button" id="explore-undo-btn">Undo</button>
+        <button type="button" id="explore-reset-btn">Reset to puzzle position</button>
+      </div>
+      <p class="explore-note hidden" id="explore-note">Solved — keep exploring this position with the engine, or move on.</p>
       <button class="next-btn" id="next-btn">Next puzzle →</button>
     </div>
 
@@ -628,8 +653,154 @@
     document.querySelectorAll(".legal-dot").forEach(el => el.remove());
   }
 
+  // --- Post-solve: keep exploring this position with live Stockfish
+  // analysis instead of the puzzle's own single graded correct-answer
+  // check. Reuses the Analyze board's endpoints (server does chess logic,
+  // client only renders a FEN it's given) and the same renderBoard() the
+  // puzzle itself uses, by passing it a synthetic {fen_before, side_to_move}
+  // — side_to_move stays fixed at the puzzle's own value throughout so the
+  // board orientation doesn't flip every move as turns alternate. --------
+
+  let exploreHistory = [];
+  let exploreHistoryIdx = 0;
+  let exploreBaseData = null; // { fen, top_lines, legal_moves } for the current explored position
+  let exploreSelectedSquare = null;
+  let exploreMoveInFlight = false;
+
+  const EVAL_CAP = 1000;
+  function formatEval(cp) {
+    if (Math.abs(cp) >= 9000) return (cp > 0 ? "+" : "-") + "M";
+    const pawns = (cp / 100).toFixed(2);
+    return cp > 0 ? `+${pawns}` : pawns;
+  }
+  function updateEvalBar(cp, mateIn) {
+    const fill = document.getElementById("puzzle-eval-fill");
+    const value = document.getElementById("puzzle-eval-value");
+    let pct, label;
+    if (mateIn != null) {
+      pct = mateIn > 0 ? 100 : 0;
+      label = `${mateIn > 0 ? "" : "-"}M${Math.abs(mateIn)}`;
+    } else {
+      pct = Math.max(0, Math.min(100, ((cp + EVAL_CAP) / (2 * EVAL_CAP)) * 100));
+      label = formatEval(cp);
+    }
+    fill.style.height = `${pct}%`;
+    value.textContent = label;
+  }
+
+  function startExploring(fen) {
+    exploreHistory = [fen];
+    exploreHistoryIdx = 0;
+    document.getElementById("explore-controls").classList.remove("hidden");
+    document.getElementById("explore-note").classList.remove("hidden");
+    refreshExploreAnalysis(fen);
+  }
+
+  function stopExploring() {
+    exploreBaseData = null;
+    exploreHistory = [];
+    exploreHistoryIdx = 0;
+    document.getElementById("explore-controls").classList.add("hidden");
+    document.getElementById("explore-note").classList.add("hidden");
+    document.getElementById("puzzle-eval-fill").style.height = "0%";
+    document.getElementById("puzzle-eval-value").textContent = "";
+  }
+
+  async function refreshExploreAnalysis(fen) {
+    const res = await fetch("/api/analyze/fen", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fen }),
+    });
+    const data = await res.json();
+    if (!res.ok) return false;
+    exploreBaseData = data;
+    renderBoard({ fen_before: fen, side_to_move: currentPuzzle.side_to_move });
+    const best = data.top_lines[0];
+    const sideToMove = fen.split(" ")[1] === "w" ? "white" : "black";
+    const sign = sideToMove === "white" ? 1 : -1;
+    const cp = best ? best.eval_cp * sign : 0;
+    const mateIn = best && best.mate_in != null ? best.mate_in * sign : null;
+    updateEvalBar(cp, mateIn);
+    return true;
+  }
+
+  function exploreOwnPieceAt(square) {
+    const pieceMap = fenToPieceMap(exploreBaseData.fen);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    const sideToMove = exploreBaseData.fen.split(" ")[1] === "w" ? "white" : "black";
+    return (sideToMove === "white") === isWhitePiece;
+  }
+
+  function exploreLegalDestinationsFrom(square) {
+    return exploreBaseData.legal_moves.filter(m => m.from === square).map(m => m.to);
+  }
+
+  function clearExploreSelection() {
+    document.querySelectorAll(".square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll(".legal-dot").forEach(el => el.remove());
+    exploreSelectedSquare = null;
+  }
+
+  async function playExploreMove(fromSq, toSq) {
+    if (exploreMoveInFlight) return;
+    exploreMoveInFlight = true;
+    try {
+      const res = await fetch("/api/analyze/move", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen: exploreHistory[exploreHistoryIdx], from_square: fromSq, to_square: toSq }),
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      exploreHistory = exploreHistory.slice(0, exploreHistoryIdx + 1);
+      exploreHistory.push(data.fen);
+      exploreHistoryIdx = exploreHistory.length - 1;
+      await refreshExploreAnalysis(data.fen);
+    } finally {
+      exploreMoveInFlight = false;
+    }
+  }
+
+  function onExploreSquareClick(square) {
+    if (exploreMoveInFlight || !exploreBaseData) return;
+    if (exploreSelectedSquare) {
+      const dests = exploreLegalDestinationsFrom(exploreSelectedSquare);
+      if (dests.includes(square)) {
+        const from = exploreSelectedSquare;
+        clearExploreSelection();
+        playExploreMove(from, square);
+        return;
+      }
+    }
+    clearExploreSelection();
+    if (exploreOwnPieceAt(square)) {
+      exploreSelectedSquare = square;
+      const el = document.querySelector(`.square[data-square="${square}"]`);
+      if (el) el.classList.add("selected");
+      for (const to of exploreLegalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`.square[data-square="${to}"]`);
+        if (destEl) {
+          const dot = document.createElement("div");
+          dot.className = "legal-dot";
+          destEl.appendChild(dot);
+        }
+      }
+    }
+  }
+
+  document.getElementById("explore-undo-btn").addEventListener("click", () => {
+    if (exploreHistoryIdx <= 0) return;
+    exploreHistoryIdx -= 1;
+    refreshExploreAnalysis(exploreHistory[exploreHistoryIdx]);
+  });
+  document.getElementById("explore-reset-btn").addEventListener("click", () => {
+    exploreHistory = [exploreHistory[0]];
+    exploreHistoryIdx = 0;
+    refreshExploreAnalysis(exploreHistory[0]);
+  });
+
   function onSquareClick(square) {
-    if (solved) return;
+    if (solved) { onExploreSquareClick(square); return; }
 
     if (selectedSquare) {
       const destinations = legalDestinationsFrom(selectedSquare);
@@ -670,6 +841,7 @@
     solved = true;
     clearHighlights();
     selectedSquare = null;
+    startExploring(currentPuzzle.fen_before);
     document.getElementById("next-btn").classList.add("show");
     markQueueSolved(currentPuzzle.id, result.correct);
     refreshDueCount();
@@ -717,6 +889,7 @@
     currentIndex = index;
     solved = false;
     selectedSquare = null;
+    stopExploring();
     document.getElementById("feedback").classList.remove("show");
     document.getElementById("next-btn").classList.remove("show");
 

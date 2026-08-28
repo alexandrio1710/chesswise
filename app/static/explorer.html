@@ -178,6 +178,15 @@
      system font's chess glyphs, colored via CSS text tricks. Colors are
      baked into the artwork here, so no CSS coloring is needed. */
   .piece-icon { width: 82%; height: 82%; display: block; overflow: visible; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35)); pointer-events: none; }
+  .board-with-evalbar { display: flex; gap: 12px; align-items: stretch; }
+  .eval-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 34px; flex-shrink: 0; }
+  .eval-bar {
+    width: 30px; flex: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);
+    background: var(--surface-1); display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .eval-bar-fill { background: #f2f2f2; width: 100%; transition: height .25s ease; }
+  .eval-bar-value { font-size: 11px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .lines-caption { font-size: 12px; color: var(--text-muted); }
 
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 560px) { .stats-grid { grid-template-columns: 1fr; } }
@@ -279,7 +288,14 @@
 
   <div class="layout">
     <div class="card">
-      <div class="board-frame"><div id="board"></div></div>
+      <div class="board-with-evalbar">
+        <div class="eval-bar-wrap">
+          <div class="eval-bar"><div class="eval-bar-fill" id="explorer-eval-fill"></div></div>
+          <span class="eval-bar-value" id="explorer-eval-value"></span>
+        </div>
+        <div class="board-frame"><div id="board"></div></div>
+      </div>
+      <p class="lines-caption" id="explorer-eval-caption" style="margin-top:8px;"></p>
     </div>
 
     <div style="display:flex; flex-direction:column; gap:16px;">
@@ -345,6 +361,63 @@
     });
     return map;
   }
+  // --- Live Stockfish eval for whatever position the explorer is showing —
+  // this page otherwise only shows community/personal move-frequency
+  // stats, with no sense of whether the position is actually good. Reuses
+  // the Analyze board's own endpoint; fire-and-forget from loadPosition()
+  // above since it's slower than the explorer stats and shouldn't block
+  // them. Request-id guarded the same way loadPosition() guards itself,
+  // so clicking through several moves quickly can't have an old eval
+  // response land after a newer position is already on screen. ----------
+
+  const EVAL_CAP = 1000;
+  let evalRequestId = 0;
+
+  function formatEval(cp) {
+    if (Math.abs(cp) >= 9000) return (cp > 0 ? "+" : "-") + "M";
+    const pawns = (cp / 100).toFixed(2);
+    return cp > 0 ? `+${pawns}` : pawns;
+  }
+
+  function updateEvalBar(cp, mateIn) {
+    const fill = document.getElementById("explorer-eval-fill");
+    const value = document.getElementById("explorer-eval-value");
+    let pct, label;
+    if (mateIn != null) {
+      pct = mateIn > 0 ? 100 : 0;
+      label = `${mateIn > 0 ? "" : "-"}M${Math.abs(mateIn)}`;
+    } else {
+      pct = Math.max(0, Math.min(100, ((cp + EVAL_CAP) / (2 * EVAL_CAP)) * 100));
+      label = formatEval(cp);
+    }
+    fill.style.height = `${pct}%`;
+    value.textContent = label;
+  }
+
+  async function loadEvalBar(fen) {
+    const thisEvalRequestId = ++evalRequestId;
+    document.getElementById("explorer-eval-caption").textContent = "Engine is thinking…";
+    try {
+      const res = await fetch("/api/analyze/fen", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fen }),
+      });
+      const data = await res.json();
+      if (thisEvalRequestId !== evalRequestId) return; // superseded by a newer position
+      if (!res.ok) { document.getElementById("explorer-eval-caption").textContent = ""; return; }
+
+      const best = data.top_lines[0];
+      const sideToMove = fen.split(" ")[1] === "w" ? "white" : "black";
+      const sign = sideToMove === "white" ? 1 : -1;
+      const cp = best ? best.eval_cp * sign : 0;
+      const mateIn = best && best.mate_in != null ? best.mate_in * sign : null;
+      updateEvalBar(cp, mateIn);
+      document.getElementById("explorer-eval-caption").textContent =
+        best ? `Engine's top choice: ${best.move_san}` : "";
+    } catch {
+      if (thisEvalRequestId === evalRequestId) document.getElementById("explorer-eval-caption").textContent = "";
+    }
+  }
+
   function isLightSquare(square) {
     const file = square.charCodeAt(0) - 97;
     const rank = parseInt(square[1], 10);
@@ -392,6 +465,10 @@
       renderStats();
       renderMovesTable();
       renderDivergence();
+      loadEvalBar(data.fen); // fire-and-forget: Stockfish is slower than the
+                             // explorer stats above, so this fills in the
+                             // eval bar a moment later rather than blocking
+                             // everything else on it.
     } catch (err) {
       if (thisRequestId !== loadRequestId) return; // superseded — a newer load owns the UI now
       document.getElementById("mine-summary").innerHTML = `<span class="loading-text">Couldn't load this position. ${escapeHtml(err.message || "")}</span>`;

@@ -84,6 +84,11 @@
 
   * { box-sizing: border-box; }
   html, body { overflow-x: hidden; }
+  /* Was never actually defined despite classList.toggle("hidden") being
+     used throughout this file (#clock-card, #critical-card, #share-card,
+     the tablebase link) — those elements were always visible regardless
+     of the toggle. */
+  .hidden { display: none !important; }
   body {
     margin: 0;
     min-height: 100vh;
@@ -232,13 +237,29 @@
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
     width: 100%; height: 100%; user-select: none;
   }
-  #game-board .square { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 72px); }
+  #game-board .square { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 72px); cursor: pointer; }
   #game-board .square.light { background: var(--board-light); }
   #game-board .square.dark { background: var(--board-dark); }
   #game-board .square.last-move { position: relative; }
   #game-board .square.last-move::after {
     content: ""; position: absolute; inset: 0; background: var(--board-selected);
   }
+  #game-board .square.selected::after {
+    content: ""; position: absolute; inset: 0; background: var(--board-selected);
+  }
+  #game-board .square .legal-dot {
+    position: absolute; width: 26%; height: 26%; border-radius: 50%; background: var(--board-dot); pointer-events: none;
+  }
+  .board-with-evalbar { display: flex; gap: 12px; align-items: stretch; }
+  .eval-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 34px; flex-shrink: 0; }
+  .eval-bar {
+    width: 30px; flex: 1; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);
+    background: var(--surface-1); display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .eval-bar-fill { background: #f2f2f2; width: 100%; transition: height .25s ease; }
+  .eval-bar-value { font-size: 11px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .explore-controls { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .explore-note { text-align: center; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
   /* Real piece silhouettes (the standard "cburnett" Staunton set — see
      the #piece-sprites <defs> near the top of <body>) instead of a
      system font's chess glyphs, which render inconsistently across
@@ -406,7 +427,13 @@
     <h2 style="font-size:15px; margin:0 0 14px;">Review the game</h2>
     <div class="review-layout">
       <div>
-        <div class="board-frame"><div id="game-board"></div></div>
+        <div class="board-with-evalbar">
+          <div class="eval-bar-wrap">
+            <div class="eval-bar"><div class="eval-bar-fill" id="game-eval-fill"></div></div>
+            <span class="eval-bar-value" id="game-eval-value"></span>
+          </div>
+          <div class="board-frame"><div id="game-board"></div></div>
+        </div>
         <div class="board-nav">
           <button id="board-first" title="First move (Home)" aria-label="First move">⏮</button>
           <button id="board-prev" title="Previous move (←)" aria-label="Previous move">◀</button>
@@ -414,6 +441,11 @@
           <button id="board-last" title="Last move (End)" aria-label="Last move">⏭</button>
         </div>
         <p class="board-move-label" id="board-move-label"></p>
+        <div class="explore-controls hidden" id="explore-controls">
+          <button type="button" id="explore-undo-btn">Undo</button>
+          <button type="button" id="explore-back-btn">Back to game</button>
+        </div>
+        <p class="explore-note hidden" id="explore-note">Exploring your own line — the engine is re-analyzing live. Click a move in the table, or use the arrow keys, to jump back to the real game.</p>
       </div>
       <div class="table-scroll">
         <table class="moves-table">
@@ -811,12 +843,20 @@
     return changed;
   }
 
-  function renderGameBoard(ply) {
-    const fen = fenForPly(ply);
+  function currentDisplayFen() {
+    return exploring ? exploreHistory[exploreHistoryIdx] : fenForPly(currentPly);
+  }
+
+  function currentDisplayLastMoveSquares() {
+    return exploring ? exploreLastMove : diffSquares(fenForPly(currentPly - 1), fenForPly(currentPly));
+  }
+
+  function renderCurrentBoard() {
+    const fen = currentDisplayFen();
     const board = document.getElementById("game-board");
     if (!fen) { board.innerHTML = ""; return; }
 
-    const lastMoveSquares = new Set(diffSquares(fenForPly(ply - 1), fen));
+    const lastMoveSquares = new Set(currentDisplayLastMoveSquares());
     const pieceMap = fenToPieceMap(fen);
     const orientation = currentGame ? currentGame.color : "white";
     const files = "abcdefgh".split("");
@@ -829,6 +869,8 @@
         const square = `${file}${rank}`;
         const el = document.createElement("div");
         el.className = `square ${isLightSquare(square) ? "light" : "dark"}${lastMoveSquares.has(square) ? " last-move" : ""}`;
+        el.dataset.square = square;
+        el.addEventListener("click", () => onGameSquareClick(square));
         const piece = pieceMap[square];
         if (piece) renderPieceIcon(el, piece);
         board.appendChild(el);
@@ -852,11 +894,21 @@
     document.getElementById("board-last").disabled = ply >= currentMoves.length;
   }
 
+  function updateEvalBar(fillId, valueId, cp) {
+    const fill = document.getElementById(fillId);
+    const value = document.getElementById(valueId);
+    const pct = Math.max(0, Math.min(100, ((cp + CAP) / (2 * CAP)) * 100));
+    fill.style.height = `${pct}%`;
+    value.textContent = formatEval(cp);
+  }
+
   function goToPly(ply) {
+    if (exploring) exitExploreMode();
     currentPly = Math.max(0, Math.min(ply, currentMoves.length));
-    renderGameBoard(currentPly);
+    renderCurrentBoard();
     updateBoardMoveLabel(currentPly);
     updateBoardNavButtons(currentPly);
+    updateEvalBar("game-eval-fill", "game-eval-value", currentPly > 0 ? currentMoves[currentPly - 1].eval_cp : 0);
     if (currentPly > 0) highlightMoveRow(currentPly);
     else document.querySelectorAll(".move-row").forEach(r => r.classList.remove("highlighted"));
   }
@@ -877,6 +929,158 @@
       else if (e.key === "End") { e.preventDefault(); goToPly(currentMoves.length); }
     });
   }
+
+  // --- Explore: click a piece at any point in the real game to branch off
+  // into your own line, with the engine re-analyzing live after each move
+  // (same server-side move validation as the Analyze board's
+  // /api/analyze/move — server does chess logic, client only renders a
+  // FEN it's given). goToPly() (real-game nav, move-list clicks, arrow
+  // keys) always exits exploration first, so the two navigation modes
+  // never fight over what's on the board. ------------------------------
+
+  let exploring = false;
+  let exploreHistory = [];
+  let exploreHistoryIdx = 0;
+  let exploreBaseData = null; // { fen, top_lines, legal_moves } for the current explored position
+  let exploreSelectedSquare = null;
+  let exploreMoveInFlight = false;
+  let exploreLastMove = [];
+
+  function evalCpFromLine(fen, line) {
+    if (!line) return 0;
+    const sideToMove = fen.split(" ")[1] === "w" ? "white" : "black";
+    const sign = sideToMove === "white" ? 1 : -1;
+    if (line.mate_in != null) {
+      const magnitude = 10000 - Math.abs(line.mate_in);
+      return (line.mate_in > 0 ? magnitude : -magnitude) * sign;
+    }
+    return line.eval_cp * sign;
+  }
+
+  function setExploreUIVisible(visible) {
+    document.getElementById("explore-controls").classList.toggle("hidden", !visible);
+    document.getElementById("explore-note").classList.toggle("hidden", !visible);
+    for (const id of ["board-first", "board-prev", "board-next", "board-last"]) {
+      document.getElementById(id).disabled = visible;
+    }
+  }
+
+  async function refreshExploreAnalysis(fen) {
+    const res = await fetch("/api/analyze/fen", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fen }),
+    });
+    const data = await res.json();
+    if (!res.ok) return false;
+    exploreBaseData = data;
+    renderCurrentBoard();
+    updateEvalBar("game-eval-fill", "game-eval-value", evalCpFromLine(data.fen, data.top_lines[0]));
+    return true;
+  }
+
+  function exploreOwnPieceAt(square) {
+    const pieceMap = fenToPieceMap(exploreBaseData.fen);
+    const piece = pieceMap[square];
+    if (!piece) return false;
+    const isWhitePiece = piece === piece.toUpperCase();
+    const sideToMove = exploreBaseData.fen.split(" ")[1] === "w" ? "white" : "black";
+    return (sideToMove === "white") === isWhitePiece;
+  }
+
+  function exploreLegalDestinationsFrom(square) {
+    return exploreBaseData.legal_moves.filter(m => m.from === square).map(m => m.to);
+  }
+
+  function clearExploreSelection() {
+    document.querySelectorAll("#game-board .square.selected").forEach(el => el.classList.remove("selected"));
+    document.querySelectorAll("#game-board .legal-dot").forEach(el => el.remove());
+    exploreSelectedSquare = null;
+  }
+
+  async function playExploreMove(fromSq, toSq) {
+    if (exploreMoveInFlight) return;
+    exploreMoveInFlight = true;
+    try {
+      const res = await fetch("/api/analyze/move", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen: exploreHistory[exploreHistoryIdx], from_square: fromSq, to_square: toSq }),
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      // Playing a move after undoing discards whatever "redo" moves came
+      // after it — standard undo/redo semantics.
+      exploreHistory = exploreHistory.slice(0, exploreHistoryIdx + 1);
+      exploreHistory.push(data.fen);
+      exploreHistoryIdx = exploreHistory.length - 1;
+      exploreLastMove = [fromSq, toSq];
+      await refreshExploreAnalysis(data.fen);
+      document.getElementById("board-move-label").innerHTML =
+        `${escapeHtml(data.san)} (${formatEval(evalCpFromLine(data.fen, exploreBaseData.top_lines[0]))}) `
+        + `<span style="color:var(--text-muted)">— your move</span>`;
+    } finally {
+      exploreMoveInFlight = false;
+    }
+  }
+
+  function exitExploreMode() {
+    exploring = false;
+    exploreBaseData = null;
+    exploreHistory = [];
+    exploreHistoryIdx = 0;
+    exploreLastMove = [];
+    setExploreUIVisible(false);
+  }
+
+  function onGameSquareClick(square) {
+    if (!exploring) {
+      const fen = fenForPly(currentPly);
+      if (!fen) return;
+      const pieceMap = fenToPieceMap(fen);
+      const piece = pieceMap[square];
+      if (!piece) return;
+      const isWhitePiece = piece === piece.toUpperCase();
+      const sideToMove = fen.split(" ")[1] === "w" ? "white" : "black";
+      if ((sideToMove === "white") !== isWhitePiece) return; // not that side's turn — no-op
+      exploring = true;
+      exploreHistory = [fen];
+      exploreHistoryIdx = 0;
+      exploreLastMove = [];
+      setExploreUIVisible(true);
+      refreshExploreAnalysis(fen).then(() => onGameSquareClick(square));
+      return;
+    }
+    if (exploreMoveInFlight || !exploreBaseData) return;
+    if (exploreSelectedSquare) {
+      const dests = exploreLegalDestinationsFrom(exploreSelectedSquare);
+      if (dests.includes(square)) {
+        const from = exploreSelectedSquare;
+        clearExploreSelection();
+        playExploreMove(from, square);
+        return;
+      }
+    }
+    clearExploreSelection();
+    if (exploreOwnPieceAt(square)) {
+      exploreSelectedSquare = square;
+      const el = document.querySelector(`#game-board .square[data-square="${square}"]`);
+      if (el) el.classList.add("selected");
+      for (const to of exploreLegalDestinationsFrom(square)) {
+        const destEl = document.querySelector(`#game-board .square[data-square="${to}"]`);
+        if (destEl) {
+          const dot = document.createElement("div");
+          dot.className = "legal-dot";
+          destEl.appendChild(dot);
+        }
+      }
+    }
+  }
+
+  document.getElementById("explore-back-btn").addEventListener("click", () => goToPly(currentPly));
+  document.getElementById("explore-undo-btn").addEventListener("click", async () => {
+    if (exploreHistoryIdx <= 0) { goToPly(currentPly); return; }
+    exploreHistoryIdx -= 1;
+    exploreLastMove = [];
+    await refreshExploreAnalysis(exploreHistory[exploreHistoryIdx]);
+  });
 
   function escapeHtml(s) {
     const div = document.createElement("div");
