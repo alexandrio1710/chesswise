@@ -1,5 +1,19 @@
 # Changelog
 
+## v12 — Accuracy averages broken out by time control
+
+Insights had win rate by time control (`insights.win_rate_by_time_control`)
+and an overall average accuracy (`progress.average_accuracy`), but nothing
+combined the two — no way to see "my blitz accuracy vs. my bullet
+accuracy." Added `insights.accuracy_by_time_control()`: groups analyzed
+games by time control, then averages `stats.compute_game_accuracy` per
+group (accuracy isn't a SQL aggregate — it comes from replaying each
+game's move trace — so this reuses the same per-game formula
+`average_accuracy()` already uses, just grouped instead of pooled).
+Wired into `/api/insights` and `/api/export/stats`, and added a new
+"Accuracy by time control" card on the Insights page next to the
+existing win-rate-by-time-control one, reusing the same bar-list styling.
+
 ## v11 — Fixed sub-pixel clipping on the bottom row of every board
 
 Every board in the app (Analyze, game review, puzzles, rush mode, opening
