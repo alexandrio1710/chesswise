@@ -514,6 +514,25 @@ def api_analyze_fen(req: AnalyzeFenRequest, _rl: None = Depends(_rate_limit_anal
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class AnalyzeMoveRequest(BaseModel):
+    fen: str
+    from_square: str
+    to_square: str
+    promotion: str | None = None
+
+
+@app.post("/api/analyze/move")
+def api_analyze_move(req: AnalyzeMoveRequest):
+    # Not behind _rate_limit_analysis: this is plain python-chess move
+    # validation, not a Stockfish call — the interactive board's own
+    # Stockfish cost is the analyze_fen call the client makes right after
+    # with the FEN this returns, which *is* rate-limited above.
+    try:
+        return manual_analysis.apply_move(req.fen, req.from_square, req.to_square, req.promotion)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 class AnalyzePgnRequest(BaseModel):
     pgn: str
     save: bool = False
