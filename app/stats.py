@@ -594,30 +594,63 @@ def get_starting_fen(pgn_text: str) -> str | None:
 # real blunders) scores ~41%. See compute_game_accuracy() docstring.
 ACCURACY_DECAY_K = 0.00446
 
+# Beyond this magnitude (10 pawns) a position is already decisively won or
+# lost. analysis.py represents mate scores as roughly +-MATE_SCORE_CP
+# (10000) so eval comparisons don't need special-case mate handling — which
+# means a move that walks into (or misses) a forced mate in an already-
+# decided position can carry a "drop" in the thousands of centipawns.
+# Averaged in raw, one such move dominated a whole game's ACPL regardless
+# of how the other 40+ moves were played, sinking accuracy to near 0%
+# (confirmed against real data: 11 of 59 analyzed games had a move with an
+# eval_drop within a few hundred cp of MATE_SCORE_CP). Capping both the
+# before and after eval to this ceiling before differencing keeps a real
+# "winning to losing" swing counted as the large mistake it is (up to
+# 2x this cap), while a move that doesn't change an already-decided
+# verdict — crushing before and after, or lost before and after —
+# contributes ~0, matching how the position's practical outcome didn't
+# actually change.
+ACCURACY_EVAL_CAP_CP = 1000
+
+
+def capped_eval_drop(eval_before_cp: float, eval_drop: float) -> float:
+    """One move's centipawn loss, magnitude-capped per ACCURACY_EVAL_CAP_CP
+    — shared by compute_game_accuracy and game_report._acpl so every
+    accuracy/ACPL figure shown in the app treats an already-decided
+    position's mate-distance swings the same way.
+    """
+    eval_after_cp = eval_before_cp - eval_drop
+    capped_before = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_before_cp))
+    capped_after = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_after_cp))
+    return max(0.0, capped_before - capped_after)
+
 
 def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
     """0-100 accuracy score for one player's moves in one game, from their
-    average centipawn loss (ACPL) via exponential decay:
+    average centipawn loss (ACPL, eval magnitude capped per move — see
+    ACCURACY_EVAL_CAP_CP) via exponential decay:
 
         accuracy = 100 * e^(-k * ACPL)
 
-    This treats every centipawn of loss as equally costly regardless of
-    how winning/losing the position already was, and doesn't correct for
-    the engine's own move-to-move evaluation noise — a real simplification,
-    not a claim of precision. It's a standard style of scoring used across
-    chess analysis tools generally, not any specific site's exact formula
-    (this project picked its own k, see ACCURACY_DECAY_K above).
+    Doesn't correct for the engine's own move-to-move evaluation noise —
+    a real simplification, not a claim of precision. It's a standard style
+    of scoring used across chess analysis tools generally, not any specific
+    site's exact formula (this project picked its own k, see
+    ACCURACY_DECAY_K above).
 
     `moves` is get_game_moves()'s output; only the given `color`'s own
     moves count (the opponent's moves aren't yours to be accurate about).
-    Returns None if that color made no moves with a known eval_drop
-    (shouldn't happen for a fully analyzed game, but a partial/corrupt
-    trace shouldn't crash the caller).
+    Returns None if that color made no moves with a known eval (shouldn't
+    happen for a fully analyzed game, but a partial/corrupt trace shouldn't
+    crash the caller).
     """
-    drops = [m["eval_drop"] for m in moves if m["color_moved"] == color and m["eval_drop"] is not None]
+    drops = [
+        capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
+        for m in moves
+        if m["color_moved"] == color and m["eval_drop"] is not None and m["eval_before_cp"] is not None
+    ]
     if not drops:
         return None
-    acpl = sum(max(0.0, d) for d in drops) / len(drops)
+    acpl = sum(drops) / len(drops)
     accuracy = 100 * math.exp(-ACCURACY_DECAY_K * acpl)
     return round(max(0.0, min(100.0, accuracy)), 1)
 

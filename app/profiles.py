@@ -127,6 +127,15 @@ def unlink_username(profile_id: int, source: str, username: str) -> None:
         conn.close()
 
 
+def get_profile_by_name(name: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM profiles WHERE name = ?", (name,)).fetchone()
+        return get_profile(row["id"]) if row else None
+    finally:
+        conn.close()
+
+
 def get_profile_id_for_username(source: str, username: str) -> int | None:
     conn = get_connection()
     try:
@@ -145,11 +154,18 @@ def resolve_profile_id(source: str, username: str) -> int:
     the username (auto-claiming it) the first time it's ever fetched —
     so `cli.py fetch <username>` keeps working with zero setup, exactly
     like it did before profiles existed.
+
+    A username that coincides with an existing profile's *name* (e.g. the
+    same person's Lichess and Chess.com handles happen to match, or a
+    second Chess.com account named after the first) is linked to that
+    existing profile instead of attempting a same-named duplicate — which
+    would otherwise crash on profiles.name's UNIQUE constraint even though
+    "same name" is exactly the signal this app has for "same person."
     """
     existing = get_profile_id_for_username(source, username)
     if existing is not None:
         return existing
-    profile = create_profile(username)
+    profile = get_profile_by_name(username) or create_profile(username)
     link_username(profile["id"], source, username)
     return profile["id"]
 

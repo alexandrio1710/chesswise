@@ -312,7 +312,17 @@ def _accuracy_from_acpl(acpl: float | None) -> float | None:
 
 
 def _acpl(moves: list[dict]) -> float | None:
-    drops = [max(0.0, m["eval_drop"]) for m in moves if m["eval_drop"] is not None]
+    """Eval magnitude capped per move (stats.capped_eval_drop) — same
+    reasoning as compute_game_accuracy: a mate-distance eval swing in an
+    already-decided position shouldn't dominate the whole game's ACPL (and
+    with it, this page's estimated performance rating) any more than the
+    Insights/Dashboard accuracy figures let it.
+    """
+    drops = [
+        stats.capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
+        for m in moves
+        if m["eval_drop"] is not None and m["eval_before_cp"] is not None
+    ]
     return sum(drops) / len(drops) if drops else None
 
 
@@ -391,7 +401,7 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT color_moved, phase, eval_drop, classification FROM game_moves WHERE game_id = ?",
+            "SELECT color_moved, phase, eval_drop, eval_before_cp, classification FROM game_moves WHERE game_id = ?",
             (game_id,),
         ).fetchall()
     finally:

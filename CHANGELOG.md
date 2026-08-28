@@ -1,5 +1,53 @@
 # Changelog
 
+## v13 — Fixed accuracy/ACPL crater bug; rating chart now splits by time control
+
+The new accuracy-by-time-control card (v12) was reporting implausibly low
+numbers (39.9% rapid, 53.6% bullet, 62.8% blitz). Root cause: analysis.py
+represents a forced mate as roughly +-10000cp (`MATE_SCORE_CP`) so eval
+comparisons don't need special-case mate handling — but `compute_game_
+accuracy()` averaged that raw into ACPL, so a single move that missed or
+walked into mate in an already-decided position could carry a "drop" in
+the thousands of centipawns and crater a whole game's accuracy score
+regardless of how the other 40+ moves were played. Confirmed against real
+data: 11 of the 59 games analyzed at the time had a move with an eval_drop
+within a few hundred cp of MATE_SCORE_CP. Fixed by capping the eval
+magnitude on both sides of the diff (`stats.ACCURACY_EVAL_CAP_CP = 1000`,
+via a new shared `stats.capped_eval_drop()`) before it feeds the average —
+a real "winning to losing" swing still counts as the large mistake it is
+(up to 2x the cap), but a move that doesn't change an already-decided
+verdict now correctly costs ~0. `game_report.py`'s separate `_acpl()`
+(the Game Report's headline accuracy and estimated-performance-rating)
+had the identical unbounded-ACPL bug independently and gets the same fix.
+Post-fix, the same three time controls read 79.2% / 75.0% / 78.9%.
+
+Also fixed while chasing this down:
+- **Profile-linking crash**: `profiles.resolve_profile_id()` crashed with
+  an unhandled `sqlite3.IntegrityError` whenever a fetched username
+  happened to match an existing profile's name under a different source
+  (hit while fetching a second Chess.com account for cross-checking the
+  accuracy fix — a Lichess profile named "vxyzrs" already existed, and
+  fetching Chess.com's *unrelated, different-person* "vxyzrs" account
+  tried to create a second same-named profile and crashed). Added
+  `get_profile_by_name()`; a same-named existing profile is now reused
+  instead of crashing — same-name is the only signal this app has for
+  "same person," so this also fixes the legitimate case of linking two
+  accounts on different sites that share a handle.
+- **Rating-over-time chart didn't separate time controls**: it already
+  split Lichess from Chess.com onto separate lines/scales (each site's
+  ratings are a different, non-comparable pool), but still mixed e.g.
+  bullet and rapid ratings from the same site into one line — those are
+  *also* separate rating pools, so the combined line showed the same kind
+  of fake "swing" the source-split was meant to prevent. Now grouped by
+  (source, time control): color encodes time control, solid-vs-dashed
+  stroke encodes source, and a legend lists each line's own game
+  count/start/end/change. Verified live: 7 correctly-separated lines
+  (chesscom/lichess x bullet/blitz/rapid, plus chesscom classical).
+
+Dataset: fetched and analyzed the last 3 months of Chess.com games for
+`vxyzrs00` (218 new games, 277 analyzed total) to have a larger, current
+corpus for verifying the accuracy fix.
+
 ## v12 — Accuracy averages broken out by time control
 
 Insights had win rate by time control (`insights.win_rate_by_time_control`)

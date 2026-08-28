@@ -28,14 +28,18 @@ def _source_clause(source: str | None, profile_id: int | None = None, alias: str
 def rating_progress(source: str | None = None, profile_id: int | None = None) -> list[dict]:
     """Chronological player_rating per game (skipping games with no
     rating data — a handful of very old or unusual games might lack it),
-    for a progress-over-time chart.
+    for a progress-over-time chart. Includes `time_control` since Chess.com
+    and Lichess both keep a separate rating pool per time control (a bullet
+    rating and a rapid rating aren't the same number line) — the chart
+    groups by (source, time_control), not just source, for the same reason
+    it already keeps Lichess and Chess.com on separate lines.
     """
     where, params = _source_clause(source, profile_id)
     conn = get_connection()
     try:
         rows = conn.execute(
             f"""
-            SELECT date, source, player_rating, opponent_rating, result
+            SELECT date, source, time_control, player_rating, opponent_rating, result
             FROM games g
             WHERE analyzed = 1 AND skip_reason IS NULL AND player_rating IS NOT NULL {where}
             ORDER BY date ASC

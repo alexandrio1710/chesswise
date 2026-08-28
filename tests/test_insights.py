@@ -8,7 +8,7 @@ import itertools
 
 import insights
 from db import get_connection
-from insights import accuracy_by_time_control, win_rate_by_day_of_week, win_rate_by_time_of_day
+from insights import accuracy_by_time_control, rating_progress, win_rate_by_day_of_week, win_rate_by_time_of_day
 
 _id_counter = itertools.count(1)
 
@@ -39,6 +39,41 @@ def _insert_game_with_time_control(time_control: str) -> int:
         return game_id
     finally:
         conn.close()
+
+
+def _insert_rated_game(source: str, time_control: str, rating: int) -> int:
+    conn = get_connection()
+    try:
+        game_id = conn.execute(
+            "INSERT INTO games (source, source_game_id, date, result, color, time_control, "
+            "player_rating, analyzed) VALUES (?, ?, '2026-01-01T00:00:00+00:00', 'win', 'white', ?, ?, 1)",
+            (source, f"insights-test-{next(_id_counter)}", time_control, rating),
+        ).lastrowid
+        conn.commit()
+        return game_id
+    finally:
+        conn.close()
+
+
+class TestRatingProgressIncludesTimeControl:
+    """The rating-over-time chart used to plot every game on one line
+    regardless of time control, even though Chess.com/Lichess keep a
+    separate rating pool per time control — mixing e.g. bullet and rapid
+    ratings chronologically produced a meaningless zigzag. rating_progress()
+    must expose time_control so the chart can split lines by it, the same
+    way it already splits by source.
+    """
+
+    def test_time_control_is_present_on_every_row(self):
+        _insert_rated_game("chesscom", "bullet", 1500)
+        rows = rating_progress()
+        assert rows
+        assert all("time_control" in r for r in rows)
+
+    def test_time_control_value_is_preserved_correctly(self):
+        game_id = _insert_rated_game("lichess", "rapid", 1800)
+        rows = [r for r in rating_progress() if r["player_rating"] == 1800]
+        assert any(r["time_control"] == "rapid" for r in rows)
 
 
 class TestUnparseableDateDoesNotCrash:
