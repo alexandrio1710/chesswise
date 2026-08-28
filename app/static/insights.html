@@ -228,6 +228,10 @@
       <div class="bar-list" id="by-time-control"></div>
     </div>
     <div class="card">
+      <h2>Accuracy by time control</h2>
+      <div class="bar-list" id="accuracy-by-time-control"></div>
+    </div>
+    <div class="card">
       <h2>Win rate by day of week (UTC)</h2>
       <div class="bar-list" id="by-day"></div>
     </div>
@@ -291,6 +295,7 @@
     renderRatingChart(data.rating_progress);
     renderBarList("by-color", data.win_rate_by_color);
     renderBarList("by-time-control", data.win_rate_by_time_control);
+    renderAccuracyByTimeControl(data.accuracy_by_time_control);
     renderBarList("by-day", data.win_rate_by_day_of_week, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]);
     renderBarList("by-hour", data.win_rate_by_time_of_day);
     renderRatingBands(data.performance_vs_rating_band);
@@ -318,6 +323,22 @@
         <div class="bar-list-item">
           <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${d.win_rate_pct}% (${d.games})</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${d.win_rate_pct}%"></div></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderAccuracyByTimeControl(dict) {
+    const el = document.getElementById("accuracy-by-time-control");
+    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
+    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
+    el.innerHTML = keys.map(k => {
+      const d = dict[k];
+      const acc = d.avg_accuracy;
+      return `
+        <div class="bar-list-item">
+          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acc !== null ? acc + "%" : "—"} (${d.games})</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${acc !== null ? acc : 0}%"></div></div>
         </div>
       `;
     }).join("");

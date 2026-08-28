@@ -6,8 +6,9 @@ no longer raise TypeError.
 
 import itertools
 
+import insights
 from db import get_connection
-from insights import win_rate_by_day_of_week, win_rate_by_time_of_day
+from insights import accuracy_by_time_control, win_rate_by_day_of_week, win_rate_by_time_of_day
 
 _id_counter = itertools.count(1)
 
@@ -19,6 +20,20 @@ def _insert_game_with_date(date: str) -> int:
             "INSERT INTO games (source, source_game_id, date, result, color, analyzed) "
             "VALUES ('manual', ?, ?, 'win', 'white', 1)",
             (f"insights-test-{next(_id_counter)}", date),
+        ).lastrowid
+        conn.commit()
+        return game_id
+    finally:
+        conn.close()
+
+
+def _insert_game_with_time_control(time_control: str) -> int:
+    conn = get_connection()
+    try:
+        game_id = conn.execute(
+            "INSERT INTO games (source, source_game_id, date, result, color, time_control, analyzed) "
+            "VALUES ('manual', ?, '2026-01-01T00:00:00+00:00', 'win', 'white', ?, 1)",
+            (f"insights-test-{next(_id_counter)}", time_control),
         ).lastrowid
         conn.commit()
         return game_id
@@ -45,3 +60,53 @@ class TestUnparseableDateDoesNotCrash:
         by_day = win_rate_by_day_of_week()
         total_games = sum(v["games"] for v in by_day.values())
         assert total_games >= 1
+
+
+class TestAccuracyByTimeControl:
+    """Accuracy isn't a SQL aggregate (stats.compute_game_accuracy replays
+    each game's move trace in Python), so this monkeypatches that boundary
+    to test the grouping/averaging logic without needing real game_moves
+    rows. Uses unique per-test time-control labels so results aren't
+    polluted by other tests' "blitz"/"rapid" games sharing the same DB.
+    """
+
+    def test_averages_are_grouped_by_time_control_not_pooled(self, monkeypatch):
+        tc_a = f"tc-a-{next(_id_counter)}"
+        tc_b = f"tc-b-{next(_id_counter)}"
+        g1 = _insert_game_with_time_control(tc_a)
+        g2 = _insert_game_with_time_control(tc_a)
+        g3 = _insert_game_with_time_control(tc_b)
+
+        # accuracy_by_time_control() scans every analyzed game in the DB (not
+        # just this test's), so the fakes must tolerate other tests' games
+        # landing in the same call — .get() (not indexing) returns None for
+        # anything outside this test's own three ids.
+        fake_accuracy = {g1: 80.0, g2: 90.0, g3: 50.0}
+        monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
+        monkeypatch.setattr(
+            insights.stats, "compute_game_accuracy",
+            lambda moves, color: fake_accuracy.get(moves[0]["gid"]),
+        )
+
+        result = accuracy_by_time_control()
+
+        assert result[tc_a] == {"games": 2, "avg_accuracy": 85.0}
+        assert result[tc_b] == {"games": 1, "avg_accuracy": 50.0}
+
+    def test_games_with_no_computable_accuracy_are_excluded_from_the_average(self, monkeypatch):
+        tc = f"tc-none-{next(_id_counter)}"
+        g1 = _insert_game_with_time_control(tc)
+        g2 = _insert_game_with_time_control(tc)
+
+        monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
+        monkeypatch.setattr(
+            insights.stats, "compute_game_accuracy",
+            lambda moves, color: None if moves[0]["gid"] == g1 else 70.0,
+        )
+
+        result = accuracy_by_time_control()
+
+        # both games still count toward "games" (matches win_rate_by_time_control's
+        # semantics of counting all analyzed games in the bucket), but only
+        # the one with a real accuracy contributes to the average.
+        assert result[tc] == {"games": 2, "avg_accuracy": 70.0}

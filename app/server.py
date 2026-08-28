@@ -266,6 +266,7 @@ def api_insights(source: str | None = Query(default=None), profile_id: int | Non
         "rating_progress": insights.rating_progress(source, profile_id),
         "win_rate_by_color": insights.win_rate_by_color(source, profile_id),
         "win_rate_by_time_control": insights.win_rate_by_time_control(source, profile_id),
+        "accuracy_by_time_control": insights.accuracy_by_time_control(source, profile_id),
         "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source, profile_id),
         "win_rate_by_time_of_day": insights.win_rate_by_time_of_day(source, profile_id),
         "avg_game_length": insights.avg_game_length_wins_vs_losses(source, profile_id),
@@ -357,6 +358,7 @@ def api_export_stats(source: str | None = Query(default=None), profile_id: int |
         "insights": {
             "win_rate_by_color": insights.win_rate_by_color(source, profile_id),
             "win_rate_by_time_control": insights.win_rate_by_time_control(source, profile_id),
+            "accuracy_by_time_control": insights.accuracy_by_time_control(source, profile_id),
             "win_rate_by_day_of_week": insights.win_rate_by_day_of_week(source, profile_id),
             "performance_vs_rating_band": insights.performance_vs_rating_band(source, profile_id),
             "comeback_rate": insights.comeback_rate(source, profile_id),

@@ -8,6 +8,7 @@ already in place before this module was written, per the project's own
 rule about extending storage before building the feature that needs it.
 """
 
+import stats
 from db import get_connection
 
 
@@ -96,6 +97,48 @@ def win_rate_by_time_control(source: str | None = None, profile_id: int | None =
         }
     finally:
         conn.close()
+
+
+def accuracy_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+    """Mean per-game accuracy (stats.compute_game_accuracy — same formula
+    shown on every game's own page and used by progress.average_accuracy()),
+    grouped by time control. Accuracy isn't a SQL aggregate — it comes from
+    replaying each game's move trace — so this groups game ids by time
+    control first, then reuses the per-game formula.
+    """
+    where, params = _source_clause(source, profile_id)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT id, time_control FROM games g
+            WHERE analyzed = 1 AND skip_reason IS NULL {where}
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    game_ids_by_tc: dict[str, list[int]] = {}
+    for r in rows:
+        game_ids_by_tc.setdefault(r["time_control"], []).append(r["id"])
+
+    result = {}
+    for tc, game_ids in game_ids_by_tc.items():
+        accuracies = []
+        for gid in game_ids:
+            game = stats.get_game_detail(gid)
+            if game is None:
+                continue
+            moves = stats.get_game_moves(gid)
+            acc = stats.compute_game_accuracy(moves, game["color"])
+            if acc is not None:
+                accuracies.append(acc)
+        result[tc] = {
+            "games": len(game_ids),
+            "avg_accuracy": round(sum(accuracies) / len(accuracies), 1) if accuracies else None,
+        }
+    return result
 
 
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
