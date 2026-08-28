@@ -1,5 +1,32 @@
 # Changelog
 
+## v16 — Rolled out the icy-blue redesign to the remaining 10 pages
+
+Extends v15's `analyze.html` checkpoint (approved after review) to every
+other page: `index`, `game`, `puzzles`, `explorer`, `endgame`, `insights`,
+`clock`, `progress`, `search`, `profiles`.
+
+All 10 get the muted icy-blue palette (both dark/default and light theme
+variants) and the wide desktop layout (`.page` from its old 900-1000px
+cap to 1440px). The 4 board pages (`game`, `puzzles`, `explorer`,
+`endgame`) additionally get the full board treatment from v15: the board
+column widened from a 420-480px cap to 680px, the real cburnett piece set
+(replacing colorless system-font glyphs), and matching `--board-light`/
+`--board-dark` colors. `puzzles.html` needed one extra fix along the way:
+its pieces render inside a `<span class="piece">` wrapper (for a z-index
+rule), and a plain inline span has no intrinsic size for the new SVG
+icon's percentage-based sizing to resolve against — fixed by giving
+`.square .piece` an explicit 82%×82% box.
+
+Caught and fixed while double-checking every page: `clock.html` had its
+own standalone `--tier-excellent` variable (colors a move-quality point
+on its clock-usage chart) that a batch script over-generalized from the
+4 board pages' variable set and silently dropped, which would have been
+the third instance this app has hit of the "undefined CSS variable →
+invisible UI" bug class. Caught by diffing removed variable names against
+each file's own actual usage before treating the rollout as done, not
+just by spot-checking a few pages.
+
 ## v15 — Analyze board redesign: real pieces, wide desktop layout, fully interactive
 
 First checkpoint of the icy-blue redesign, built on `analyze.html` for
