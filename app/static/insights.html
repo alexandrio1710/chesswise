@@ -156,6 +156,9 @@
   #rating-chart-wrap { position: relative; }
   #rating-chart { width: 100%; height: 180px; display: block; }
   .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .rating-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
+  .rating-legend-item { display: flex; align-items: center; gap: 6px; }
+  .rating-legend-swatch { width: 20px; height: 0; border-top-width: 2px; border-top-style: solid; flex-shrink: 0; }
 
   .empty-note { color: var(--text-secondary); font-size: 13px; }
   .loading-text { color: var(--text-secondary); font-size: 14px; }
@@ -215,6 +218,7 @@
     <div id="rating-chart-wrap">
       <svg id="rating-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
     </div>
+    <div class="rating-legend" id="rating-legend"></div>
     <p class="chart-caption" id="rating-caption"></p>
   </section>
 
@@ -366,52 +370,80 @@
     el.innerHTML = rows.length ? `<div class="bar-list">${rows.join("")}</div>` : `<p class="empty-note">Not enough data yet.</p>`;
   }
 
-  const SOURCE_COLORS = { lichess: "var(--series-1)", chesscom: "var(--series-2)" };
   const SOURCE_LABELS = { lichess: "Lichess", chesscom: "Chess.com" };
+  // Solid vs. dashed distinguishes the source; color distinguishes the time
+  // control (below) — two independent visual channels so (source, time
+  // control) combos stay legible without needing a unique color per pair.
+  const SOURCE_DASH = { chesscom: "0", lichess: "5,4" };
+  const TIME_CONTROL_COLORS = {
+    bullet: "var(--status-critical)", blitz: "var(--series-2)", rapid: "var(--series-1)",
+    classical: "var(--accent)", daily: "var(--status-good)",
+  };
+  const TIME_CONTROL_LABELS = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", daily: "Daily" };
+  const FALLBACK_COLOR = "var(--text-muted)";
 
   function renderRatingChart(progress) {
     const svg = document.getElementById("rating-chart");
     svg.innerHTML = "";
     const caption = document.getElementById("rating-caption");
+    const legend = document.getElementById("rating-legend");
+    legend.innerHTML = "";
     if (!progress.length) { caption.textContent = "No rating data yet."; return; }
 
     const width = 800, height = 180, pad = 16;
     const ns = "http://www.w3.org/2000/svg";
     const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
 
-    // Lichess and Chess.com ratings are different, non-comparable pools —
-    // plotting them as one connected line would show huge fake "swings"
-    // that are really just alternating between sites (caught in testing:
-    // a combined line jumped from ~1245 to ~1790 and back repeatedly).
-    // Each source gets its own line on its OWN min-max scale instead, so
-    // the shape of each trend is legible without implying the numbers
-    // are on the same axis.
-    const sources = [...new Set(progress.map(p => p.source))];
+    // Chess.com and Lichess each keep a SEPARATE rating pool per time
+    // control (a bullet rating and a rapid rating on the same site aren't
+    // the same number line, any more than Lichess and Chess.com ratings
+    // are) — plotting them as one connected line produces fake "swings"
+    // that are really just alternating between pools. Every (source, time
+    // control) combination gets its own line on its own min-max scale.
+    const groupKey = p => `${p.source}::${p.time_control || "unknown"}`;
+    const groups = [...new Set(progress.map(groupKey))];
     const xScale = i => pad + (i / Math.max(1, progress.length - 1)) * (width - 2 * pad);
-    const captions = [];
+    const legendRows = [];
+    const sourcesSeen = new Set();
 
-    sources.forEach(source => {
-      const rows = progress.map((p, i) => ({ ...p, i })).filter(r => r.source === source);
+    groups.forEach(key => {
+      const [source, timeControl] = key.split("::");
+      sourcesSeen.add(source);
+      const rows = progress.map((p, i) => ({ ...p, i })).filter(r => groupKey(r) === key);
       const vals = rows.map(r => r.player_rating);
       const minR = Math.min(...vals), maxR = Math.max(...vals);
       const range = Math.max(1, maxR - minR);
       const yScale = r => height - pad - ((r - minR) / range) * (height - 2 * pad);
 
       const points = rows.map(r => [xScale(r.i), yScale(r.player_rating)]);
+      const color = TIME_CONTROL_COLORS[timeControl] || FALLBACK_COLOR;
+      const dash = SOURCE_DASH[source] || "0";
       svg.appendChild(makeEl("polyline", {
         points: points.map(p => p.join(",")).join(" "), fill: "none",
-        stroke: SOURCE_COLORS[source] || "var(--series-1)",
-        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+        stroke: color, "stroke-width": 2, "stroke-linejoin": "round",
+        "stroke-linecap": "round", "stroke-dasharray": dash,
       }));
 
       const first = rows[0].player_rating, last = rows[rows.length - 1].player_rating;
       const change = last - first;
-      const label = SOURCE_LABELS[source] || source;
-      captions.push(`${label}: ${rows.length} games, ${first} → ${last} (${change >= 0 ? "+" : ""}${change})`);
+      const sourceLabel = SOURCE_LABELS[source] || source;
+      const tcLabel = TIME_CONTROL_LABELS[timeControl] || (timeControl === "unknown" ? "Unknown" : timeControl);
+      legendRows.push({
+        color, dash,
+        text: `${sourceLabel} ${tcLabel}: ${rows.length} game${rows.length === 1 ? "" : "s"}, ${first} → ${last} (${change >= 0 ? "+" : ""}${change})`,
+      });
     });
 
-    caption.innerHTML = captions.join(" &nbsp;·&nbsp; ") +
-      (sources.length > 1 ? ' <span style="color:var(--text-muted)">— each on its own scale; Lichess and Chess.com ratings aren\'t comparable numbers.</span>' : "");
+    legend.innerHTML = legendRows.map(r => `
+      <div class="rating-legend-item">
+        <span class="rating-legend-swatch" style="border-top-color:${r.color};border-top-style:${r.dash === "0" ? "solid" : "dashed"}"></span>
+        <span>${escapeHtml(r.text)}</span>
+      </div>
+    `).join("");
+
+    caption.textContent = groups.length > 1
+      ? "Each line is its own scale — different time controls (and different sites) don't share a rating pool, so the numbers aren't comparable across lines."
+      : "";
   }
 
   function escapeHtml(s) {
