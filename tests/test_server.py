@@ -288,6 +288,42 @@ class TestAnalyzeRateLimit:
         server._analyze_request_log.clear()
 
 
+class TestAnalyzeMoveEndpoint:
+    """Backs the Analyze board's interactive click/drag-to-move — pure
+    python-chess validation, no Stockfish call, so (unlike /api/analyze/fen
+    and /api/analyze/pgn above) it isn't behind _rate_limit_analysis.
+    """
+
+    def test_legal_move_returns_the_resulting_fen(self):
+        resp = client.post("/api/analyze/move", json={
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "from_square": "e2", "to_square": "e4",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["san"] == "e4"
+        assert data["fen"] == "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+
+    def test_illegal_move_returns_400(self):
+        resp = client.post("/api/analyze/move", json={
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "from_square": "e2", "to_square": "e5",
+        })
+        assert resp.status_code == 400
+
+    def test_invalid_fen_returns_400(self):
+        resp = client.post("/api/analyze/move", json={"fen": "not-a-fen", "from_square": "e2", "to_square": "e4"})
+        assert resp.status_code == 400
+
+    def test_not_subject_to_the_analysis_rate_limit(self):
+        server._analyze_request_log.clear()
+        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        for _ in range(server._ANALYZE_RATE_LIMIT + 5):
+            resp = client.post("/api/analyze/move", json={"fen": fen, "from_square": "e2", "to_square": "e4"})
+            assert resp.status_code == 200
+        server._analyze_request_log.clear()
+
+
 class TestSettingsPerUser:
     def test_logged_in_users_get_isolated_settings(self):
         user_a = _make_user("settings-a")

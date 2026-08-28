@@ -1,5 +1,58 @@
 # Changelog
 
+## v15 — Analyze board redesign: real pieces, wide desktop layout, fully interactive
+
+First checkpoint of the icy-blue redesign, built on `analyze.html` for
+review before rolling out to the other 10 pages.
+
+**Real piece graphics.** Pieces had no color rule at all — white
+(hollow-glyph) and black (filled-glyph) pieces both inherited the same
+single text color, differentiated only by that subtle shape, in a system
+font that renders inconsistently across platforms to begin with. A first
+pass at hand-drawn geometric SVG replacements didn't look right either
+(no way to visually iterate on hand-authored bezier paths blind). Replaced
+both with the standard "cburnett" Staunton piece set (Colin M. L. Burnett,
+CC BY-SA 3.0 / GFDL — the same set Lichess and Wikipedia use by default),
+pulled in as real, valid SVG path data rather than reconstructed from
+memory, and referenced via `<use>` so all 12 pieces live in one `<defs>`
+block instead of 12 separate assets.
+
+**Wide desktop layout.** `.page` was capped at 920px and the board/sidebar
+grid stacked the board at a 460px cap — a mobile-oriented layout that left
+most of a real monitor empty. Widened to a 1440px page and a 680px board
+column (Chess.com-sized), still collapsing to one column under ~1080px.
+
+**Icy blue palette**, retuned twice: an initial pass came out too
+saturated/"artificial"; repicked as a quieter, more desaturated
+"overcast sky" family for both the dark (default) and light theme
+variants, plus the board's own light/dark square colors (fixed regardless
+of site theme, like a physical board's colors would be).
+
+**Fully interactive board with live Stockfish re-analysis** — the biggest
+functional change. Previously the Position/FEN board could only preview
+one suggested engine line one ply deep; now you can click a piece, see
+its legal destinations highlighted, and click one to actually play it.
+Each move calls a new endpoint (`POST /api/analyze/move`, backed by
+`manual_analysis.apply_move` — pure python-chess validation, not
+Stockfish, so it isn't behind the analysis rate limit) that returns the
+resulting FEN server-side ("server does chess logic, client only renders
+a FEN it's given," same split as everywhere else in the app), then the
+client automatically re-calls the existing `/api/analyze/fen` for fresh
+top-line analysis of the new position. Added Undo/Reset (standard
+undo/redo semantics — playing a move after undoing discards the redone
+branch) and `legal_moves` to `analyze_fen`'s response (reusing
+`puzzles.legal_moves_for_fen`) to power the destination highlighting.
+Board orientation is fixed for the session from the pasted position's
+side to move, rather than flipping every time the turn alternates.
+
+Worth remembering for the remaining pages: an earlier color-only piece
+attempt (before switching to cburnett) hit a real CSS trap — descendant
+selectors like `.piece-white .piece-shape` can never match a `<use>`'s
+referenced content, since it isn't a DOM descendant of the `<use>` for
+selector-matching purposes (only inherited property *values* flow through
+the reference). Moot now that cburnett's colors are baked into the paths,
+but worth knowing before reaching for currentColor-based SVG icons again.
+
 ## v14 — Fixed Chess.com "Daily" mislabeled as "Classical"; rating chart gets a dropdown
 
 Spotted while reviewing the v13 rating chart: a game showed up as "Chess.com

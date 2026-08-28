@@ -27,7 +27,7 @@ from config import STOCKFISH_DEPTH
 from db import get_connection, save_games
 from fetchers import _lichess_result_to_outcome
 from mistakes import STANDARD_VARIANT_TAGS, classify_phase, classify_tier, get_pgn_variant
-from puzzles import get_top_lines
+from puzzles import get_top_lines, legal_moves_for_fen
 from stats import annotate_fen, compute_game_accuracy, get_starting_fen
 
 # This endpoint takes arbitrary pasted text with no login required (Advanced
@@ -84,7 +84,49 @@ def analyze_fen(fen: str, depth: int = STOCKFISH_DEPTH) -> dict:
         board.push(move)
         line["fen_after"] = board.fen()
         board.pop()
-    return {"fen": fen, "top_lines": lines}
+    return {"fen": fen, "top_lines": lines, "legal_moves": legal_moves_for_fen(fen)}
+
+
+def apply_move(fen: str, from_square: str, to_square: str, promotion: str | None = None) -> dict:
+    """Validate and apply one move to `fen`, server-side — same "server
+    does chess logic, client only renders a FEN it's given" split as
+    analyze_fen's fen_after above. Powers the Analyze board's click/drag-
+    to-move interactivity: the client gets legal destinations from
+    puzzles.legal_moves_for_fen, then calls this once one is picked, then
+    re-calls analyze_fen with the returned fen for live engine feedback.
+    """
+    try:
+        board = chess.Board(fen)
+    except ValueError as e:
+        raise ValueError(f"Not a valid FEN: {e}")
+
+    uci = f"{from_square}{to_square}{promotion or ''}"
+    try:
+        move = chess.Move.from_uci(uci)
+    except ValueError:
+        raise ValueError(f"'{uci}' isn't a valid move")
+
+    if move not in board.legal_moves and promotion is None:
+        # A promoting pawn move needs a piece letter to be a legal UCI
+        # move at all; default to queen (same "assume queen in the UI"
+        # simplification puzzles.legal_moves_for_fen's dedup already
+        # makes) rather than rejecting an otherwise-legal move just
+        # because the client didn't ask about underpromotion.
+        move = chess.Move.from_uci(uci + "q")
+
+    if move not in board.legal_moves:
+        raise ValueError(f"'{from_square}{to_square}' isn't legal in this position")
+
+    san = board.san(move)
+    board.push(move)
+    return {
+        "fen": board.fen(),
+        "san": san,
+        "uci": move.uci(),
+        "is_check": board.is_check(),
+        "is_checkmate": board.is_checkmate(),
+        "is_game_over": board.is_game_over(),
+    }
 
 
 def _graded_moves(pgn_text: str, depth: int) -> list[dict]:
