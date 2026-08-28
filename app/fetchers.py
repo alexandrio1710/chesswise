@@ -413,11 +413,19 @@ def _chesscom_result_to_outcome(result_code: str) -> str:
 
 
 def _classify_chesscom_time_control(time_class: str) -> str:
+    """Chess.com's "daily" (correspondence — days per move, played over
+    weeks) is a fundamentally different format from "classical" (a long
+    but single-sitting real-time game, Lichess's own top speed bucket —
+    see _classify_time_control_from_clock below). Conflating them under
+    one "classical" label made a correspondence game look like a 90-minute
+    game that was somehow played at 100% accuracy. Kept as its own bucket
+    instead.
+    """
     mapping = {
         "bullet": "bullet",
         "blitz": "blitz",
         "rapid": "rapid",
-        "daily": "classical",
+        "daily": "daily",
     }
     return mapping.get(time_class, time_class or "unknown")
 

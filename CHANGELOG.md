@@ -1,5 +1,25 @@
 # Changelog
 
+## v14 — Fixed Chess.com "Daily" mislabeled as "Classical"; rating chart gets a dropdown
+
+Spotted while reviewing the v13 rating chart: a game showed up as "Chess.com
+Classical" with 100% accuracy, despite the account never having played a
+real-time classical game. Root cause: `fetchers._classify_chesscom_time_
+control()` mapped Chess.com's `"daily"` time class (correspondence —
+days per move, played over weeks) straight to `"classical"`. Those are
+different formats — Lichess's own `"classical"` bucket (see
+`_classify_time_control_from_clock`) is a genuine single-sitting, real-time
+game — so a correspondence game was silently passing itself off as a
+90-minute one everywhere time_control is grouped (Insights, Search).
+`"daily"` is now kept as its own bucket; the one pre-existing mislabeled
+row was backfilled. Added to the Search filter dropdown.
+
+The v13 rating-over-time chart's (source, time control) split fixed the
+"broken" mixing, but showing every line at once (7 in this account's data)
+was cluttered. Replaced the always-on multi-line view with a dropdown:
+one series shown at a time by default (the most-played), with an "All"
+option for the previous overview. Selection persists across reloads.
+
 ## v13 — Fixed accuracy/ACPL crater bug; rating chart now splits by time control
 
 The new accuracy-by-time-control card (v12) was reporting implausibly low
