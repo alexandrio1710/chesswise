@@ -1,5 +1,27 @@
 # Changelog
 
+## v18 — Average centipawn loss added as its own metric, by time control
+
+Insights had accuracy by time control but not the raw ACPL it's derived
+from — some players find a plain "50 centipawns lost per move" more
+legible than a percentage run through an exponential decay curve.
+Refactored `compute_game_accuracy()` to be `compute_game_accuracy =
+f(compute_game_acpl())` instead of duplicating the capped-ACPL averaging
+logic inline — `compute_game_acpl()` is now its own function (same
+mate-swing capping and 2-move minimum as accuracy, so this doesn't
+reintroduce either bug for the new metric), and `game_report._acpl()`'s
+docstring/behavior is unchanged. Extracted the shared "group games by
+time control, average a per-game Python metric" logic from
+`accuracy_by_time_control()` into `_per_game_metric_by_time_control()`,
+reused by the new `acpl_by_time_control()` — both now share one
+implementation instead of two near-identical copies.
+
+New "Average centipawn loss by time control" card on Insights, added to
+both `/api/insights` and `/api/export/stats`. Unlike every other bar on
+that page, lower is better here; the bar width is scaled against a
+150cp reference (chosen from this project's own data, where real values
+run 55-66cp) rather than a natural 0-100 ceiling.
+
 ## v17 — Interactive live analysis on every board; accuracy minimum-sample-size fix
 
 **Extended the Analyze board's click-to-move + live Stockfish re-analysis

@@ -6,6 +6,7 @@ from db import get_connection
 from stats import (
     _is_immediately_preceding_month,
     annotate_fen,
+    compute_game_acpl,
     compute_game_accuracy,
     get_starting_fen,
     opening_family,
@@ -240,3 +241,38 @@ class TestComputeGameAccuracyMateSwingCap:
         # where no real play occurred. One move isn't a real sample.
         moves = [_move("white", 50, 0)]
         assert compute_game_accuracy(moves, "white") is None
+
+
+class TestComputeGameAcpl:
+    """compute_game_accuracy is now just compute_game_acpl run through an
+    exponential decay — these tests lock in that the two stay in sync
+    after that refactor, plus the ACPL-specific value itself (the new
+    "average centipawn loss by time control" Insights card reports this
+    number directly, not just the derived accuracy percentage).
+    """
+
+    def test_matches_the_precomputed_value_behind_the_accuracy_test_above(self):
+        # Same fixture as the mate-swing accuracy test: 9 clean moves + 1
+        # move that blunders a forced mate from an already-winning
+        # position. Precomputed capped ACPL = 190.0 (accuracy 42.9% is
+        # 100 * e^(-0.00446 * 190.0), confirmed in the accuracy test above).
+        moves = [_move("white", 50, 0) for _ in range(9)]
+        moves.append(_move("white", 900, 10900))
+        assert compute_game_acpl(moves, "white") == 190.0
+
+    def test_zero_acpl_for_a_perfectly_played_game(self):
+        moves = [_move("white", 50, 0), _move("white", 60, 0)]
+        assert compute_game_acpl(moves, "white") == 0.0
+
+    def test_fewer_than_two_moves_returns_none(self):
+        assert compute_game_acpl([_move("white", 50, 0)], "white") is None
+
+    def test_accuracy_is_derived_from_acpl_via_the_documented_formula(self):
+        import math
+
+        from stats import ACCURACY_DECAY_K
+
+        moves = [_move("white", 200, 80), _move("white", 150, 40), _move("white", 90, 10)]
+        acpl = compute_game_acpl(moves, "white")
+        expected_accuracy = round(max(0.0, min(100.0, 100 * math.exp(-ACCURACY_DECAY_K * acpl))), 1)
+        assert compute_game_accuracy(moves, "white") == expected_accuracy

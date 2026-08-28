@@ -624,29 +624,23 @@ def capped_eval_drop(eval_before_cp: float, eval_drop: float) -> float:
     return max(0.0, capped_before - capped_after)
 
 
-def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
-    """0-100 accuracy score for one player's moves in one game, from their
-    average centipawn loss (ACPL, eval magnitude capped per move — see
-    ACCURACY_EVAL_CAP_CP) via exponential decay:
-
-        accuracy = 100 * e^(-k * ACPL)
-
-    Doesn't correct for the engine's own move-to-move evaluation noise —
-    a real simplification, not a claim of precision. It's a standard style
-    of scoring used across chess analysis tools generally, not any specific
-    site's exact formula (this project picked its own k, see
-    ACCURACY_DECAY_K above).
+def compute_game_acpl(moves: list[dict], color: str) -> float | None:
+    """Average centipawn loss for one player's moves in one game, eval
+    magnitude capped per move (see ACCURACY_EVAL_CAP_CP) so an already-
+    decided position's mate-distance swing doesn't dominate the average
+    — same reasoning as compute_game_accuracy, which is just this run
+    through an exponential decay (see below).
 
     `moves` is get_game_moves()'s output; only the given `color`'s own
-    moves count (the opponent's moves aren't yours to be accurate about).
-    Returns None if that color made fewer than 2 moves with a known eval.
-    One move isn't a real sample — confirmed against real data: a game
-    the opponent abandoned right after the opening ("1. e4 c5", win by
-    abandonment) scored a meaningless 100% since that single book move
-    happened to have ~0 eval_drop. Two real analyzed accounts in this
-    project's own dataset had exactly this shape; nothing had 2 or 3, so
-    this threshold excludes only that degenerate case, not genuinely
-    short-but-real games (a 4-move Scholar's-mate loss still scores).
+    moves count. Returns None if that color made fewer than 2 moves with
+    a known eval. One move isn't a real sample — confirmed against real
+    data: a game the opponent abandoned right after the opening
+    ("1. e4 c5", win by abandonment) had a single book move with ~0
+    eval_drop, which would read as a meaningless "0 ACPL, flawless game."
+    Two real analyzed games in this project's own dataset had exactly
+    this shape; nothing had 2 or 3, so this threshold excludes only that
+    degenerate case, not genuinely short-but-real games (a 4-move
+    Scholar's-mate loss still scores).
     """
     drops = [
         capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
@@ -655,7 +649,24 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
     ]
     if len(drops) < 2:
         return None
-    acpl = sum(drops) / len(drops)
+    return round(sum(drops) / len(drops), 1)
+
+
+def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
+    """0-100 accuracy score for one player's moves in one game, from their
+    ACPL (see compute_game_acpl) via exponential decay:
+
+        accuracy = 100 * e^(-k * ACPL)
+
+    Doesn't correct for the engine's own move-to-move evaluation noise —
+    a real simplification, not a claim of precision. It's a standard style
+    of scoring used across chess analysis tools generally, not any specific
+    site's exact formula (this project picked its own k, see
+    ACCURACY_DECAY_K above).
+    """
+    acpl = compute_game_acpl(moves, color)
+    if acpl is None:
+        return None
     accuracy = 100 * math.exp(-ACCURACY_DECAY_K * acpl)
     return round(max(0.0, min(100.0, accuracy)), 1)
 
