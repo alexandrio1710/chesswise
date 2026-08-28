@@ -8,6 +8,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from fetchers import (
+    _classify_chesscom_time_control,
     _combine_lichess_datetime,
     _normalize_chesscom_game,
     _normalize_lichess_game,
@@ -148,6 +149,29 @@ class TestLichessRefreshHasNoMaxCap:
         params = mock_req.call_args.kwargs["params"]
         assert params["max"] == 20
         assert "since" not in params
+
+
+class TestClassifyChesscomTimeControl:
+    """Chess.com's "daily" (correspondence, days per move) used to be
+    relabeled "classical" — a real-time, single-sitting format Lichess
+    genuinely offers but Chess.com's live play doesn't. That made a
+    correspondence game look like a 90-minute game in the app's own
+    time-control breakdowns (surfaced when a "classical" game showed
+    100% accuracy despite the account never having played a live
+    classical time control).
+    """
+
+    def test_daily_is_its_own_bucket_not_relabeled_classical(self):
+        assert _classify_chesscom_time_control("daily") == "daily"
+
+    def test_standard_speeds_pass_through_unchanged(self):
+        assert _classify_chesscom_time_control("bullet") == "bullet"
+        assert _classify_chesscom_time_control("blitz") == "blitz"
+        assert _classify_chesscom_time_control("rapid") == "rapid"
+
+    def test_unknown_time_class_falls_back_to_itself(self):
+        assert _classify_chesscom_time_control("bughouse") == "bughouse"
+        assert _classify_chesscom_time_control("") == "unknown"
 
 
 class TestSplitPgnBlobs:

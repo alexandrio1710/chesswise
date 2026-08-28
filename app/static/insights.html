@@ -214,7 +214,10 @@
   </section>
 
   <section class="card">
-    <h2>Rating over time</h2>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+      <h2 style="margin:0;">Rating over time</h2>
+      <select class="profile-select" id="rating-series-select"></select>
+    </div>
     <div id="rating-chart-wrap">
       <svg id="rating-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
     </div>
@@ -382,42 +385,68 @@
   const TIME_CONTROL_LABELS = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", daily: "Daily" };
   const FALLBACK_COLOR = "var(--text-muted)";
 
+  let ratingProgressData = [];
+  // Empty means "no preference recorded yet" — defaults to the most-played
+  // (source, time control) below once the data is in, rather than "all"
+  // (showing every line at once is what a dropdown here is meant to avoid).
+  let ratingSeriesSelection = localStorage.getItem("ratingSeriesSelection") || "";
+
+  function groupKey(p) { return `${p.source}::${p.time_control || "unknown"}`; }
+
   function renderRatingChart(progress) {
+    ratingProgressData = progress;
     const svg = document.getElementById("rating-chart");
     svg.innerHTML = "";
     const caption = document.getElementById("rating-caption");
     const legend = document.getElementById("rating-legend");
+    const select = document.getElementById("rating-series-select");
     legend.innerHTML = "";
-    if (!progress.length) { caption.textContent = "No rating data yet."; return; }
-
-    const width = 800, height = 180, pad = 16;
-    const ns = "http://www.w3.org/2000/svg";
-    const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
+    if (!progress.length) { caption.textContent = "No rating data yet."; select.innerHTML = ""; return; }
 
     // Chess.com and Lichess each keep a SEPARATE rating pool per time
     // control (a bullet rating and a rapid rating on the same site aren't
     // the same number line, any more than Lichess and Chess.com ratings
-    // are) — plotting them as one connected line produces fake "swings"
-    // that are really just alternating between pools. Every (source, time
-    // control) combination gets its own line on its own min-max scale.
-    const groupKey = p => `${p.source}::${p.time_control || "unknown"}`;
-    const groups = [...new Set(progress.map(groupKey))];
-    const xScale = i => pad + (i / Math.max(1, progress.length - 1)) * (width - 2 * pad);
+    // are) — plotting them all at once produced a cluttered chart with a
+    // fake "swing" every time the line crossed pools. A dropdown now shows
+    // one (source, time control) at a time by default — "All" is still
+    // available for an at-a-glance overview.
+    const allGroups = [...new Set(progress.map(groupKey))]
+      .sort((a, b) => progress.filter(p => groupKey(p) === b).length - progress.filter(p => groupKey(p) === a).length);
+
+    if (ratingSeriesSelection !== "all" && !allGroups.includes(ratingSeriesSelection)) {
+      ratingSeriesSelection = allGroups[0] || "all";
+    }
+    select.innerHTML = `<option value="all">All time controls</option>` + allGroups.map(key => {
+      const [source, timeControl] = key.split("::");
+      const label = `${SOURCE_LABELS[source] || source} ${TIME_CONTROL_LABELS[timeControl] || (timeControl === "unknown" ? "Unknown" : timeControl)}`;
+      return `<option value="${key}">${escapeHtml(label)}</option>`;
+    }).join("");
+    select.value = ratingSeriesSelection;
+
+    const groups = ratingSeriesSelection === "all" ? allGroups : [ratingSeriesSelection];
+    const width = 800, height = 180, pad = 16;
+    const ns = "http://www.w3.org/2000/svg";
+    const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
+    // "All" keeps every line on the shared chronological index so their
+    // relative timing stays comparable; a single selected series instead
+    // gets its own index so its games spread across the full chart width
+    // rather than being squeezed into wherever they fell among every game.
+    const useSharedIndex = groups.length > 1;
+    const xScale = (i, total) => pad + (i / Math.max(1, total - 1)) * (width - 2 * pad);
     const legendRows = [];
-    const sourcesSeen = new Set();
 
     groups.forEach(key => {
       const [source, timeControl] = key.split("::");
-      sourcesSeen.add(source);
       const rows = progress.map((p, i) => ({ ...p, i })).filter(r => groupKey(r) === key);
       const vals = rows.map(r => r.player_rating);
       const minR = Math.min(...vals), maxR = Math.max(...vals);
       const range = Math.max(1, maxR - minR);
       const yScale = r => height - pad - ((r - minR) / range) * (height - 2 * pad);
 
-      const points = rows.map(r => [xScale(r.i), yScale(r.player_rating)]);
+      const total = useSharedIndex ? progress.length : rows.length;
+      const points = rows.map((r, localI) => [xScale(useSharedIndex ? r.i : localI, total), yScale(r.player_rating)]);
       const color = TIME_CONTROL_COLORS[timeControl] || FALLBACK_COLOR;
-      const dash = SOURCE_DASH[source] || "0";
+      const dash = groups.length > 1 ? (SOURCE_DASH[source] || "0") : "0";
       svg.appendChild(makeEl("polyline", {
         points: points.map(p => p.join(",")).join(" "), fill: "none",
         stroke: color, "stroke-width": 2, "stroke-linejoin": "round",
@@ -451,6 +480,12 @@
     div.textContent = s ?? "";
     return div.innerHTML;
   }
+
+  document.getElementById("rating-series-select").addEventListener("change", (e) => {
+    ratingSeriesSelection = e.target.value;
+    localStorage.setItem("ratingSeriesSelection", ratingSeriesSelection);
+    renderRatingChart(ratingProgressData);
+  });
 
   document.querySelectorAll("#filter-group button").forEach(btn => {
     btn.addEventListener("click", () => {
