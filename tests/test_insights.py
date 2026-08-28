@@ -8,7 +8,13 @@ import itertools
 
 import insights
 from db import get_connection
-from insights import accuracy_by_time_control, rating_progress, win_rate_by_day_of_week, win_rate_by_time_of_day
+from insights import (
+    accuracy_by_time_control,
+    acpl_by_time_control,
+    rating_progress,
+    win_rate_by_day_of_week,
+    win_rate_by_time_of_day,
+)
 
 _id_counter = itertools.count(1)
 
@@ -145,3 +151,45 @@ class TestAccuracyByTimeControl:
         # semantics of counting all analyzed games in the bucket), but only
         # the one with a real accuracy contributes to the average.
         assert result[tc] == {"games": 2, "avg_accuracy": 70.0}
+
+
+class TestAcplByTimeControl:
+    """Same grouping helper as TestAccuracyByTimeControl above
+    (_per_game_metric_by_time_control), just monkeypatching
+    stats.compute_game_acpl instead — this is the metric the new
+    "average centipawn loss by time control" Insights card reads.
+    """
+
+    def test_averages_are_grouped_by_time_control_not_pooled(self, monkeypatch):
+        tc_a = f"tc-acpl-a-{next(_id_counter)}"
+        tc_b = f"tc-acpl-b-{next(_id_counter)}"
+        g1 = _insert_game_with_time_control(tc_a)
+        g2 = _insert_game_with_time_control(tc_a)
+        g3 = _insert_game_with_time_control(tc_b)
+
+        fake_acpl = {g1: 40.0, g2: 60.0, g3: 25.0}
+        monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
+        monkeypatch.setattr(
+            insights.stats, "compute_game_acpl",
+            lambda moves, color: fake_acpl.get(moves[0]["gid"]),
+        )
+
+        result = acpl_by_time_control()
+
+        assert result[tc_a] == {"games": 2, "avg_acpl": 50.0}
+        assert result[tc_b] == {"games": 1, "avg_acpl": 25.0}
+
+    def test_games_with_no_computable_acpl_are_excluded_from_the_average(self, monkeypatch):
+        tc = f"tc-acpl-none-{next(_id_counter)}"
+        g1 = _insert_game_with_time_control(tc)
+        g2 = _insert_game_with_time_control(tc)
+
+        monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
+        monkeypatch.setattr(
+            insights.stats, "compute_game_acpl",
+            lambda moves, color: None if moves[0]["gid"] == g1 else 45.0,
+        )
+
+        result = acpl_by_time_control()
+
+        assert result[tc] == {"games": 2, "avg_acpl": 45.0}

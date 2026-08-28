@@ -103,12 +103,15 @@ def win_rate_by_time_control(source: str | None = None, profile_id: int | None =
         conn.close()
 
 
-def accuracy_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
-    """Mean per-game accuracy (stats.compute_game_accuracy — same formula
-    shown on every game's own page and used by progress.average_accuracy()),
-    grouped by time control. Accuracy isn't a SQL aggregate — it comes from
-    replaying each game's move trace — so this groups game ids by time
-    control first, then reuses the per-game formula.
+def _per_game_metric_by_time_control(
+    metric_fn, result_key: str, source: str | None = None, profile_id: int | None = None,
+) -> dict:
+    """Shared grouping logic for accuracy_by_time_control()/
+    acpl_by_time_control(): neither metric is a SQL aggregate (both come
+    from replaying each game's move trace), so this groups game ids by
+    time control first, then averages `metric_fn(moves, color)` — a
+    stats.compute_game_accuracy/compute_game_acpl-shaped function —
+    over each group.
     """
     where, params = _source_clause(source, profile_id)
     conn = get_connection()
@@ -129,20 +132,36 @@ def accuracy_by_time_control(source: str | None = None, profile_id: int | None =
 
     result = {}
     for tc, game_ids in game_ids_by_tc.items():
-        accuracies = []
+        values = []
         for gid in game_ids:
             game = stats.get_game_detail(gid)
             if game is None:
                 continue
             moves = stats.get_game_moves(gid)
-            acc = stats.compute_game_accuracy(moves, game["color"])
-            if acc is not None:
-                accuracies.append(acc)
+            value = metric_fn(moves, game["color"])
+            if value is not None:
+                values.append(value)
         result[tc] = {
             "games": len(game_ids),
-            "avg_accuracy": round(sum(accuracies) / len(accuracies), 1) if accuracies else None,
+            result_key: round(sum(values) / len(values), 1) if values else None,
         }
     return result
+
+
+def accuracy_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+    """Mean per-game accuracy (stats.compute_game_accuracy — same formula
+    shown on every game's own page and used by progress.average_accuracy()),
+    grouped by time control.
+    """
+    return _per_game_metric_by_time_control(stats.compute_game_accuracy, "avg_accuracy", source, profile_id)
+
+
+def acpl_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+    """Mean per-game average centipawn loss (stats.compute_game_acpl —
+    the same capped-ACPL figure accuracy is itself derived from), grouped
+    by time control. Unlike accuracy, lower is better here.
+    """
+    return _per_game_metric_by_time_control(stats.compute_game_acpl, "avg_acpl", source, profile_id)
 
 
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]

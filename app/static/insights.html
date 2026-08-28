@@ -239,6 +239,10 @@
       <div class="bar-list" id="accuracy-by-time-control"></div>
     </div>
     <div class="card">
+      <h2>Average centipawn loss by time control</h2>
+      <div class="bar-list" id="acpl-by-time-control"></div>
+    </div>
+    <div class="card">
       <h2>Win rate by day of week (UTC)</h2>
       <div class="bar-list" id="by-day"></div>
     </div>
@@ -303,6 +307,7 @@
     renderBarList("by-color", data.win_rate_by_color);
     renderBarList("by-time-control", data.win_rate_by_time_control);
     renderAccuracyByTimeControl(data.accuracy_by_time_control);
+    renderAcplByTimeControl(data.acpl_by_time_control);
     renderBarList("by-day", data.win_rate_by_day_of_week, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]);
     renderBarList("by-hour", data.win_rate_by_time_of_day);
     renderRatingBands(data.performance_vs_rating_band);
@@ -346,6 +351,30 @@
         <div class="bar-list-item">
           <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acc !== null ? acc + "%" : "—"} (${d.games})</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${acc !== null ? acc : 0}%"></div></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // ACPL has no natural 0-100 ceiling the way a percentage does, so the bar
+  // width is scaled against this cap instead — chosen from this project's
+  // own data (typical values land well under it; a fully blunder-ridden
+  // time control would still visibly fill most of the bar rather than
+  // overflowing it). Unlike every other bar on this page, lower is better.
+  const ACPL_BAR_SCALE_CP = 150;
+
+  function renderAcplByTimeControl(dict) {
+    const el = document.getElementById("acpl-by-time-control");
+    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
+    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
+    el.innerHTML = keys.map(k => {
+      const d = dict[k];
+      const acpl = d.avg_acpl;
+      const pct = acpl !== null ? Math.max(0, Math.min(100, (acpl / ACPL_BAR_SCALE_CP) * 100)) : 0;
+      return `
+        <div class="bar-list-item">
+          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acpl !== null ? acpl + " cp" : "—"} (${d.games})</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
         </div>
       `;
     }).join("");
