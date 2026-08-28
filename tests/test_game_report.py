@@ -81,3 +81,20 @@ class TestReportCacheInvalidation:
 
         game_report.generate_game_report(game_id, force=True)
         assert calls == [game_id]
+
+
+def _move(eval_before_cp: float, eval_drop: float) -> dict:
+    return {"eval_before_cp": eval_before_cp, "eval_drop": eval_drop}
+
+
+class TestAcplMinimumSampleSize:
+    """Mirrors stats.compute_game_accuracy's own minimum: one move isn't a
+    real sample (a game the opponent abandoned right after the opening
+    scored a meaningless ~perfect ACPL/rating from a single book move).
+    """
+
+    def test_a_single_move_returns_none_rather_than_a_meaningless_acpl(self):
+        assert game_report._acpl([_move(50, 0)]) is None
+
+    def test_two_moves_is_enough_to_compute_a_real_acpl(self):
+        assert game_report._acpl([_move(50, 0), _move(50, 100)]) == 50.0

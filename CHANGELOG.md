@@ -1,5 +1,49 @@
 # Changelog
 
+## v17 — Interactive live analysis on every board; accuracy minimum-sample-size fix
+
+**Extended the Analyze board's click-to-move + live Stockfish re-analysis
+everywhere else there's a board:**
+- `game.html`: the main game-review board is now fully interactive — click
+  a piece at any ply to branch into your own line ("Explore"), with the
+  engine re-analyzing live after each move (new eval bar). "Back to game"
+  and "Undo" return to the real move sequence; any real-game navigation
+  (move-list click, arrow keys, first/prev/next/last) exits exploration
+  automatically so the two modes never fight over what's on the board.
+  Also added a new eval bar (this page never had one) and fixed a real
+  pre-existing bug found along the way: `.hidden` was used throughout via
+  `classList.toggle` (`#clock-card`, `#critical-card`, `#share-card`, the
+  tablebase link) but the CSS rule itself was never defined, so those
+  sections were always visible regardless of the toggle.
+- `explorer.html`: added a live eval bar next to the opening-database
+  board — previously it showed community/personal move stats with no
+  sense of whether the position was actually good. Fetches
+  `/api/analyze/fen` in parallel with the existing explorer stats
+  (request-id guarded the same way the existing loader already is, so
+  clicking through several moves quickly can't show a stale eval).
+- `puzzles.html` (main queue) and `endgame.html`: once a puzzle/position
+  is solved, the board stays interactive — keep exploring with live
+  engine feedback instead of the puzzle's own single graded-answer check,
+  via the same Undo/Reset pattern. Puzzle Rush and the opening-puzzle
+  trainer were deliberately left as pure solving flows (rush is
+  speed-focused; opening-puzzle checks one specific developing move) —
+  bolting free exploration onto either risked interfering with their
+  correctness-checking mechanic for comparatively little benefit.
+
+**Accuracy: fixed a minimum-sample-size gap, found while re-verifying the
+v13 fix against the full dataset.** `compute_game_accuracy()` (and
+`game_report._acpl()`) returned a score for as few as one analyzed move.
+Confirmed against real data: two games in this project's own dataset
+were won by the opponent abandoning/timing out right after the opening
+("1. e4 c5") — a single book move with ~0 eval_drop scored a meaningless
+100% "accuracy" for a game with no real play. Both now require at least
+2 moves with a known eval, returning None (already the existing "not
+enough data" convention) otherwise. Checked the full 275-analyzed-game
+dataset first to confirm the threshold: nothing had exactly 2 or 3 own
+moves, so this excludes only the two 1-move degenerate cases — a
+genuinely short 4-move Scholar's-mate loss elsewhere in the same dataset
+still scores normally.
+
 ## v16 — Rolled out the icy-blue redesign to the remaining 10 pages
 
 Extends v15's `analyze.html` checkpoint (approved after review) to every

@@ -208,22 +208,35 @@ class TestComputeGameAccuracyMateSwingCap:
     def test_a_move_that_does_not_change_an_already_decided_verdict_costs_nothing(self):
         # Crushing before (1500cp, past the cap) and still crushing after
         # (1200cp) — the raw 300cp "drop" didn't change the practical
-        # outcome, so it shouldn't count against accuracy.
-        moves = [_move("white", 1500, 300)]
+        # outcome, so it shouldn't count against accuracy. A second clean
+        # move satisfies the "at least 2 moves" minimum sample size below.
+        moves = [_move("white", 1500, 300), _move("white", 50, 0)]
         assert compute_game_accuracy(moves, "white") == 100.0
 
     def test_a_real_winning_to_losing_swing_is_still_counted_as_a_big_mistake(self):
         # Genuinely blowing a winning position (1500cp) into a losing one
         # (-1500cp) is a real, serious mistake and must still register as
         # one — capped at 2x the ceiling (2000cp) rather than uncapped.
-        moves = [_move("white", 1500, 3000)]
+        moves = [_move("white", 1500, 3000), _move("white", 50, 0)]
         acc = compute_game_accuracy(moves, "white")
         assert acc < 50.0
 
     def test_only_the_given_colors_own_moves_count(self):
-        moves = [_move("white", 900, 10900), _move("black", 50, 0)]
+        moves = [
+            _move("white", 900, 10900), _move("white", 50, 0),
+            _move("black", 50, 0), _move("black", 50, 400),
+        ]
         assert compute_game_accuracy(moves, "white") != compute_game_accuracy(moves, "black")
 
     def test_no_moves_for_color_returns_none(self):
-        moves = [_move("black", 50, 0)]
+        moves = [_move("black", 50, 0), _move("black", 50, 10)]
+        assert compute_game_accuracy(moves, "white") is None
+
+    def test_fewer_than_two_moves_returns_none_rather_than_a_meaningless_score(self):
+        # Confirmed against real data: a game the opponent abandoned right
+        # after the opening ("1. e4 c5", win by abandonment) had exactly
+        # one analyzed move for the winner, which happened to have ~0
+        # eval_drop — scoring a meaningless 100% "accuracy" for a game
+        # where no real play occurred. One move isn't a real sample.
+        moves = [_move("white", 50, 0)]
         assert compute_game_accuracy(moves, "white") is None

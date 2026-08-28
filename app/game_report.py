@@ -317,13 +317,18 @@ def _acpl(moves: list[dict]) -> float | None:
     already-decided position shouldn't dominate the whole game's ACPL (and
     with it, this page's estimated performance rating) any more than the
     Insights/Dashboard accuracy figures let it.
+
+    Also mirrors compute_game_accuracy's minimum of 2 moves: one move
+    (e.g. a game the opponent abandoned right after the opening) isn't a
+    real sample, and gave a nonsensical 0 ACPL / ~perfect estimated
+    rating from a single book move.
     """
     drops = [
         stats.capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
         for m in moves
         if m["eval_drop"] is not None and m["eval_before_cp"] is not None
     ]
-    return sum(drops) / len(drops) if drops else None
+    return sum(drops) / len(drops) if len(drops) >= 2 else None
 
 
 def _build_summary(accuracy: float | None, rating: int | None, tier_counts: dict, phase_accuracy: dict) -> str:
