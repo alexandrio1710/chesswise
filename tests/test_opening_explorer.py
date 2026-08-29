@@ -110,3 +110,69 @@ class TestQueryCommunityExplorer:
 
         data2, needs_auth2 = opening_explorer.query_community_explorer("fen-f", lichess_api_token="tok")
         assert data2 == {"moves": []} and needs_auth2 is False
+
+    def test_min_rating_expands_to_every_band_at_or_above_it(self, monkeypatch):
+        # Lichess's explorer only filters by whole bands (its own `ratings`
+        # enum), each meaning "this band and every stronger one" — not an
+        # arbitrary cutoff, so a single min_rating has to expand into the
+        # full list of qualifying bands.
+        calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            calls.append(params)
+            return _FakeResponse(200, {"moves": []})
+
+        monkeypatch.setattr(opening_explorer.requests, "get", fake_get)
+        opening_explorer.query_community_explorer("fen-g", min_rating=1800)
+
+        assert calls[0]["ratings"] == "1800,2000,2200,2500"
+
+    def test_no_min_rating_omits_the_ratings_param_entirely(self, monkeypatch):
+        calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            calls.append(params)
+            return _FakeResponse(200, {"moves": []})
+
+        monkeypatch.setattr(opening_explorer.requests, "get", fake_get)
+        opening_explorer.query_community_explorer("fen-h")
+
+        assert "ratings" not in calls[0]
+
+    def test_different_min_ratings_are_cached_separately(self, monkeypatch):
+        responses = iter([
+            _FakeResponse(200, {"moves": [], "white": 1}),
+            _FakeResponse(200, {"moves": [], "white": 2}),
+        ])
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            return next(responses)
+
+        monkeypatch.setattr(opening_explorer.requests, "get", fake_get)
+
+        data_all, _ = opening_explorer.query_community_explorer("fen-i")
+        data_2000, _ = opening_explorer.query_community_explorer("fen-i", min_rating=2000)
+
+        assert data_all["white"] == 1
+        assert data_2000["white"] == 2
+
+
+class TestExplorePositionMinRating:
+    def test_an_unrecognized_min_rating_is_rejected(self):
+        try:
+            opening_explorer.explore_position([], min_rating=1500)
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+
+    def test_a_recognized_min_rating_is_accepted(self, monkeypatch):
+        monkeypatch.setattr(
+            opening_explorer, "query_community_explorer",
+            lambda fen, lichess_api_token=None, min_rating=None: (None, False),
+        )
+        monkeypatch.setattr(
+            opening_explorer, "get_my_stats_at_position",
+            lambda move_ucis, source=None: {"games_reached": 0, "wins": 0, "draws": 0, "losses": 0, "win_rate_pct": None, "my_moves": []},
+        )
+        result = opening_explorer.explore_position([], min_rating=1800)
+        assert result["community"]["available"] is False

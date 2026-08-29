@@ -383,19 +383,24 @@ def api_export_stats(source: str | None = Query(default=None), profile_id: int |
 @app.get("/api/explorer")
 def api_explorer(
     moves: str = Query(default=""), source: str | None = Query(default=None),
+    min_rating: int | None = Query(default=None),
     user: dict | None = Depends(auth.get_current_user_optional),
 ):
     """`moves` is a comma-separated list of UCI moves from the starting
     position (e.g. "e2e4,e7e5,g1f3") — empty string means the starting
-    position itself.
+    position itself. `min_rating` scopes the Lichess community reference
+    to players at or above that rating band (one of
+    opening_explorer.RATING_BANDS) — omit for no filter.
     """
     source = _normalize_source(source)
     move_ucis = [m for m in moves.split(",") if m]
     api_token = _settings_for(user).get("lichess_api_token")
     try:
-        return opening_explorer.explore_position(move_ucis, source=source, lichess_api_token=api_token)
+        return opening_explorer.explore_position(
+            move_ucis, source=source, lichess_api_token=api_token, min_rating=min_rating,
+        )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid move sequence: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/worst-games")

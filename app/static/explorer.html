@@ -191,6 +191,11 @@
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 560px) { .stats-grid { grid-template-columns: 1fr; } }
   .panel-title { font-size: 13px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+  #rating-select {
+    margin-left: auto; font: inherit; font-size: 11px; font-weight: 400; padding: 3px 6px;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--page-plane);
+    color: var(--text-secondary); cursor: pointer;
+  }
   .panel-title .dot { width: 9px; height: 9px; border-radius: 50%; }
   .panel-title .dot.mine { background: var(--series-1); }
   .panel-title .dot.community { background: var(--series-2); }
@@ -306,7 +311,10 @@
             <div id="mine-summary"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
           </div>
           <div>
-            <p class="panel-title"><span class="dot community"></span>Lichess community</p>
+            <p class="panel-title">
+              <span class="dot community"></span>Lichess community
+              <select id="rating-select" title="Minimum rating"></select>
+            </p>
             <div id="community-summary"><span class="loading-text"><span class="spinner"></span>Loading…</span></div>
           </div>
         </div>
@@ -344,6 +352,29 @@
     svg.appendChild(use);
     container.appendChild(svg);
   }
+  // Lichess's explorer only filters by whole rating bands (0, 1000, 1200,
+  // ..., 2500), each meaning "this band and every stronger one" — see
+  // opening_explorer.RATING_BANDS. A single "from this rating up" filter
+  // is a lot more useful for prep than comparing against the entire
+  // Lichess population, which spans total beginners to super-GMs.
+  const RATING_BANDS = [0, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2500];
+  let minRating = localStorage.getItem("explorerMinRating");
+  minRating = minRating ? parseInt(minRating, 10) : null;
+
+  function setUpRatingSelect() {
+    const select = document.getElementById("rating-select");
+    select.innerHTML = `<option value="">All ratings</option>` +
+      RATING_BANDS.map(b => `<option value="${b}">${b === 2500 ? "2500+" : b + "+"}</option>`).join("");
+    select.value = minRating != null ? String(minRating) : "";
+    select.addEventListener("change", () => {
+      minRating = select.value === "" ? null : parseInt(select.value, 10);
+      if (minRating != null) localStorage.setItem("explorerMinRating", String(minRating));
+      else localStorage.removeItem("explorerMinRating");
+      loadPosition();
+    });
+  }
+  setUpRatingSelect();
+
   let movePath = [];       // [{uci, san}, ...]
   let currentData = null;
   let selectedSquare = null;
@@ -451,7 +482,9 @@
 
     try {
       const movesParam = movePath.map(m => m.uci).join(",");
-      const res = await fetch(`/api/explorer?moves=${movesParam}`);
+      const params = new URLSearchParams({ moves: movesParam });
+      if (minRating != null) params.set("min_rating", minRating);
+      const res = await fetch(`/api/explorer?${params}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `Request failed (${res.status})`);

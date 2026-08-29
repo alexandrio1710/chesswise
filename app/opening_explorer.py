@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 EXPLORER_USER_AGENT = "ChessMistakeTracker/1.0 (personal project)"
 EXPLORER_BASE_URL = "https://explorer.lichess.org/lichess"
 
+# Lichess's own rating-band boundaries for the community explorer (its
+# OpenAPI spec's `ratings` enum) — each value covers from itself up to the
+# next one, so RATING_BANDS[i:] is exactly the query value for "this
+# band and every stronger one", which is the only grouping the explorer
+# UI actually offers (a single "from this rating up" filter, not one band
+# in isolation) — comparing against a wildly different-strength slice of
+# the whole Lichess population is a lot less useful than comparing against
+# players near your own level.
+RATING_BANDS = [0, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2500]
+
 # Community reference calls are the slow part of this feature (an external
 # network round-trip on every click through the explorer) — this project's
 # own dataset never changes mid-session, but the community's does slowly
@@ -47,7 +57,9 @@ DIVERGENCE_COMMUNITY_MIN_PCT = 20.0
 DIVERGENCE_MIN_WIN_RATE_EDGE = 10.0
 
 
-def query_community_explorer(fen: str, lichess_api_token: str | None = None) -> tuple[dict | None, bool]:
+def query_community_explorer(
+    fen: str, lichess_api_token: str | None = None, min_rating: int | None = None,
+) -> tuple[dict | None, bool]:
     """Aggregate stats from Lichess's public opening explorer for a FEN.
     Returns (data, needs_auth) — data is None (rather than raising) on any
     failure, since this is reference data from a third-party service and
@@ -56,22 +68,32 @@ def query_community_explorer(fen: str, lichess_api_token: str | None = None) -> 
     401, so the caller can surface an actionable message instead of a
     generic "unavailable" one.
 
+    `min_rating` (one of RATING_BANDS) scopes the community sample to
+    players at or above that band — Lichess's explorer only supports
+    filtering by whole bands (its `ratings` param is a list of band
+    floors), not an arbitrary cutoff, so this is expanded to every band
+    from `min_rating` up to the top (2500+) before being sent. None means
+    no rating filter — the whole Lichess player base.
+
     As of mid-2026 explorer.lichess.org started returning a bare 401
     ("Authorization Required") to anonymous requests — confirmed live
-    against the real API and against community reports of the same
-    change, not something this project can fix on its own. Passing a
-    personal Lichess API access token (any logged-in Lichess account can
-    generate one for free at lichess.org/account/oauth/token — no special
-    scope needed just to read explorer data) as a Bearer token is the
-    documented way to authenticate a Lichess API request; if one isn't
-    configured, this still attempts the request unauthenticated in case
-    Lichess's policy changes back, rather than refusing to try at all.
+    against the real API, a matching community forum report, and Lichess's
+    own published OpenAPI spec now listing this endpoint as requiring
+    OAuth2. Passing a personal Lichess API access token (any Lichess
+    account can generate one for free at
+    lichess.org/account/oauth/token/create — no special scope needed just
+    to read explorer data) as a Bearer token is the documented way to
+    authenticate the request; if one isn't configured, this still attempts
+    the request unauthenticated in case Lichess's policy changes back,
+    rather than refusing to try at all.
     """
-    cache_key = (fen, bool(lichess_api_token))
+    cache_key = (fen, bool(lichess_api_token), min_rating)
     if cache_key in _community_cache:
         return _community_cache[cache_key]
 
     params = {"variant": "standard", "fen": fen, "speeds": "blitz,rapid,classical"}
+    if min_rating is not None:
+        params["ratings"] = ",".join(str(b) for b in RATING_BANDS if b >= min_rating)
     headers = {"User-Agent": EXPLORER_USER_AGENT, "Accept": "application/json"}
     if lichess_api_token:
         headers["Authorization"] = f"Bearer {lichess_api_token}"
@@ -283,11 +305,19 @@ def _legal_moves_deduped(board: chess.Board) -> list[dict]:
     return [{"uci": m.uci(), "san": board.san(m)} for m in best_by_squares.values()]
 
 
-def explore_position(move_ucis: list[str], source: str | None = None, lichess_api_token: str | None = None) -> dict:
+def explore_position(
+    move_ucis: list[str], source: str | None = None,
+    lichess_api_token: str | None = None, min_rating: int | None = None,
+) -> dict:
+    if min_rating is not None and min_rating not in RATING_BANDS:
+        raise ValueError(f"min_rating must be one of {RATING_BANDS}, got {min_rating}")
+
     board = _board_at_moves(move_ucis)
     fen = board.fen()
 
-    community, community_needs_auth = query_community_explorer(fen, lichess_api_token=lichess_api_token)
+    community, community_needs_auth = query_community_explorer(
+        fen, lichess_api_token=lichess_api_token, min_rating=min_rating,
+    )
     community_moves = _community_move_stats(community, white_to_move=board.turn == chess.WHITE) if community else []
     mine = get_my_stats_at_position(move_ucis, source=source)
 

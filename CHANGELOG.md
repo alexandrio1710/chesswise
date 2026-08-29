@@ -1,5 +1,18 @@
 # Changelog
 
+## v26 — Opening Explorer: filter the Lichess community reference by rating
+
+Comparing your own moves against the *entire* Lichess player base (total
+beginners through super-GMs, all lumped into one aggregate) is a lot less
+useful than comparing against players near your own strength. Added a
+rating filter to the community panel — confirmed against Lichess's own
+published OpenAPI spec for the exact band boundaries it supports (0, 1000,
+1200, 1400, 1600, 1800, 2000, 2200, 2500 — each meaning "this band and
+every stronger one," not an isolated range, since that's the only
+grouping the API itself offers). Selection persists across visits.
+Skipped a "masters database" toggle (a second, separate Lichess dataset of
+curated top-level games) as out of scope for this pass.
+
 ## v25 — Fixed the Opening Explorer's silently-broken Lichess community data
 
 Investigated the existing Opening Explorer (Advanced features, Section 2 —
