@@ -146,6 +146,52 @@ class TestSaveManualGameProfile:
         assert self._saved_game_profile_id(game_id) == default_profile_id()
 
 
+class TestGradedMovesMissedMate:
+    """Regression test for the one-off Analyze-board path: _graded_moves
+    used to diff eval_before/eval_after raw (same bug fixed in mistakes.py's
+    _classify_move — see TestClassifyMoveMissedMate in test_mistakes.py and
+    the CHANGELOG v20 entry), so a move that finds a slower mate than the
+    fastest one available — still completely winning either way — could
+    carry an uncapped "drop" of thousands of centipawns (analysis.py
+    represents mate scores as roughly +-MATE_SCORE_CP) and get graded a
+    blunder for a position whose practical outcome never changed. Unlike
+    _classify_move (only called for flagged mistakes), _graded_moves grades
+    every move via classify_tier, so the bug showed up as a wrong `tier` on
+    an ordinary move in a pasted-but-not-saved game.
+    """
+
+    _SAMPLE_PGN = (
+        '[Event "Test"]\n[White "A"]\n[Black "B"]\n[Result "1-0"]\n\n'
+        "1. e4 e5 2. Nf3 1-0\n"
+    )
+
+    def _fake_move(self, **overrides):
+        base = {
+            "ply": 1, "move_number": 1, "color_moved": "white", "move_san": "Kg1",
+            "eval_before_cp": 9998, "eval_after_cp": 6000, "eval_cp": 6000,
+            "non_king_piece_count": 10, "clock_seconds_remaining": 30,
+        }
+        base.update(overrides)
+        return base
+
+    def test_missing_the_fastest_mate_in_an_already_winning_position_grades_as_best(self, monkeypatch):
+        # Both eval_before and eval_after are still deep in "completely
+        # winning" territory (mate found either way) — practically nothing
+        # changed, so this should grade as "best", not "blunder".
+        monkeypatch.setattr(manual_analysis, "analyze_game_moves", lambda pgn_text, depth: [self._fake_move()])
+        moves = manual_analysis._graded_moves(self._SAMPLE_PGN, depth=1)
+
+        assert moves[0]["eval_drop"] == 0
+        assert moves[0]["tier"] == "best"
+
+    def test_a_real_winning_to_losing_blunder_is_still_graded_as_blunder(self, monkeypatch):
+        move = self._fake_move(eval_before_cp=950, eval_after_cp=-950, eval_cp=-950)
+        monkeypatch.setattr(manual_analysis, "analyze_game_moves", lambda pgn_text, depth: [move])
+        moves = manual_analysis._graded_moves(self._SAMPLE_PGN, depth=1)
+
+        assert moves[0]["tier"] == "blunder"
+
+
 class TestAnalyzePgnOneoffIncludesBoardTrace:
     _SAMPLE_PGN = (
         '[Event "Test"]\n[White "A"]\n[Black "B"]\n[Result "1-0"]\n\n'

@@ -28,7 +28,7 @@ from db import get_connection, save_games
 from fetchers import _lichess_result_to_outcome
 from mistakes import STANDARD_VARIANT_TAGS, classify_phase, classify_tier, get_pgn_variant
 from puzzles import get_top_lines, legal_moves_for_fen
-from stats import annotate_fen, compute_game_accuracy, get_starting_fen
+from stats import annotate_fen, capped_eval_drop, compute_game_accuracy, get_starting_fen
 
 # This endpoint takes arbitrary pasted text with no login required (Advanced
 # features, Section 5 keeps the Analyze board zero-login, same as the rest
@@ -150,7 +150,7 @@ def _graded_moves(pgn_text: str, depth: int) -> list[dict]:
         is_white = m["color_moved"] == "white"
         eval_before = m["eval_before_cp"] if is_white else -m["eval_before_cp"]
         eval_after = m["eval_after_cp"] if is_white else -m["eval_after_cp"]
-        eval_drop = eval_before - eval_after
+        eval_drop = capped_eval_drop(eval_before, eval_after)
         moves.append({
             "ply": m["ply"], "move_number": m["move_number"], "color_moved": m["color_moved"],
             "move_san": m["move_san"], "eval_cp": m["eval_cp"], "eval_before_cp": eval_before,
