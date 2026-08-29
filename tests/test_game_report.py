@@ -98,3 +98,49 @@ class TestAcplMinimumSampleSize:
 
     def test_two_moves_is_enough_to_compute_a_real_acpl(self):
         assert game_report._acpl([_move(50, 0), _move(50, 100)]) == 50.0
+
+
+class TestTimeControlAdjustedRating:
+    """estimate_performance_rating() previously ignored time control
+    entirely, even though the same player's ACPL runs measurably higher at
+    faster time controls from time pressure alone — confirmed as a real
+    gap and fixed by dividing ACPL by a per-time-control factor before the
+    rating lookup, so faster games get credit for that extra noise.
+    """
+
+    def test_bullet_acpl_is_scaled_down_before_the_rating_lookup(self):
+        acpl = 100.0
+        assert game_report._time_control_adjusted_acpl(acpl, "bullet") == acpl / 1.5
+
+    def test_classical_and_daily_are_the_unadjusted_baseline(self):
+        acpl = 100.0
+        assert game_report._time_control_adjusted_acpl(acpl, "classical") == acpl
+        assert game_report._time_control_adjusted_acpl(acpl, "daily") == acpl
+
+    def test_unrecognized_time_control_falls_back_to_no_adjustment(self):
+        acpl = 100.0
+        assert game_report._time_control_adjusted_acpl(acpl, "unknown") == acpl
+        assert game_report._time_control_adjusted_acpl(acpl, None) == acpl
+
+    def test_the_same_raw_acpl_rates_higher_at_a_faster_time_control(self):
+        # Same actual move quality, but bullet's time pressure means that
+        # ACPL reflects less true skill deficit than it would at classical.
+        acpl = 100.0
+        bullet_rating = game_report.estimate_performance_rating(
+            game_report._time_control_adjusted_acpl(acpl, "bullet")
+        )
+        classical_rating = game_report.estimate_performance_rating(
+            game_report._time_control_adjusted_acpl(acpl, "classical")
+        )
+        assert bullet_rating > classical_rating
+
+
+class TestUscfRating:
+    def test_uscf_estimate_runs_below_the_primary_estimate(self):
+        assert game_report._uscf_from_estimated_rating(1600) == 1500
+
+    def test_floors_at_zero_rather_than_going_negative(self):
+        assert game_report._uscf_from_estimated_rating(50) == 0
+
+    def test_none_in_none_out(self):
+        assert game_report._uscf_from_estimated_rating(None) is None

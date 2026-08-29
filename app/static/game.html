@@ -213,6 +213,7 @@
   .report-stat { background: var(--page-plane); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
   .report-stat .value { font-size: 22px; font-weight: 700; }
   .report-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .02em; margin-top: 2px; }
+  .report-stat .sublabel { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
   .report-tier-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   .report-tier-counts .tier-pill { font-size: 11px; padding: 4px 10px; }
   .report-summary { font-size: 13px; color: var(--text-secondary); margin-top: 14px; line-height: 1.5; }
@@ -631,6 +632,7 @@
           <div class="report-stat">
             <div class="value">${data.estimated_rating}</div>
             <div class="label">Estimated rating</div>
+            ${data.estimated_rating_uscf != null ? `<div class="sublabel">~${data.estimated_rating_uscf} USCF</div>` : ""}
           </div>` : ""}
         ${phases.map(([phase, acc]) => `
           <div class="report-stat">

@@ -98,6 +98,48 @@ def estimate_performance_rating(acpl: float) -> int:
     return anchors[-1][1]  # unreachable given the bounds checks above
 
 
+# ACPL_RATING_ANCHORS' ballpark ACPL-to-rating folklore implicitly assumes
+# ample thinking time — the same player's ACPL rises measurably at faster
+# time controls purely from time pressure, not weaker play, so feeding a
+# bullet game's raw ACPL through those anchors unadjusted understates that
+# player's actual strength (confirmed as a real gap in this app: the
+# rating estimate previously ignored time control entirely). Dividing ACPL
+# by a per-time-control factor before the anchor lookup gives faster games
+# credit for the noise time pressure adds — "classical"/"daily" (ample
+# time either way) are the unadjusted baseline. Like the anchors
+# themselves, these factors are a rough, by-eye approximation of commonly-
+# cited relative ACPL inflation by speed, not fit against a real dataset;
+# an unrecognized time_control (None/"unknown") falls back to no
+# adjustment rather than guessing.
+ACPL_TIME_CONTROL_DIVISOR = {
+    "bullet": 1.5,
+    "blitz": 1.25,
+    "rapid": 1.1,
+    "classical": 1.0,
+    "daily": 1.0,
+}
+
+
+def _time_control_adjusted_acpl(acpl: float, time_control: str | None) -> float:
+    return acpl / ACPL_TIME_CONTROL_DIVISOR.get(time_control, 1.0)
+
+
+# US Chess (USCF) ratings are commonly cited as running somewhat below
+# FIDE/online ratings for players of comparable real-world strength. The
+# actual gap varies by rating band and is itself a matter of informal
+# consensus rather than a precise conversion, so — consistent with this
+# module's other estimates — this applies one flat, clearly-approximate
+# offset rather than fabricating a curve with no more real backing than a
+# straight line would have.
+USCF_RATING_OFFSET = 100
+
+
+def _uscf_from_estimated_rating(estimated_rating: int | None) -> int | None:
+    if estimated_rating is None:
+        return None
+    return max(0, estimated_rating - USCF_RATING_OFFSET)
+
+
 # --- Move classification enrichment -----------------------------------------
 
 def _top_moves_cp(engine, white_to_move: bool, n: int = 2) -> list[tuple[str, float]]:
@@ -328,12 +370,13 @@ def _acpl(moves: list[dict]) -> float | None:
     return sum(drops) / len(drops) if len(drops) >= 2 else None
 
 
-def _build_summary(accuracy: float | None, rating: int | None, tier_counts: dict, phase_accuracy: dict) -> str:
+def _build_summary(accuracy: float | None, rating: int | None, rating_uscf: int | None,
+                    tier_counts: dict, phase_accuracy: dict) -> str:
     if accuracy is None:
         return "Not enough analyzed moves to summarize this game."
 
     parts = [f"You played this game at {accuracy}% accuracy"]
-    parts[0] += f", roughly the move quality of a {rating}-rated player." if rating else "."
+    parts[0] += f", roughly the move quality of a {rating}-rated player (about {rating_uscf} USCF)." if rating else "."
 
     brilliant = tier_counts.get("brilliant", 0)
     if brilliant:
@@ -363,6 +406,7 @@ def _report_row_to_dict(row) -> dict:
         "accuracy_middlegame": row["accuracy_middlegame"],
         "accuracy_endgame": row["accuracy_endgame"],
         "estimated_rating": row["estimated_rating"],
+        "estimated_rating_uscf": _uscf_from_estimated_rating(row["estimated_rating"]),
         "tier_counts": json.loads(row["tier_counts"]),
         "summary": row["summary"],
         "computed_at": row["computed_at"],
@@ -413,7 +457,11 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
 
     overall_acpl = _acpl(own_moves)
     accuracy_overall = _accuracy_from_acpl(overall_acpl)
-    estimated_rating = estimate_performance_rating(overall_acpl) if overall_acpl is not None else None
+    estimated_rating = (
+        estimate_performance_rating(_time_control_adjusted_acpl(overall_acpl, game["time_control"]))
+        if overall_acpl is not None else None
+    )
+    estimated_rating_uscf = _uscf_from_estimated_rating(estimated_rating)
 
     phase_accuracy = {
         phase: _accuracy_from_acpl(_acpl([m for m in own_moves if m["phase"] == phase]))
@@ -421,7 +469,7 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     }
 
     tier_counts = dict(Counter(m["classification"] for m in own_moves if m["classification"]))
-    summary = _build_summary(accuracy_overall, estimated_rating, tier_counts, phase_accuracy)
+    summary = _build_summary(accuracy_overall, estimated_rating, estimated_rating_uscf, tier_counts, phase_accuracy)
 
     report = {
         "game_id": game_id,
@@ -430,6 +478,7 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
         "accuracy_middlegame": phase_accuracy["middlegame"],
         "accuracy_endgame": phase_accuracy["endgame"],
         "estimated_rating": estimated_rating,
+        "estimated_rating_uscf": estimated_rating_uscf,
         "tier_counts": tier_counts,
         "summary": summary,
     }

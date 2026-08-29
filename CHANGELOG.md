@@ -1,5 +1,25 @@
 # Changelog
 
+## v21 — Estimated rating now adjusts for time control, plus a USCF figure
+
+The Game Report's estimated rating fed a game's raw ACPL through a single
+curve regardless of time control, even though the same player's ACPL runs
+measurably higher at faster time controls purely from time pressure, not
+weaker play — a bullet game and a classical game of identical true
+strength could show noticeably different estimates. `game_report.py` now
+divides ACPL by a per-time-control factor (bullet 1.5x, blitz 1.25x,
+rapid 1.1x, classical/daily unadjusted) before the rating lookup, so
+faster games get credit for that extra noise; unrecognized time controls
+fall back to no adjustment. Also added a rough USCF-equivalent figure
+alongside the existing estimate (flat -100 offset, reflecting the
+commonly-cited gap between USCF and FIDE/online ratings for comparable
+players), shown as a sub-line under "Estimated rating" on the Game Report
+and folded into its summary sentence. Like the rest of this feature, both
+adjustments are documented as rough, by-eye approximations, not fitted
+against real rating data. A migration (schema v18) recomputed every
+already-cached report's rating and summary from data already on disk —
+no Stockfish re-run needed.
+
 ## v20 — Fixed missed-mate blunders, Explore-board freeze, eval bar, and autoscroll
 
 **Fixed a real bug reported live: moves that missed a faster mate showed
