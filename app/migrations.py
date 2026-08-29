@@ -12,6 +12,7 @@ timestamped backup, so a bad migration is always recoverable by restoring
 that file — nothing here should ever risk losing already-analyzed games.
 """
 
+import json
 import logging
 import re
 import shutil
@@ -672,6 +673,110 @@ def _migration_017_fix_missed_mate_severity_and_tier(conn: sqlite3.Connection) -
         )
 
 
+def _migration_018_time_control_adjusted_rating(conn: sqlite3.Connection) -> None:
+    """Feature — game_report.estimate_performance_rating() previously fed a
+    game's raw ACPL through a single rating curve regardless of time
+    control, even though the same player's ACPL runs measurably higher at
+    faster time controls purely from time pressure, not weaker play.
+    game_report.py now divides ACPL by a per-time-control factor before
+    the rating lookup (see ACPL_TIME_CONTROL_DIVISOR), and also reports a
+    rough USCF-equivalent figure alongside the existing estimate.
+
+    Recomputes estimated_rating (and the summary sentence that quotes it)
+    for every already-cached game_reports row from data already on disk —
+    game_moves.eval_drop for the ACPL and games.time_control — without
+    re-running Stockfish (compute_enriched_classification, which the
+    cached tier_counts/phase accuracy already depend on, isn't touched by
+    this change, so there's no need to invalidate those).
+
+    Self-contained rather than importing game_report.py for the same
+    reason migration 17 inlines mistakes.py's logic: a migration should
+    encode a fixed, point-in-time transformation, not a live dependency on
+    application code that could change under it later.
+    """
+    ACPL_RATING_ANCHORS = [
+        (10, 2700), (20, 2400), (35, 2200), (50, 2000), (70, 1800),
+        (100, 1600), (140, 1400), (190, 1200), (250, 1000), (350, 800), (500, 600),
+    ]
+    ACPL_TIME_CONTROL_DIVISOR = {
+        "bullet": 1.5, "blitz": 1.25, "rapid": 1.1, "classical": 1.0, "daily": 1.0,
+    }
+    USCF_RATING_OFFSET = 100
+
+    def estimate_performance_rating(acpl):
+        anchors = ACPL_RATING_ANCHORS
+        if acpl <= anchors[0][0]:
+            return anchors[0][1]
+        if acpl >= anchors[-1][0]:
+            return anchors[-1][1]
+        for (acpl_lo, rating_lo), (acpl_hi, rating_hi) in zip(anchors, anchors[1:]):
+            if acpl_lo <= acpl <= acpl_hi:
+                frac = (acpl - acpl_lo) / (acpl_hi - acpl_lo)
+                return round(rating_lo + frac * (rating_hi - rating_lo))
+        return anchors[-1][1]
+
+    def build_summary(accuracy, rating, rating_uscf, tier_counts, phase_accuracy):
+        if accuracy is None:
+            return "Not enough analyzed moves to summarize this game."
+        parts = [f"You played this game at {accuracy}% accuracy"]
+        parts[0] += f", roughly the move quality of a {rating}-rated player (about {rating_uscf} USCF)." if rating else "."
+        brilliant = tier_counts.get("brilliant", 0)
+        if brilliant:
+            parts.append(f"You found {brilliant} brilliant move{'s' if brilliant != 1 else ''}.")
+        great = tier_counts.get("great", 0)
+        if great:
+            parts.append(f"{great} great move{'s' if great != 1 else ''} held the position together in a sharp moment.")
+        miss = tier_counts.get("miss", 0)
+        if miss:
+            parts.append(f"You missed {miss} winning tactic{'s' if miss != 1 else ''} — worth reviewing in Puzzles.")
+        present = {p: a for p, a in phase_accuracy.items() if a is not None}
+        if len(present) > 1:
+            weakest = min(present, key=present.get)
+            parts.append(f"Your {weakest} was the weakest phase this game ({present[weakest]}% accuracy).")
+        return " ".join(parts)
+
+    rows = conn.execute(
+        """
+        SELECT gr.game_id, gr.estimated_rating, gr.accuracy_overall, gr.accuracy_opening,
+               gr.accuracy_middlegame, gr.accuracy_endgame, gr.tier_counts,
+               g.time_control, g.color
+        FROM game_reports gr JOIN games g ON g.id = gr.game_id
+        """
+    ).fetchall()
+
+    for row in rows:
+        move_rows = conn.execute(
+            "SELECT eval_drop FROM game_moves WHERE game_id = ? AND color_moved = ? AND eval_drop IS NOT NULL",
+            (row["game_id"], row["color"]),
+        ).fetchall()
+        drops = [m["eval_drop"] for m in move_rows]
+        acpl = sum(drops) / len(drops) if len(drops) >= 2 else None
+
+        if acpl is None:
+            new_rating = None
+        else:
+            divisor = ACPL_TIME_CONTROL_DIVISOR.get(row["time_control"], 1.0)
+            new_rating = estimate_performance_rating(acpl / divisor)
+
+        if new_rating == row["estimated_rating"]:
+            continue
+
+        new_rating_uscf = max(0, new_rating - USCF_RATING_OFFSET) if new_rating is not None else None
+        phase_accuracy = {
+            "opening": row["accuracy_opening"],
+            "middlegame": row["accuracy_middlegame"],
+            "endgame": row["accuracy_endgame"],
+        }
+        summary = build_summary(
+            row["accuracy_overall"], new_rating, new_rating_uscf,
+            json.loads(row["tier_counts"]), phase_accuracy,
+        )
+        conn.execute(
+            "UPDATE game_reports SET estimated_rating = ?, summary = ? WHERE game_id = ?",
+            (new_rating, summary, row["game_id"]),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -690,6 +795,7 @@ MIGRATIONS = [
     (15, "Add game_moves classification/phase columns and game_reports table", _migration_015_game_reports),
     (16, "Fix Leitner SRS next_review_at datetime format", _migration_016_fix_leitner_srs_datetime_format),
     (17, "Fix missed-mate eval_drop/severity/tier miscalculation", _migration_017_fix_missed_mate_severity_and_tier),
+    (18, "Recompute estimated_rating with time-control adjustment + USCF figure", _migration_018_time_control_adjusted_rating),
 ]
 
 
