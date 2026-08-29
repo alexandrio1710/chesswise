@@ -1,5 +1,26 @@
 # Changelog
 
+## v29 — Puzzle generation now rejects ambiguous positions
+
+Every flagged mistake/blunder was turned into a "find the best move" puzzle
+regardless of whether a second move was nearly as good — a real risk for a
+puzzle format that marks anything but the engine's exact top choice wrong.
+Ported the uniqueness gate from Lichess's own puzzle generator
+([`is_valid_attack` in generator.py](https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py)):
+a puzzle is only generated when the best move's win% is more than 35 points
+clear of the runner-up (Lichess's own 0.7-on-a-(-1..1)-scale threshold,
+converted to this app's win% scale), or there's no second candidate move at
+all. Positions that fail the check are now skipped and tallied separately
+from actual generation failures.
+
+This only changes puzzles generated from here on — the 1,413 existing
+puzzles are left as-is rather than retroactively re-checked and pruned,
+since removing them would also delete their Leitner-box practice history.
+Lichess's generator has a second layer of sophistication not ported here —
+verifying a whole forced multi-move sequence ("cooking"), not just the
+first move — which would require puzzles to become multi-move sequences
+rather than single moves. That's a bigger change, deferred for now.
+
 ## v28 — Added a real FIDE Tournament Performance Rating, by time control
 
 You already had opponent ratings stored for 301/303 analyzed games, going

@@ -19,6 +19,7 @@ import chess.pgn
 from analysis import get_engine
 from config import PUZZLE_DEPTH, PUZZLE_TOP_LINES
 from db import get_connection, get_pgn
+from stats import win_percent
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 # instructive. Inaccuracies (100-199cp) are usually too subtle/ambiguous
 # for a clean "find the best move" puzzle.
 PUZZLE_SEVERITIES = ("mistake", "blunder")
+
+# A "find the best move" puzzle is only fair if the best move is clearly
+# better than the runner-up — otherwise a solver playing an equally-good
+# alternative gets marked wrong for no real reason. Direct port of
+# Lichess's own real puzzle generator's uniqueness gate (a >0.7 win-
+# chances gap on its -1..1 scale, i.e. 35 points on this project's 0-100
+# win_percent scale — win_percent = 50*(winning_chances + 1)):
+# https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py
+# (is_valid_attack). Our own generator otherwise had no uniqueness check
+# at all — any flagged mistake/blunder became a puzzle regardless of
+# whether a second move was nearly as good.
+UNIQUENESS_WIN_PERCENT_GAP = 35.0
 
 PIECE_NAMES_LONG = {
     chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
@@ -121,7 +134,34 @@ def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_T
     return lines
 
 
-def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict:
+def _line_eval_cp(line: dict) -> float:
+    """A representative centipawn value for one get_top_lines() entry,
+    mover's-own-perspective. A mate line's exact distance doesn't matter
+    here — any magnitude past win_percent's own +-1000 saturation point
+    gives the same result, so this just picks one comfortably past it."""
+    if line["mate_in"] is not None:
+        return 5000.0 if line["mate_in"] > 0 else -5000.0
+    return line["eval_cp"]
+
+
+def has_unique_solution(top_lines: list[dict]) -> bool:
+    """False if the runner-up move is close enough to the best move that
+    a solver playing it instead would be just as correct in practice — see
+    UNIQUENESS_WIN_PERCENT_GAP. True (nothing to compare against) when
+    there's no second line at all.
+    """
+    if len(top_lines) < 2:
+        return True
+    best_wp = win_percent(_line_eval_cp(top_lines[0]))
+    second_wp = win_percent(_line_eval_cp(top_lines[1]))
+    return (best_wp - second_wp) > UNIQUENESS_WIN_PERCENT_GAP
+
+
+def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict | None:
+    """Returns None (rather than a puzzle dict) when the position doesn't
+    clear has_unique_solution() — a deliberate "not puzzle-worthy" outcome,
+    not a failure; the caller shouldn't count it as one.
+    """
     board = board_before_ply(pgn_text, mistake_row["ply"])
     fen_before = board.fen()
     side_to_move = "white" if board.turn == chess.WHITE else "black"
@@ -129,6 +169,8 @@ def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict:
     top_lines = get_top_lines(fen_before)
     if not top_lines:
         raise ValueError(f"no legal moves found at ply {mistake_row['ply']} (mistake_id={mistake_row['id']})")
+    if not has_unique_solution(top_lines):
+        return None
     best = top_lines[0]
     best_move = chess.Move.from_uci(best["move_uci"])
 
@@ -211,6 +253,15 @@ def generate_all_puzzles() -> None:
     pgn_cache: dict[int, str] = {}
     generated = 0
     failed = 0
+    # Not puzzle-worthy (has_unique_solution said no) is a deliberate skip,
+    # not a failure — these mistakes stay visible everywhere else in the
+    # app (game review, dashboard stats), they just never get a practice
+    # puzzle. get_mistakes_without_puzzles() has no way to remember this
+    # decision, so a mistake here gets its uniqueness re-checked (one
+    # cheap MultiPV call) on every future run rather than being permanently
+    # excluded — an acceptable, bounded cost for a personal-scale dataset,
+    # not worth a schema change to avoid.
+    skipped_ambiguous = 0
 
     for i, row in enumerate(todo, start=1):
         game_id = row["game_id"]
@@ -218,6 +269,9 @@ def generate_all_puzzles() -> None:
             if game_id not in pgn_cache:
                 pgn_cache[game_id] = get_pgn(game_id)
             puzzle = generate_puzzle_for_mistake(row, pgn_cache[game_id])
+            if puzzle is None:
+                skipped_ambiguous += 1
+                continue
             store_puzzle(puzzle)
             generated += 1
         except Exception as e:
@@ -233,9 +287,14 @@ def generate_all_puzzles() -> None:
             continue
 
         if i % 10 == 0 or i == total:
-            logger.info(f"{i}/{total} processed ({generated} generated, {failed} failed)")
+            logger.info(
+                f"{i}/{total} processed ({generated} generated, "
+                f"{skipped_ambiguous} skipped as ambiguous, {failed} failed)"
+            )
 
-    logger.info(f"Done. {generated} puzzles generated, {failed} failed.")
+    logger.info(
+        f"Done. {generated} puzzles generated, {skipped_ambiguous} skipped as ambiguous, {failed} failed."
+    )
 
 
 def backfill_explanations() -> None:
