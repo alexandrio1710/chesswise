@@ -39,7 +39,6 @@ from analysis import MATE_SCORE_CP, get_engine
 from config import STOCKFISH_DEPTH
 from db import get_connection
 from eco import classify_game_opening, moves_from_pgn
-from mistakes import classify_phase
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +262,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
     try:
         game_row = conn.execute("SELECT pgn FROM games WHERE id = ?", (game_id,)).fetchone()
         move_rows = conn.execute(
-            "SELECT ply, move_number, color_moved, eval_before_cp, eval_drop, tier "
+            "SELECT ply, move_number, color_moved, eval_before_cp, eval_drop, tier, phase "
             "FROM game_moves WHERE game_id = ? ORDER BY ply",
             (game_id,),
         ).fetchall()
@@ -317,10 +316,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
             )
 
             board.push(move)
-            non_king_piece_count = len(board.piece_map()) - 2
-            phase = classify_phase(row["move_number"], non_king_piece_count)
-
-            updates.append((classification, int(is_top_choice), phase, game_id, ply))
+            updates.append((classification, int(is_top_choice), game_id, ply))
             node = next_node
     finally:
         # See analysis.analyze_game_moves's matching comment: explicit
@@ -330,8 +326,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
     conn = get_connection()
     try:
         conn.executemany(
-            "UPDATE game_moves SET classification = ?, is_top_choice = ?, phase = ? "
-            "WHERE game_id = ? AND ply = ?",
+            "UPDATE game_moves SET classification = ?, is_top_choice = ? WHERE game_id = ? AND ply = ?",
             updates,
         )
         conn.commit()
@@ -339,7 +334,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
         conn.close()
 
     return [
-        {"ply": u[4], "classification": u[0], "is_top_choice": bool(u[1]), "phase": u[2]}
+        {"ply": u[3], "classification": u[0], "is_top_choice": bool(u[1])}
         for u in updates
     ]
 

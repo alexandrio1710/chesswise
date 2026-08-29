@@ -24,6 +24,149 @@ logger = logging.getLogger(__name__)
 MATE_SCORE_CP = 10000
 
 
+# --- Game phase (opening/middlegame/endgame): a direct port of Lichess's
+# own Divider algorithm, replacing a move-number-only heuristic.
+# https://github.com/lichess-org/scalachess/blob/master/core/src/main/scala/Divider.scala
+#
+# A fixed "move <= 10 is opening" cutoff can't tell a slow, closed opening
+# (still opening-like play well past move 10) from a sharp, early-trading
+# line (already middlegame-like material by move 6) — Lichess's own
+# detector instead looks at the actual position: middlegame starts at the
+# first ply where material has thinned to 10 or fewer majors/minors, back
+# ranks have emptied out (pieces developed), or a "mixedness" score (how
+# contested/interpenetrated the two sides' pieces are, scored region by
+# region across the board) crosses a threshold; endgame starts at the
+# first *later* ply with 6 or fewer majors/minors. Also fixes a real
+# inaccuracy in this project's old heuristic: majors/minors deliberately
+# excludes pawns (the standard chess-theory basis for "how much material
+# is left"), whereas the old ENDGAME_PIECE_COUNT counted pawns too — a
+# piece-down endgame with most pawns still on the board never crossed that
+# threshold, so it was never tagged "endgame" at all.
+MIDGAME_MAJORS_MINORS_CEILING = 10
+ENDGAME_MAJORS_MINORS_CEILING = 6
+MIXEDNESS_MIDGAME_THRESHOLD = 150
+
+_MIXEDNESS_SMALL_SQUARE = 0x0303  # a 2x2 block of squares (2 files x 2 ranks)
+# Every 2x2 sub-square of the board, scanned left-to-right then rank-by-rank
+# (49 = 7x7 possible top-left corners) — same sliding-window setup as the
+# Scala original, so index i's (file, rank) — and therefore its `y` below —
+# lines up with it exactly.
+_MIXEDNESS_REGIONS = [_MIXEDNESS_SMALL_SQUARE << (x + 8 * y) for y in range(7) for x in range(7)]
+
+
+def _majors_and_minors(board: chess.Board) -> int:
+    return bin(board.occupied & ~board.pawns & ~board.kings).count("1")
+
+
+def _backrank_sparse(board: chess.Board) -> bool:
+    """Fewer than 4 pieces remain on either side's own back rank — a sign
+    pieces have developed off it, even before any have been traded off."""
+    white_backrank = bin(board.occupied_co[chess.WHITE] & chess.BB_RANK_1).count("1")
+    black_backrank = bin(board.occupied_co[chess.BLACK] & chess.BB_RANK_8).count("1")
+    return white_backrank < 4 or black_backrank < 4
+
+
+def _mixedness_region_score(y: int, white: int, black: int) -> int:
+    """Score for one 2x2 region, `y` ranks up from the back rank (1-7) —
+    a direct, literal transcription of Divider.scala's own `score` table;
+    see that file for the reasoning behind the specific numbers."""
+    if white == 0:
+        if black == 1:
+            return 1 + y
+        if black == 2:
+            return 2 + (6 - y) if y < 6 else 0
+        if black in (3, 4):
+            return 3 + (7 - y) if y < 7 else 0
+        return 0
+    if white == 1:
+        if black == 0:
+            return 1 + (8 - y)
+        if black == 1:
+            return 5 + abs(4 - y)
+        if black == 2:
+            return 4 + (7 - y)
+        if black == 3:
+            return 5 + (7 - y)
+        return 0
+    if white == 2:
+        if black == 0:
+            return 2 + (y - 2) if y > 2 else 0
+        if black == 1:
+            return 4 + (y - 1)
+        if black == 2:
+            return 7
+        return 0
+    if white == 3:
+        if black == 0:
+            return 3 + (y - 1) if y > 1 else 0
+        if black == 1:
+            return 5 + (y - 1)
+        return 0
+    if white == 4:
+        if black == 0:
+            return 3 + (y - 1) if y > 1 else 0
+        return 0
+    return 0
+
+
+def _mixedness(board: chess.Board) -> int:
+    """How contested/interpenetrated the two sides' pieces are, board-wide
+    — the more the position has left a "lined up on your own side" opening
+    setup, the higher this scores, regardless of whether material has
+    actually been traded yet."""
+    total = 0
+    for i, region in enumerate(_MIXEDNESS_REGIONS):
+        y = (i // 7) + 1
+        white_count = bin(board.occupied_co[chess.WHITE] & region).count("1")
+        black_count = bin(board.occupied_co[chess.BLACK] & region).count("1")
+        total += _mixedness_region_score(y, white_count, black_count)
+    return total
+
+
+def _is_midgame_position(board: chess.Board) -> bool:
+    return (
+        _majors_and_minors(board) <= MIDGAME_MAJORS_MINORS_CEILING
+        or _backrank_sparse(board)
+        or _mixedness(board) > MIXEDNESS_MIDGAME_THRESHOLD
+    )
+
+
+def _is_endgame_position(board: chess.Board) -> bool:
+    return _majors_and_minors(board) <= ENDGAME_MAJORS_MINORS_CEILING
+
+
+def _compute_phase_boundaries(midgame_flags: list[bool], endgame_flags: list[bool]) -> tuple[int | None, int | None]:
+    """1-based ply numbers where the middlegame/endgame begin (or None if
+    that phase is never reached) — `midgame_flags[i]`/`endgame_flags[i]`
+    is whether ply i+1's position (the position right after that ply was
+    played) satisfies the midgame/endgame material condition.
+
+    endgame_flags is scanned from the very start of the game regardless of
+    where midgame_flags first triggers (matching Divider.scala exactly) —
+    for a real game midgame always triggers first or not at all, but if an
+    artificial "from position" game somehow starts within 6 majors/minors
+    of its own, this discards the midgame boundary rather than reporting
+    an endgame that supposedly started before the middlegame did.
+    """
+    middle_idx = next((i for i, f in enumerate(midgame_flags) if f), None)
+    end_idx = next((i for i, f in enumerate(endgame_flags) if f), None) if middle_idx is not None else None
+    if middle_idx is not None and end_idx is not None and middle_idx >= end_idx:
+        middle_idx = None
+    middle_ply = middle_idx + 1 if middle_idx is not None else None
+    end_ply = end_idx + 1 if end_idx is not None else None
+    return middle_ply, end_ply
+
+
+def _phase_for_ply(ply: int, middle_ply: int | None, end_ply: int | None) -> str:
+    if middle_ply is not None and ply < middle_ply:
+        return "opening"
+    if end_ply is not None and ply >= end_ply:
+        return "endgame"
+    if middle_ply is None:
+        return "opening"
+    return "middlegame"
+
+
 def get_engine(depth: int = STOCKFISH_DEPTH) -> Stockfish:
     """Start a Stockfish engine subprocess. Wrapped so a broken install
     (wrong architecture, corrupted download, missing execute permission)
@@ -80,7 +223,7 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
             "eval_before_cp": float (centipawns, White's perspective, pre-move),
             "eval_after_cp": float (centipawns, White's perspective, post-move),
             "eval_cp": float (alias for eval_after_cp, kept for convenience),
-            "non_king_piece_count": int (pieces on board after the move, excl. kings),
+            "phase": "opening" | "middlegame" | "endgame",
             "clock_seconds_remaining": int | None,
         }
     """
@@ -92,6 +235,8 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
     try:
         board = game.board()
         results = []
+        midgame_flags = []
+        endgame_flags = []
 
         # Eval of the starting position, before any move has been made, so
         # move 1 has a real "before" value instead of an assumed 0.
@@ -108,6 +253,8 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
 
             board.push(move)
             ply += 1
+            midgame_flags.append(_is_midgame_position(board))
+            endgame_flags.append(_is_endgame_position(board))
 
             if board.is_checkmate():
                 # Stockfish can't evaluate a position with no legal moves.
@@ -121,7 +268,6 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
                 eval_after_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
 
             full_move_number = (ply + 1) // 2
-            non_king_piece_count = len(board.piece_map()) - 2  # exclude both kings
 
             results.append({
                 "move_number": full_move_number,
@@ -131,12 +277,15 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
                 "eval_before_cp": prev_eval_cp,
                 "eval_after_cp": eval_after_cp,
                 "eval_cp": eval_after_cp,
-                "non_king_piece_count": non_king_piece_count,
                 "clock_seconds_remaining": _extract_clock_seconds(next_node),
             })
 
             prev_eval_cp = eval_after_cp
             node = next_node
+
+        middle_ply, end_ply = _compute_phase_boundaries(midgame_flags, endgame_flags)
+        for m in results:
+            m["phase"] = _phase_for_ply(m["ply"], middle_ply, end_ply)
 
         return results
     finally:

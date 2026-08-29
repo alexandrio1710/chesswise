@@ -1,5 +1,29 @@
 # Changelog
 
+## v27 — Game-phase (opening/middlegame/endgame) detection is now Lichess's own algorithm
+
+The old phase detector used a flat "move <= 10 is opening" cutoff, and
+called it endgame only once *every* remaining piece — pawns included —
+dropped under 7. That pawn-counting bug meant a real piece-down endgame
+with most pawns still on the board never got tagged "endgame" at all
+(confirmed against the real database: endgame-tagged moves jumped from a
+handful to 31% of all moves once fixed). Ported Lichess's own Divider
+algorithm instead — a positional detector computed once per game from the
+actual sequence of positions, not a fixed move count:
+[Divider.scala](https://github.com/lichess-org/scalachess/blob/master/core/src/main/scala/Divider.scala).
+Middlegame starts at the first ply where material has thinned to 10 or
+fewer majors/minors (pawns correctly excluded this time), back ranks have
+emptied out, or a "mixedness" score (how contested/interpenetrated the
+two sides' pieces are, scored region by region) crosses a threshold;
+endgame starts at the first *later* ply with 6 or fewer majors/minors.
+
+Phase is now computed once in `analyze_game_moves` (analysis.py) instead
+of being re-derived independently in three different places (mistakes.py,
+game_report.py, manual_analysis.py) from a move's own move_number/piece
+count — those now just read the value computed upstream. A migration
+recomputed phase for every already-analyzed game by replaying its stored
+PGN (no Stockfish needed, since phase depends only on piece positions).
+
 ## v26 — Opening Explorer: filter the Lichess community reference by rating
 
 Comparing your own moves against the *entire* Lichess player base (total

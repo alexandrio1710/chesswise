@@ -523,7 +523,7 @@ def get_game_moves(game_id: int) -> list[dict]:
         rows = conn.execute(
             """
             SELECT gm.ply, gm.move_number, gm.color_moved, gm.move_san,
-                   gm.eval_cp, gm.eval_before_cp, gm.eval_drop, gm.tier,
+                   gm.eval_cp, gm.eval_before_cp, gm.eval_drop, gm.tier, gm.phase,
                    gm.classification, gm.clock_seconds_remaining,
                    m.severity, p.id as puzzle_id
             FROM game_moves gm

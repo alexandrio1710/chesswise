@@ -61,11 +61,6 @@ MATE_ADVICE_MISTAKE_CP = 700
 # a genuine Stockfish cp eval never gets anywhere near this magnitude.
 MATE_SCORE_DETECTION_THRESHOLD_CP = 9000
 
-# --- Game phase thresholds -------------------------------------------------
-OPENING_MOVE_CUTOFF = 10     # moves 1-10 => opening
-ENDGAME_MOVE_CUTOFF = 30     # move 30+ => endgame, regardless of material
-ENDGAME_PIECE_COUNT = 7      # fewer than 7 non-king pieces on board => endgame
-
 
 def _is_mate_score(cp: float) -> bool:
     return abs(cp) >= MATE_SCORE_DETECTION_THRESHOLD_CP
@@ -173,33 +168,6 @@ def classify_tier(eval_before_cp: float, eval_after_cp: float) -> str:
     return "best"
 
 
-def classify_phase(move_number: int, non_king_piece_count: int) -> str:
-    """Bucket a move into opening/middlegame/endgame by a simple, cheap
-    heuristic rather than real positional understanding (no engine can
-    reliably say "this is strategically an endgame" without much deeper
-    analysis than this project does per move).
-
-    Opening is purely move-count based (moves 1-10) since that's genuinely
-    how openings are understood — a fixed number of moves before both
-    sides have mostly developed, regardless of the actual position.
-
-    Endgame is the OR of two independent signals, either being enough:
-    material has thinned out (fewer than ENDGAME_PIECE_COUNT non-king
-    pieces — the classic "few pieces left" definition), OR the game has
-    simply gone long (move 30+) even if material is still on the board,
-    since long grinding games function like endgames strategically even
-    when pieces remain. This means a move-30+ middlegame-material position
-    still gets called "endgame" — a deliberate simplification, not a bug.
-
-    Everything else falls through to middlegame.
-    """
-    if move_number <= OPENING_MOVE_CUTOFF:
-        return "opening"
-    if non_king_piece_count < ENDGAME_PIECE_COUNT or move_number >= ENDGAME_MOVE_CUTOFF:
-        return "endgame"
-    return "middlegame"
-
-
 def _classify_move(m: dict) -> dict | None:
     """Grade one move (a dict from analyze_game_moves) and return its
     mistake record, or None if it wasn't inaccurate enough to flag.
@@ -222,7 +190,10 @@ def _classify_move(m: dict) -> dict | None:
     # plain, literal "centipawns lost" number.
     eval_drop = capped_eval_drop(eval_before, eval_after)
 
-    phase = classify_phase(m["move_number"], m["non_king_piece_count"])
+    # phase is computed once per game by analyze_game_moves (a direct port
+    # of Lichess's own Divider algorithm — see analysis.py) rather than
+    # re-derived per move here.
+    phase = m["phase"]
 
     return {
         "ply": m["ply"],
@@ -316,14 +287,14 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
             game_moves_rows.append((
                 game_id, move["ply"], move["move_number"], move["color_moved"],
                 move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
-                eval_before, eval_drop, classify_tier(eval_before, eval_after),
+                eval_before, eval_drop, classify_tier(eval_before, eval_after), move["phase"],
             ))
         conn.executemany(
             """
             INSERT INTO game_moves
                 (game_id, ply, move_number, color_moved, move_san, eval_cp,
-                 clock_seconds_remaining, eval_before_cp, eval_drop, tier)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 clock_seconds_remaining, eval_before_cp, eval_drop, tier, phase)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             game_moves_rows,
         )

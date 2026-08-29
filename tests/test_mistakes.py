@@ -1,18 +1,18 @@
-"""Unit tests for mistake severity and game-phase classification."""
+"""Unit tests for mistake severity classification. Game-phase (opening/
+middlegame/endgame) detection lives in analysis.py now — see
+tests/test_analysis.py — since Lichess's own Divider algorithm needs the
+whole game's sequence of positions, not one move's own move_number.
+"""
 
 from mistakes import (
     BLUNDER_WIN_PERCENT_LOSS,
-    ENDGAME_MOVE_CUTOFF,
-    ENDGAME_PIECE_COUNT,
     INACCURACY_WIN_PERCENT_LOSS,
     MATE_ADVICE_INACCURACY_CP,
     MATE_ADVICE_MISTAKE_CP,
     MISTAKE_WIN_PERCENT_LOSS,
-    OPENING_MOVE_CUTOFF,
     _classify_move,
     _mate_advice_severity,
     _severity_from_win_percent_loss,
-    classify_phase,
     classify_severity,
 )
 
@@ -120,7 +120,7 @@ class TestClassifyMoveMissedMate:
         base = {
             "ply": 41, "move_number": 21, "move_san": "Kg1",
             "color_moved": "white", "clock_seconds_remaining": 30,
-            "non_king_piece_count": 10,
+            "phase": "endgame",
             "eval_before_cp": 9998, "eval_after_cp": 9950,
         }
         base.update(overrides)
@@ -137,31 +137,3 @@ class TestClassifyMoveMissedMate:
         result = _classify_move(move)
         assert result is not None
         assert result["severity"] == "blunder"
-
-
-class TestClassifyPhase:
-    def test_early_moves_are_opening_regardless_of_material(self):
-        assert classify_phase(1, 30) == "opening"
-        assert classify_phase(OPENING_MOVE_CUTOFF, 30) == "opening"
-
-    def test_low_material_is_endgame_even_mid_game(self):
-        assert classify_phase(OPENING_MOVE_CUTOFF + 1, ENDGAME_PIECE_COUNT - 1) == "endgame"
-        assert classify_phase(15, 2) == "endgame"
-
-    def test_long_game_is_endgame_even_with_material_on_board(self):
-        # Move 30+ counts as endgame regardless of piece count — a
-        # deliberate simplification (see classify_phase's docstring).
-        assert classify_phase(ENDGAME_MOVE_CUTOFF, 14) == "endgame"
-        assert classify_phase(ENDGAME_MOVE_CUTOFF + 5, 14) == "endgame"
-
-    def test_middlegame_is_the_remaining_band(self):
-        mid_move = (OPENING_MOVE_CUTOFF + ENDGAME_MOVE_CUTOFF) // 2
-        assert classify_phase(mid_move, ENDGAME_PIECE_COUNT + 5) == "middlegame"
-
-    def test_boundary_at_opening_cutoff(self):
-        assert classify_phase(OPENING_MOVE_CUTOFF, 14) == "opening"
-        assert classify_phase(OPENING_MOVE_CUTOFF + 1, 14) == "middlegame"
-
-    def test_boundary_at_endgame_piece_count(self):
-        assert classify_phase(15, ENDGAME_PIECE_COUNT) == "middlegame"
-        assert classify_phase(15, ENDGAME_PIECE_COUNT - 1) == "endgame"

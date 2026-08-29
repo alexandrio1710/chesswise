@@ -12,6 +12,7 @@ timestamped backup, so a bad migration is always recoverable by restoring
 that file — nothing here should ever risk losing already-analyzed games.
 """
 
+import io
 import json
 import logging
 import math
@@ -21,6 +22,8 @@ import sqlite3
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+import chess.pgn
 
 from config import DB_PATH
 
@@ -925,6 +928,104 @@ def _migration_019_lichess_move_judgment(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_020_lichess_game_phase_divider(conn: sqlite3.Connection) -> None:
+    """Feature — mistakes.py's opening/middlegame/endgame phase detection
+    used a flat "move <= 10 is opening" cutoff and an endgame threshold
+    counting ALL remaining pieces including pawns; a piece-down endgame
+    with most pawns still on the board never crossed that threshold, so it
+    was never tagged "endgame" at all. analysis.py now ports Lichess's own
+    Divider algorithm instead — a positional detector (material thinned to
+    <=10 majors/minors excluding pawns, back ranks emptied out, or a
+    "mixedness" score crossing a threshold for the opening->middlegame
+    transition; <=6 majors/minors for middlegame->endgame) computed once
+    per game from the actual sequence of positions:
+    https://github.com/lichess-org/scalachess/blob/master/core/src/main/scala/Divider.scala
+
+    Recomputes phase for every already-analyzed game's mistakes/game_moves
+    rows by replaying each game's stored PGN with python-chess — no
+    Stockfish needed, since phase only depends on piece positions, not
+    evals.
+
+    Unlike migrations 17-19, this DOES import from analysis.py rather than
+    inlining a frozen copy: analysis.py has no dependency on db.py (its
+    only imports are io/logging/chess/stockfish/config, and config.py
+    itself doesn't touch db.py either), so — unlike stats.py/mistakes.py,
+    which import `from db import get_connection` and triggered a
+    circular-import failure when tried here (see migration 17's own
+    comment) — there is no partially-initialized-module risk. Reusing the
+    real implementation avoids a third hand-transcription of a fairly
+    intricate positional-scoring algorithm, which would only add another
+    place for the two copies to silently drift apart.
+    """
+    from analysis import _compute_phase_boundaries, _is_endgame_position, _is_midgame_position
+
+    game_rows = conn.execute("SELECT id, pgn FROM games WHERE analyzed = 1 AND pgn IS NOT NULL").fetchall()
+    affected_game_ids = set()
+
+    for game_row in game_rows:
+        try:
+            game = chess.pgn.read_game(io.StringIO(game_row["pgn"]))
+        except Exception:
+            continue
+        if game is None:
+            continue
+
+        board = game.board()
+        midgame_flags, endgame_flags = [], []
+        node = game
+        while node.variations:
+            next_node = node.variations[0]
+            board.push(next_node.move)
+            midgame_flags.append(_is_midgame_position(board))
+            endgame_flags.append(_is_endgame_position(board))
+            node = next_node
+
+        middle_ply, end_ply = _compute_phase_boundaries(midgame_flags, endgame_flags)
+
+        def phase_for(ply: int) -> str:
+            if middle_ply is not None and ply < middle_ply:
+                return "opening"
+            if end_ply is not None and ply >= end_ply:
+                return "endgame"
+            if middle_ply is None:
+                return "opening"
+            return "middlegame"
+
+        move_rows = conn.execute(
+            "SELECT ply, phase FROM game_moves WHERE game_id = ?", (game_row["id"],)
+        ).fetchall()
+        for m in move_rows:
+            new_phase = phase_for(m["ply"])
+            if new_phase != m["phase"]:
+                conn.execute(
+                    "UPDATE game_moves SET phase = ? WHERE game_id = ? AND ply = ?",
+                    (new_phase, game_row["id"], m["ply"]),
+                )
+                affected_game_ids.add(game_row["id"])
+
+        mistake_rows = conn.execute(
+            "SELECT id, ply, phase FROM mistakes WHERE game_id = ?", (game_row["id"],)
+        ).fetchall()
+        for m in mistake_rows:
+            if m["ply"] is None:
+                continue
+            new_phase = phase_for(m["ply"])
+            if new_phase != m["phase"]:
+                conn.execute("UPDATE mistakes SET phase = ? WHERE id = ?", (new_phase, m["id"]))
+                affected_game_ids.add(game_row["id"])
+
+    if affected_game_ids:
+        # Bumping analyzed_at invalidates any cached Game Report for these
+        # games (generate_game_report's computed_at >= analyzed_at
+        # freshness check), since accuracy_opening/middlegame/endgame are
+        # phase-based aggregates that are now stale for them.
+        placeholders = ",".join("?" * len(affected_game_ids))
+        conn.execute(
+            f"UPDATE games SET analyzed_at = datetime('now') WHERE id IN ({placeholders})",
+            list(affected_game_ids),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -945,6 +1046,7 @@ MIGRATIONS = [
     (17, "Fix missed-mate eval_drop/severity/tier miscalculation", _migration_017_fix_missed_mate_severity_and_tier),
     (18, "Recompute estimated_rating with time-control adjustment + USCF figure", _migration_018_time_control_adjusted_rating),
     (19, "Recompute move severity/tier with Lichess's own win%-based judgment", _migration_019_lichess_move_judgment),
+    (20, "Recompute game phase with Lichess's own Divider algorithm", _migration_020_lichess_game_phase_divider),
 ]
 
 

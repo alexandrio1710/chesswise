@@ -26,7 +26,7 @@ from analysis import analyze_game_moves
 from config import STOCKFISH_DEPTH
 from db import get_connection, save_games
 from fetchers import _lichess_result_to_outcome
-from mistakes import STANDARD_VARIANT_TAGS, classify_phase, classify_tier, get_pgn_variant
+from mistakes import STANDARD_VARIANT_TAGS, classify_tier, get_pgn_variant
 from puzzles import get_top_lines, legal_moves_for_fen
 from stats import annotate_fen, capped_eval_drop, compute_game_accuracy, get_starting_fen
 
@@ -159,7 +159,7 @@ def _graded_moves(pgn_text: str, depth: int) -> list[dict]:
             "ply": m["ply"], "move_number": m["move_number"], "color_moved": m["color_moved"],
             "move_san": m["move_san"], "eval_cp": m["eval_cp"], "eval_before_cp": eval_before,
             "eval_drop": eval_drop, "tier": classify_tier(eval_before, eval_after),
-            "phase": classify_phase(m["move_number"], m["non_king_piece_count"]),
+            "phase": m["phase"],
             "clock_seconds_remaining": m["clock_seconds_remaining"],
         })
     return moves
