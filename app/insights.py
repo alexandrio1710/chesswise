@@ -164,6 +164,45 @@ def acpl_by_time_control(source: str | None = None, profile_id: int | None = Non
     return _per_game_metric_by_time_control(stats.compute_game_acpl, "avg_acpl", source, profile_id)
 
 
+def performance_rating_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+    """FIDE Tournament Performance Rating (stats.compute_performance_rating
+    — the real formula, not an approximation of it: average opponent
+    rating plus a score-based adjustment from FIDE's own table), treating
+    all of a profile's games at each speed as one "tournament". Unlike
+    the ACPL-based estimated rating on the Game Report page (which is
+    about move quality), this is about actual results against real
+    opponents — a genuinely different, complementary measurement, not a
+    replacement.
+
+    Reads opponent_rating/result straight from `games` rather than
+    replaying move traces (unlike accuracy/ACPL above), so this doesn't
+    go through _per_game_metric_by_time_control.
+    """
+    where, params = _source_clause(source, profile_id)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT time_control, result, opponent_rating FROM games g
+            WHERE analyzed = 1 AND skip_reason IS NULL AND opponent_rating IS NOT NULL {where}
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    games_by_tc: dict[str, list[dict]] = {}
+    for r in rows:
+        games_by_tc.setdefault(r["time_control"], []).append(dict(r))
+
+    result = {}
+    for tc, games in games_by_tc.items():
+        performance = stats.compute_performance_rating(games)
+        if performance is not None:
+            result[tc] = performance
+    return result
+
+
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 

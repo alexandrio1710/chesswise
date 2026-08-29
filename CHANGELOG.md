@@ -1,5 +1,25 @@
 # Changelog
 
+## v28 — Added a real FIDE Tournament Performance Rating, by time control
+
+You already had opponent ratings stored for 301/303 analyzed games, going
+unused for anything beyond display. Added the actual FIDE Tournament
+Performance Rating formula — not an approximation of it: average
+opponent rating plus a score-based adjustment read from FIDE's own
+official table
+([Rating Regulations §8.1](https://handbook.fide.com/chapter/B022022)),
+interpolating between the table's 1% steps for scores that don't land on
+one exactly. A new Insights card shows this per time control, treating
+all of a profile's games at each speed as one "tournament."
+
+This is a genuinely different measurement from the existing ACPL-based
+"estimated rating" on the Game Report page, not a replacement for it:
+that one asks "what rating does this game's move quality resemble,"
+independent of who you actually played or the result; this one asks
+"what would your rating be, given who you actually played and how you
+scored against them" — the real, standard definition of a performance
+rating, using data already sitting in the database.
+
 ## v27 — Game-phase (opening/middlegame/endgame) detection is now Lichess's own algorithm
 
 The old phase detector used a flat "move <= 10 is opening" cutoff, and

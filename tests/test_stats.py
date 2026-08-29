@@ -308,6 +308,59 @@ class TestComputeGameAccuracy:
         assert compute_game_accuracy([_ply(1, "white", 20)], "white") is None
 
 
+def _game(result: str, opponent_rating: int | None) -> dict:
+    return {"result": result, "opponent_rating": opponent_rating}
+
+
+class TestFideDp:
+    """FIDE's official fractional-score-to-rating-difference table
+    (Rating Regulations 8.1.1, https://handbook.fide.com/chapter/B022022).
+    """
+
+    def test_exact_table_values_at_one_percent_steps(self):
+        assert stats._fide_dp(0.50) == 0
+        assert stats._fide_dp(0.75) == 193
+        assert stats._fide_dp(0.25) == -193
+
+    def test_extremes_are_notionally_800(self):
+        # FIDE's own wording: "For a zero or 1.0 score dp is necessarily
+        # indeterminate but is shown notionally as 800."
+        assert stats._fide_dp(0.0) == -800
+        assert stats._fide_dp(1.0) == 800
+
+    def test_interpolates_between_table_steps(self):
+        # 5/9 games = 55.56%, between the p=.55 (dp=36) and p=.56 (dp=43)
+        # table rows: 36 + 0.56*(43-36) = 39.9 -> 40.
+        assert stats._fide_dp(5 / 9) == 40
+
+
+class TestComputePerformanceRating:
+    def test_fifty_percent_score_equals_average_opponent_rating(self):
+        games = [_game("win", 2000), _game("loss", 2000)]
+        result = stats.compute_performance_rating(games)
+        assert result["performance_rating"] == 2000
+
+    def test_a_winning_score_rates_above_average_opponent_rating(self):
+        games = [_game("win", 2000), _game("win", 2000), _game("loss", 2000)]
+        result = stats.compute_performance_rating(games)
+        assert result["performance_rating"] > 2000
+
+    def test_games_without_an_opponent_rating_are_excluded(self):
+        games = [_game("win", 2000), _game("loss", 2000), _game("win", None)]
+        result = stats.compute_performance_rating(games)
+        assert result["games"] == 2
+
+    def test_fewer_than_two_rated_games_returns_none(self):
+        assert stats.compute_performance_rating([_game("win", 2000)]) is None
+        assert stats.compute_performance_rating([_game("win", 2000), _game("win", None)]) is None
+
+    def test_draws_count_as_half_a_point(self):
+        games = [_game("draw", 2000), _game("draw", 2000)]
+        result = stats.compute_performance_rating(games)
+        assert result["score"] == 1.0
+        assert result["performance_rating"] == 2000
+
+
 class TestComputeGameAcpl:
     """compute_game_acpl stays a plain average of eval_drop (already
     magnitude-capped at the source — see TestCappedEvalDrop), independent

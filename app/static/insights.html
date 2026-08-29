@@ -243,6 +243,11 @@
       <div class="bar-list" id="acpl-by-time-control"></div>
     </div>
     <div class="card">
+      <h2>Performance rating by time control</h2>
+      <p class="chart-caption" style="margin-top:0;">FIDE's own formula (average opponent rating + your score against them) — about results, not move quality.</p>
+      <div class="bar-list" id="performance-rating-by-time-control"></div>
+    </div>
+    <div class="card">
       <h2>Win rate by day of week (UTC)</h2>
       <div class="bar-list" id="by-day"></div>
     </div>
@@ -308,6 +313,7 @@
     renderBarList("by-time-control", data.win_rate_by_time_control);
     renderAccuracyByTimeControl(data.accuracy_by_time_control);
     renderAcplByTimeControl(data.acpl_by_time_control);
+    renderPerformanceRatingByTimeControl(data.performance_rating_by_time_control);
     renderBarList("by-day", data.win_rate_by_day_of_week, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]);
     renderBarList("by-hour", data.win_rate_by_time_of_day);
     renderRatingBands(data.performance_vs_rating_band);
@@ -375,6 +381,21 @@
         <div class="bar-list-item">
           <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acpl !== null ? acpl + " cp" : "—"} (${d.games})</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderPerformanceRatingByTimeControl(dict) {
+    const el = document.getElementById("performance-rating-by-time-control");
+    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
+    if (!keys.length) { el.innerHTML = `<p class="empty-note">No games with a known opponent rating yet.</p>`; return; }
+    el.innerHTML = keys.map(k => {
+      const d = dict[k];
+      return `
+        <div class="bar-list-item">
+          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${d.performance_rating}</span></div>
+          <p class="chart-caption" style="margin:2px 0 0;">vs avg opponent ${d.avg_opponent_rating} · scored ${d.score}/${d.games} (${(d.score_fraction * 100).toFixed(1)}%)</p>
         </div>
       `;
     }).join("");

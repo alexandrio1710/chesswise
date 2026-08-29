@@ -779,6 +779,73 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
     return round((weighted + harmonic) / 2, 1)
 
 
+# --- FIDE Tournament Performance Rating --------------------------------------
+# A genuinely different measurement from compute_game_accuracy/
+# estimate_performance_rating above: those are about move QUALITY (what
+# rating's move quality does this resemble); this is about RESULTS against
+# real opponents — the actual FIDE formula
+# (https://handbook.fide.com/chapter/B022022, Rating Regulations 8.1-8.2),
+# not an approximation of it: average opponent rating, plus a score-based
+# adjustment read from FIDE's own official table.
+#
+# The table converts fractional score `p` (0-100%, in 1% steps) to a
+# rating difference `dp` — FIDE's own §8.1.1. Values NOT on an exact 1%
+# step (nearly every real score, e.g. 5.5 wins from 9 games = 61.1%) are
+# linearly interpolated between the two nearest table entries — a plain
+# reading of "the table shows the conversion," not a documented official
+# interpolation rule, but the obvious way to use a table this fine-grained
+# for a score it doesn't already cover exactly. FIDE's own wording: for a
+# 0% or 100% score dp is "necessarily indeterminate but is shown
+# notionally as 800."
+FIDE_DP_TABLE = {
+    0: -800, 1: -677, 2: -589, 3: -538, 4: -501, 5: -470, 6: -444, 7: -422, 8: -401, 9: -383,
+    10: -366, 11: -351, 12: -336, 13: -322, 14: -309, 15: -296, 16: -284, 17: -273, 18: -262, 19: -251,
+    20: -240, 21: -230, 22: -220, 23: -211, 24: -202, 25: -193, 26: -184, 27: -175, 28: -166, 29: -158,
+    30: -149, 31: -141, 32: -133, 33: -125, 34: -117, 35: -110, 36: -102, 37: -95, 38: -87, 39: -80,
+    40: -72, 41: -65, 42: -57, 43: -50, 44: -43, 45: -36, 46: -29, 47: -21, 48: -14, 49: -7,
+    50: 0, 51: 7, 52: 14, 53: 21, 54: 29, 55: 36, 56: 43, 57: 50, 58: 57, 59: 65,
+    60: 72, 61: 80, 62: 87, 63: 95, 64: 102, 65: 110, 66: 117, 67: 125, 68: 133, 69: 141,
+    70: 149, 71: 158, 72: 166, 73: 175, 74: 184, 75: 193, 76: 202, 77: 211, 78: 220, 79: 230,
+    80: 240, 81: 251, 82: 262, 83: 273, 84: 284, 85: 296, 86: 309, 87: 322, 88: 336, 89: 351,
+    90: 366, 91: 383, 92: 401, 93: 422, 94: 444, 95: 470, 96: 501, 97: 538, 98: 589, 99: 677,
+    100: 800,
+}
+
+
+def _fide_dp(score_fraction: float) -> int:
+    percent = max(0.0, min(100.0, score_fraction * 100))
+    lower = int(percent)
+    upper = min(lower + 1, 100)
+    if lower == upper:
+        return FIDE_DP_TABLE[lower]
+    frac = percent - lower
+    return round(FIDE_DP_TABLE[lower] + frac * (FIDE_DP_TABLE[upper] - FIDE_DP_TABLE[lower]))
+
+
+def compute_performance_rating(games: list[dict]) -> dict | None:
+    """FIDE Tournament Performance Rating, treating `games` as one
+    tournament — each needs "opponent_rating" and "result" ("win"/"draw"/
+    "loss"). Games missing an opponent_rating are excluded (nothing to
+    average in). Returns None for fewer than 2 such games — one result
+    isn't a real sample, the same minimum this project already uses for
+    ACPL/accuracy.
+    """
+    rated = [g for g in games if g.get("opponent_rating") is not None]
+    if len(rated) < 2:
+        return None
+    avg_opponent_rating = sum(g["opponent_rating"] for g in rated) / len(rated)
+    points = sum(1.0 if g["result"] == "win" else 0.5 if g["result"] == "draw" else 0.0 for g in rated)
+    score_fraction = points / len(rated)
+    dp = _fide_dp(score_fraction)
+    return {
+        "games": len(rated),
+        "score": points,
+        "score_fraction": round(score_fraction, 3),
+        "avg_opponent_rating": round(avg_opponent_rating),
+        "performance_rating": round(avg_opponent_rating + dp),
+    }
+
+
 def get_critical_moment(game_id: int, game_pgn: str, player_color: str) -> dict | None:
     """The single move with the largest eval swing IN THE PLAYER'S OWN
     moves for this game (their critical moment to learn from — not the
