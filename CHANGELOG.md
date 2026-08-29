@@ -1,5 +1,46 @@
 # Changelog
 
+## v23 — Accuracy is now a direct port of Lichess's own algorithm
+
+Reported live: this project's accuracy consistently read higher than
+chess.com's own reported accuracy for the same games. Investigated with
+real data — matched 22 of this account's actual games against chess.com's
+own API (which returns each side's accuracy for games it has Game Review
+data for) — confirming the gap: our old ACPL-exponential-decay formula
+read a mean of +3.9 points higher (up to +9.6 in one game).
+
+Tried several from-scratch fixes (win-probability-weighted ACPL, a
+reverse-engineered CAPS-style per-move curve, both arithmetic- and
+harmonic-mean aggregation, volatility weighting) — none beat the original
+formula's own closeness to chess.com's numbers when tested against the
+same 22 games. chess.com's exact CAPS2 formula is undisclosed and
+explicitly rating-calibrated (per their own support docs), so there's no
+way to reproduce it exactly. Lichess, unlike chess.com, publishes its
+real implementation — so rather than continuing to guess, this ports it
+directly:
+[AccuracyPercent.scala](https://github.com/lichess-org/lila/blob/master/modules/analyse/src/main/AccuracyPercent.scala),
+[eval.scala](https://github.com/lichess-org/scalachess/blob/master/core/src/main/scala/eval.scala),
+[Maths.scala](https://github.com/lichess-org/scalalib/blob/master/lila/src/main/scala/Maths.scala).
+
+The ported algorithm: each move's accuracy comes from its win-percentage
+loss (not raw centipawns) through Lichess's own exponential curve, and a
+whole-game score is the mean of a volatility-weighted mean and a harmonic
+mean of those per-move accuracies — a real blunder in a sharp, contested
+position counts more than the same swing in an already-decided one, and
+isn't diluted away by the rest of an otherwise-clean game the way a plain
+average allows. Validated against the same 22 real games (mean diff +5.5,
+in the same ballpark as the original formula — chess.com's own accuracy
+differs from Lichess's own accuracy for the same game too, by design,
+since they're different sites' independent methodologies).
+
+`compute_game_acpl` (the Insights "average centipawn loss" card) is
+unchanged — it's deliberately still a plain, literal average, which is
+the whole point of that card; only `compute_game_accuracy` (Dashboard,
+Insights, Game Report, alerts) adopts the new algorithm. The Game Report's
+phase/overall accuracy now needs the *unfiltered*, both-colors move list
+(the volatility window looks across the whole game), so
+`generate_game_report` was restructured accordingly.
+
 ## v22 — Analyze board is now profile-aware
 
 Reported live: a second profile's ("evelyn") recent games didn't show up

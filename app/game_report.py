@@ -28,7 +28,6 @@ analyzed (game_moves populated) — this only adds the extra layer on top.
 import io
 import json
 import logging
-import math
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -347,23 +346,17 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
 
 # --- Game Report -------------------------------------------------------------
 
-def _accuracy_from_acpl(acpl: float | None) -> float | None:
-    if acpl is None:
-        return None
-    return round(max(0.0, min(100.0, 100 * math.exp(-stats.ACCURACY_DECAY_K * acpl))), 1)
-
-
 def _acpl(moves: list[dict]) -> float | None:
-    """Average of each move's eval_drop, which mistakes.py already caps at
-    the source (stats.capped_eval_drop) — same reasoning as
-    compute_game_accuracy: a mate-distance eval swing in an already-decided
-    position shouldn't dominate the whole game's ACPL (and with it, this
-    page's estimated performance rating) any more than the Insights/
-    Dashboard accuracy figures let it.
+    """Plain average of each move's eval_drop (already magnitude-capped at
+    the source — see stats.capped_eval_drop), for one already color-
+    filtered slice of moves. Feeds estimated_rating below, which is
+    calibrated against plain-ACPL folklore (ACPL_RATING_ANCHORS) — NOT the
+    same figure accuracy_overall/phase_accuracy use (stats.
+    compute_game_accuracy, a direct port of Lichess's own algorithm, needs
+    the *unfiltered*, both-colors move list instead — see its docstring).
 
-    Also mirrors compute_game_accuracy's minimum of 2 moves: one move
-    (e.g. a game the opponent abandoned right after the opening) isn't a
-    real sample, and gave a nonsensical 0 ACPL / ~perfect estimated
+    One move (e.g. a game the opponent abandoned right after the opening)
+    isn't a real sample, and gave a nonsensical 0 ACPL / ~perfect estimated
     rating from a single book move.
     """
     drops = [m["eval_drop"] for m in moves if m["eval_drop"] is not None]
@@ -447,16 +440,22 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT color_moved, phase, eval_drop, eval_before_cp, classification FROM game_moves WHERE game_id = ?",
+            "SELECT ply, color_moved, phase, eval_cp, eval_drop, eval_before_cp, classification "
+            "FROM game_moves WHERE game_id = ?",
             (game_id,),
         ).fetchall()
     finally:
         conn.close()
 
-    own_moves = [dict(m) for m in rows if m["color_moved"] == game["color"]]
+    all_moves = [dict(m) for m in rows]
+    own_moves = [m for m in all_moves if m["color_moved"] == game["color"]]
 
     overall_acpl = _acpl(own_moves)
-    accuracy_overall = _accuracy_from_acpl(overall_acpl)
+    # compute_game_accuracy (a direct port of Lichess's own algorithm) needs
+    # the unfiltered, both-colors move list — its volatility weighting looks
+    # at a sliding window across the whole game, which breaks if pre-
+    # filtered to one color the way overall_acpl/estimated_rating are.
+    accuracy_overall = stats.compute_game_accuracy(all_moves, game["color"])
     estimated_rating = (
         estimate_performance_rating(_time_control_adjusted_acpl(overall_acpl, game["time_control"]))
         if overall_acpl is not None else None
@@ -464,7 +463,9 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     estimated_rating_uscf = _uscf_from_estimated_rating(estimated_rating)
 
     phase_accuracy = {
-        phase: _accuracy_from_acpl(_acpl([m for m in own_moves if m["phase"] == phase]))
+        phase: stats.compute_game_accuracy(
+            [m for m in all_moves if m["phase"] == phase], game["color"],
+        )
         for phase in ("opening", "middlegame", "endgame")
     }
 
