@@ -2,6 +2,7 @@
 
 import itertools
 
+import stats
 from db import get_connection
 from stats import (
     _is_immediately_preceding_month,
@@ -228,69 +229,97 @@ class TestCappedEvalDrop:
         assert capped_eval_drop(50, 200) == 0.0
 
 
-class TestComputeGameAccuracyMateSwingCap:
-    """compute_game_accuracy trusts eval_drop is already capped (see
-    TestCappedEvalDrop) by the time it sees it, so these tests exercise
-    plain averaging/filtering/sample-size behavior with fixture values
-    already in that post-capping shape.
+def _ply(ply: int, color: str, eval_cp: float) -> dict:
+    """get_game_moves()'s shape for the fields compute_game_accuracy
+    actually reads — `moves` must be every move of the game, both colors,
+    in ply order (see that function's docstring for why)."""
+    return {"ply": ply, "color_moved": color, "eval_cp": eval_cp}
+
+
+class TestWinPercentAndMoveAccuracy:
+    """Building blocks of compute_game_accuracy — a direct port of
+    Lichess's own algorithm (see stats.py's module comment above
+    WIN_PERCENT_MULTIPLIER for the source links). Hand-verifiable in
+    isolation, independent of the whole-game windowing/aggregation below.
     """
 
-    def test_a_single_mate_swing_no_longer_craters_an_otherwise_clean_game(self):
-        # 9 perfectly clean moves + 1 move whose already-capped eval_drop
-        # is 1900 (capped_eval_drop(900, -10000), per TestCappedEvalDrop).
-        # Precomputed: ACPL = 190.0, accuracy = 42.9%.
-        moves = [_move("white", 50, 0) for _ in range(9)]
-        moves.append(_move("white", 900, 1900))
-        assert compute_game_accuracy(moves, "white") == 42.9
+    def test_dead_equal_is_fifty_percent(self):
+        assert stats._win_percent(0) == 50.0
 
-    def test_a_move_that_does_not_change_an_already_decided_verdict_costs_nothing(self):
-        # capped_eval_drop(1500, 1200) == 0.0 (TestCappedEvalDrop) — a
-        # second clean move satisfies the "at least 2 moves" minimum
-        # sample size below.
-        moves = [_move("white", 1500, 0), _move("white", 50, 0)]
+    def test_positive_cp_favors_the_side_its_measured_from(self):
+        assert stats._win_percent(200) > 50.0
+        assert stats._win_percent(-200) < 50.0
+
+    def test_a_mate_score_is_capped_to_the_same_ceiling_as_a_thousand_centipawns(self):
+        # analysis.py represents mate as roughly +-MATE_SCORE_CP (10000);
+        # WIN_PERCENT_CP_CEILING (1000) caps it the same way ACPL capping
+        # does elsewhere in this app, so a mate score isn't treated as
+        # infinitely more decisive than a 10-pawn material lead.
+        assert stats._win_percent(10000) == stats._win_percent(1000)
+        assert stats._win_percent(-10000) == stats._win_percent(-1000)
+
+    def test_a_move_that_improves_win_percent_is_perfect(self):
+        assert stats._move_accuracy(before_win_percent=40, after_win_percent=60) == 100.0
+
+    def test_a_move_that_loses_win_percent_scores_below_perfect(self):
+        acc = stats._move_accuracy(before_win_percent=60, after_win_percent=40)
+        assert 0.0 < acc < 100.0
+
+    def test_a_larger_win_percent_loss_scores_lower(self):
+        small_loss = stats._move_accuracy(before_win_percent=55, after_win_percent=50)
+        big_loss = stats._move_accuracy(before_win_percent=90, after_win_percent=10)
+        assert big_loss < small_loss
+
+
+class TestComputeGameAccuracy:
+    """compute_game_accuracy is a direct port of Lichess's own algorithm —
+    see stats.py's module comment for the source links. Needs the whole
+    game's moves (both colors, in ply order): its volatility weighting
+    looks at a sliding window across the sequence, which breaks if
+    pre-filtered to one color first.
+    """
+
+    def test_a_perfectly_played_game_scores_100(self):
+        # Win percent never drops for either side (both hover near dead
+        # equal) — every move is "perfect" by definition.
+        moves = [_ply(i, "white" if i % 2 == 1 else "black", 15) for i in range(1, 21)]
         assert compute_game_accuracy(moves, "white") == 100.0
+        assert compute_game_accuracy(moves, "black") == 100.0
 
-    def test_a_real_winning_to_losing_swing_is_still_counted_as_a_big_mistake(self):
-        # capped_eval_drop(1500, -1500) == 2000.0 (TestCappedEvalDrop) — a
-        # real, serious mistake that must still register as one.
-        moves = [_move("white", 1500, 2000), _move("white", 50, 0)]
-        acc = compute_game_accuracy(moves, "white")
-        assert acc < 50.0
+    def test_a_real_blunder_scores_meaningfully_lower_than_a_clean_game(self):
+        clean = [_ply(i, "white" if i % 2 == 1 else "black", 20) for i in range(1, 21)]
+        with_blunder = list(clean)
+        # White's move 11 (ply 11) throws a comfortably-equal game into a
+        # completely lost position.
+        with_blunder[10] = _ply(11, "white", -900)
+        assert compute_game_accuracy(with_blunder, "white") < compute_game_accuracy(clean, "white")
 
     def test_only_the_given_colors_own_moves_count(self):
         moves = [
-            _move("white", 900, 1900), _move("white", 50, 0),
-            _move("black", 50, 0), _move("black", 50, 400),
+            _ply(1, "white", 20), _ply(2, "black", 15), _ply(3, "white", -900), _ply(4, "black", -850),
         ]
         assert compute_game_accuracy(moves, "white") != compute_game_accuracy(moves, "black")
 
     def test_no_moves_for_color_returns_none(self):
-        moves = [_move("black", 50, 0), _move("black", 50, 10)]
+        moves = [_ply(1, "black", 20), _ply(2, "black", 15)]
         assert compute_game_accuracy(moves, "white") is None
 
-    def test_fewer_than_two_moves_returns_none_rather_than_a_meaningless_score(self):
-        # Confirmed against real data: a game the opponent abandoned right
-        # after the opening ("1. e4 c5", win by abandonment) had exactly
-        # one analyzed move for the winner, which happened to have ~0
-        # eval_drop — scoring a meaningless 100% "accuracy" for a game
-        # where no real play occurred. One move isn't a real sample.
-        moves = [_move("white", 50, 0)]
-        assert compute_game_accuracy(moves, "white") is None
+    def test_fewer_than_two_total_moves_returns_none(self):
+        assert compute_game_accuracy([_ply(1, "white", 20)], "white") is None
 
 
 class TestComputeGameAcpl:
-    """compute_game_accuracy is now just compute_game_acpl run through an
-    exponential decay — these tests lock in that the two stay in sync
-    after that refactor, plus the ACPL-specific value itself (the new
-    "average centipawn loss by time control" Insights card reports this
-    number directly, not just the derived accuracy percentage).
+    """compute_game_acpl stays a plain average of eval_drop (already
+    magnitude-capped at the source — see TestCappedEvalDrop), independent
+    of compute_game_accuracy above: that one is a direct port of Lichess's
+    own win-probability-based algorithm now, not derived from ACPL at all,
+    while this one is deliberately still a plain, literal "average
+    centipawns lost per move" for the Insights ACPL-by-time-control card.
     """
 
-    def test_matches_the_precomputed_value_behind_the_accuracy_test_above(self):
-        # Same fixture as the mate-swing accuracy test: 9 clean moves + 1
-        # move whose already-capped eval_drop is 1900. Precomputed ACPL =
-        # 190.0 (accuracy 42.9% is 100 * e^(-0.00446 * 190.0), confirmed in
-        # the accuracy test above).
+    def test_a_mate_swing_in_an_already_winning_position_barely_costs_acpl(self):
+        # 9 perfectly clean moves + 1 move whose already-capped eval_drop
+        # is 1900 (capped_eval_drop(900, -10000), per TestCappedEvalDrop).
         moves = [_move("white", 50, 0) for _ in range(9)]
         moves.append(_move("white", 900, 1900))
         assert compute_game_acpl(moves, "white") == 190.0
@@ -301,13 +330,3 @@ class TestComputeGameAcpl:
 
     def test_fewer_than_two_moves_returns_none(self):
         assert compute_game_acpl([_move("white", 50, 0)], "white") is None
-
-    def test_accuracy_is_derived_from_acpl_via_the_documented_formula(self):
-        import math
-
-        from stats import ACCURACY_DECAY_K
-
-        moves = [_move("white", 200, 80), _move("white", 150, 40), _move("white", 90, 10)]
-        acpl = compute_game_acpl(moves, "white")
-        expected_accuracy = round(max(0.0, min(100.0, 100 * math.exp(-ACCURACY_DECAY_K * acpl))), 1)
-        assert compute_game_accuracy(moves, "white") == expected_accuracy
