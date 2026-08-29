@@ -598,54 +598,58 @@ ACCURACY_DECAY_K = 0.00446
 # lost. analysis.py represents mate scores as roughly +-MATE_SCORE_CP
 # (10000) so eval comparisons don't need special-case mate handling — which
 # means a move that walks into (or misses) a forced mate in an already-
-# decided position can carry a "drop" in the thousands of centipawns.
-# Averaged in raw, one such move dominated a whole game's ACPL regardless
-# of how the other 40+ moves were played, sinking accuracy to near 0%
-# (confirmed against real data: 11 of 59 analyzed games had a move with an
-# eval_drop within a few hundred cp of MATE_SCORE_CP). Capping both the
-# before and after eval to this ceiling before differencing keeps a real
-# "winning to losing" swing counted as the large mistake it is (up to
-# 2x this cap), while a move that doesn't change an already-decided
-# verdict — crushing before and after, or lost before and after —
-# contributes ~0, matching how the position's practical outcome didn't
-# actually change.
+# decided position can carry a "drop" in the thousands of centipawns, even
+# though nothing practical changed. This isn't just an accuracy-stat
+# problem: mistakes.py's severity/tier classification reads the exact same
+# raw eval_drop, so a move that merely finds a slower mate than the fastest
+# one available (still completely winning either way) used to get flagged
+# as a "blunder" losing thousands of centipawns — confirmed live, reported
+# as "moves that miss mate show up as a blunder." Capping both the before
+# and after eval to this ceiling before differencing (applied once, at the
+# point eval_drop is first computed in mistakes.py — see capped_eval_drop
+# below) keeps a real "winning to losing" swing counted as the large
+# mistake it is (up to 2x this cap), while a move that doesn't change an
+# already-decided verdict — crushing before and after, or lost before and
+# after, or still-forced-mate-just-slower — contributes ~0, matching how
+# the position's practical outcome didn't actually change. Every consumer
+# of eval_drop (severity, tier, accuracy, ACPL, the Game Report) reads the
+# already-capped value stored at analysis time, so none of them need to
+# re-derive or re-cap it themselves.
 ACCURACY_EVAL_CAP_CP = 1000
 
 
-def capped_eval_drop(eval_before_cp: float, eval_drop: float) -> float:
+def capped_eval_drop(eval_before_cp: float, eval_after_cp: float) -> float:
     """One move's centipawn loss, magnitude-capped per ACCURACY_EVAL_CAP_CP
-    — shared by compute_game_accuracy and game_report._acpl so every
-    accuracy/ACPL figure shown in the app treats an already-decided
-    position's mate-distance swings the same way.
+    (see comment above) — called once, in mistakes.py, at the point
+    eval_drop is first computed from the mover-perspective eval before/
+    after a move. Every other consumer (compute_game_accuracy/acpl below,
+    game_report._acpl, the stored `severity`/`tier` columns) reads the
+    resulting value straight from storage rather than re-capping it.
     """
-    eval_after_cp = eval_before_cp - eval_drop
     capped_before = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_before_cp))
     capped_after = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_after_cp))
     return max(0.0, capped_before - capped_after)
 
 
 def compute_game_acpl(moves: list[dict], color: str) -> float | None:
-    """Average centipawn loss for one player's moves in one game, eval
-    magnitude capped per move (see ACCURACY_EVAL_CAP_CP) so an already-
-    decided position's mate-distance swing doesn't dominate the average
-    — same reasoning as compute_game_accuracy, which is just this run
-    through an exponential decay (see below).
+    """Average centipawn loss for one player's moves in one game. `moves`
+    is get_game_moves()'s output — eval_drop there is already magnitude-
+    capped at analysis time (see capped_eval_drop), so this is a plain
+    average, not a re-capped one.
 
-    `moves` is get_game_moves()'s output; only the given `color`'s own
-    moves count. Returns None if that color made fewer than 2 moves with
-    a known eval. One move isn't a real sample — confirmed against real
-    data: a game the opponent abandoned right after the opening
-    ("1. e4 c5", win by abandonment) had a single book move with ~0
-    eval_drop, which would read as a meaningless "0 ACPL, flawless game."
-    Two real analyzed games in this project's own dataset had exactly
-    this shape; nothing had 2 or 3, so this threshold excludes only that
-    degenerate case, not genuinely short-but-real games (a 4-move
-    Scholar's-mate loss still scores).
+    Only the given `color`'s own moves count. Returns None if that color
+    made fewer than 2 moves with a known eval. One move isn't a real
+    sample — confirmed against real data: a game the opponent abandoned
+    right after the opening ("1. e4 c5", win by abandonment) had a single
+    book move with ~0 eval_drop, which would read as a meaningless "0
+    ACPL, flawless game." Two real analyzed games in this project's own
+    dataset had exactly this shape; nothing had 2 or 3, so this threshold
+    excludes only that degenerate case, not genuinely short-but-real
+    games (a 4-move Scholar's-mate loss still scores).
     """
     drops = [
-        capped_eval_drop(m["eval_before_cp"], m["eval_drop"])
-        for m in moves
-        if m["color_moved"] == color and m["eval_drop"] is not None and m["eval_before_cp"] is not None
+        m["eval_drop"] for m in moves
+        if m["color_moved"] == color and m["eval_drop"] is not None
     ]
     if len(drops) < 2:
         return None

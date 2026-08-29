@@ -6,6 +6,7 @@ from db import get_connection
 from stats import (
     _is_immediately_preceding_month,
     annotate_fen,
+    capped_eval_drop,
     compute_game_acpl,
     compute_game_accuracy,
     get_starting_fen,
@@ -181,50 +182,84 @@ class TestAnnotateFen:
 
 
 def _move(color: str, eval_before_cp: float, eval_drop: float) -> dict:
+    """`eval_drop` here is the already-capped value mistakes.py would have
+    stored (see TestCappedEvalDrop below for the capping itself) — matches
+    what get_game_moves() actually hands compute_game_acpl/accuracy.
+    """
     return {"color_moved": color, "eval_before_cp": eval_before_cp, "eval_drop": eval_drop}
 
 
-class TestComputeGameAccuracyMateSwingCap:
+class TestCappedEvalDrop:
     """analysis.py represents a forced mate as roughly +-10000cp
     (MATE_SCORE_CP) so eval comparisons don't need special-case mate
-    handling. Averaged into ACPL raw, one such move (missing/walking into
-    mate in an already-decided position) could crater a whole game's
-    accuracy to near 0% regardless of how the other moves were played —
-    confirmed against real data: 11 of 59 already-analyzed games had a
-    move with an eval_drop within a few hundred cp of MATE_SCORE_CP. Fixed
+    handling. Diffed raw, one such move (missing/walking into mate in an
+    already-decided position) could carry a "drop" in the thousands of
+    centipawns even though nothing practical changed — confirmed against
+    real data: 11 of 59 already-analyzed games had a move with an
+    eval_drop within a few hundred cp of MATE_SCORE_CP, and this class of
+    move was also getting flagged as a severity-cratering blunder. Fixed
     by capping the eval magnitude (ACCURACY_EVAL_CAP_CP = 1000) on both
-    sides of the diff before it feeds the average.
+    sides of the diff before it feeds anything downstream — applied once
+    here, at the point mistakes.py first computes eval_drop.
     """
 
-    def test_a_single_mate_swing_no_longer_craters_an_otherwise_clean_game(self):
-        # 9 perfectly clean moves + 1 move that blunders a forced mate from
-        # an already-winning position (eval_before=900, drop=10900, so
-        # eval_after=-10000). Precomputed: capped ACPL = 190.0, accuracy = 42.9%.
-        # Uncapped, this single move's raw drop (10900) over 10 moves alone
-        # would push ACPL past 1090 — accuracy near 0%.
-        moves = [_move("white", 50, 0) for _ in range(9)]
-        moves.append(_move("white", 900, 10900))
-        assert compute_game_accuracy(moves, "white") == 42.9
+    def test_a_mate_swing_in_an_already_winning_position_is_capped_hard(self):
+        # Still winning before (900cp) and after finding a slower mate
+        # (eval_after=-10000, i.e. a "drop" of 10900 raw) — the practical
+        # verdict never changed, so this should cost nowhere near 10900cp.
+        assert capped_eval_drop(900, -10000) == 1900.0
 
     def test_a_move_that_does_not_change_an_already_decided_verdict_costs_nothing(self):
         # Crushing before (1500cp, past the cap) and still crushing after
-        # (1200cp) — the raw 300cp "drop" didn't change the practical
-        # outcome, so it shouldn't count against accuracy. A second clean
-        # move satisfies the "at least 2 moves" minimum sample size below.
-        moves = [_move("white", 1500, 300), _move("white", 50, 0)]
-        assert compute_game_accuracy(moves, "white") == 100.0
+        # (1200cp, also past the cap) — the raw 300cp "drop" didn't change
+        # the practical outcome, so it should cost ~0.
+        assert capped_eval_drop(1500, 1200) == 0.0
 
     def test_a_real_winning_to_losing_swing_is_still_counted_as_a_big_mistake(self):
         # Genuinely blowing a winning position (1500cp) into a losing one
         # (-1500cp) is a real, serious mistake and must still register as
         # one — capped at 2x the ceiling (2000cp) rather than uncapped.
-        moves = [_move("white", 1500, 3000), _move("white", 50, 0)]
+        assert capped_eval_drop(1500, -1500) == 2000.0
+
+    def test_a_small_swing_well_within_the_cap_is_unaffected(self):
+        assert capped_eval_drop(200, 120) == 80.0
+
+    def test_a_move_that_improves_the_position_clamps_to_zero_not_negative(self):
+        assert capped_eval_drop(50, 200) == 0.0
+
+
+class TestComputeGameAccuracyMateSwingCap:
+    """compute_game_accuracy trusts eval_drop is already capped (see
+    TestCappedEvalDrop) by the time it sees it, so these tests exercise
+    plain averaging/filtering/sample-size behavior with fixture values
+    already in that post-capping shape.
+    """
+
+    def test_a_single_mate_swing_no_longer_craters_an_otherwise_clean_game(self):
+        # 9 perfectly clean moves + 1 move whose already-capped eval_drop
+        # is 1900 (capped_eval_drop(900, -10000), per TestCappedEvalDrop).
+        # Precomputed: ACPL = 190.0, accuracy = 42.9%.
+        moves = [_move("white", 50, 0) for _ in range(9)]
+        moves.append(_move("white", 900, 1900))
+        assert compute_game_accuracy(moves, "white") == 42.9
+
+    def test_a_move_that_does_not_change_an_already_decided_verdict_costs_nothing(self):
+        # capped_eval_drop(1500, 1200) == 0.0 (TestCappedEvalDrop) — a
+        # second clean move satisfies the "at least 2 moves" minimum
+        # sample size below.
+        moves = [_move("white", 1500, 0), _move("white", 50, 0)]
+        assert compute_game_accuracy(moves, "white") == 100.0
+
+    def test_a_real_winning_to_losing_swing_is_still_counted_as_a_big_mistake(self):
+        # capped_eval_drop(1500, -1500) == 2000.0 (TestCappedEvalDrop) — a
+        # real, serious mistake that must still register as one.
+        moves = [_move("white", 1500, 2000), _move("white", 50, 0)]
         acc = compute_game_accuracy(moves, "white")
         assert acc < 50.0
 
     def test_only_the_given_colors_own_moves_count(self):
         moves = [
-            _move("white", 900, 10900), _move("white", 50, 0),
+            _move("white", 900, 1900), _move("white", 50, 0),
             _move("black", 50, 0), _move("black", 50, 400),
         ]
         assert compute_game_accuracy(moves, "white") != compute_game_accuracy(moves, "black")
@@ -253,11 +288,11 @@ class TestComputeGameAcpl:
 
     def test_matches_the_precomputed_value_behind_the_accuracy_test_above(self):
         # Same fixture as the mate-swing accuracy test: 9 clean moves + 1
-        # move that blunders a forced mate from an already-winning
-        # position. Precomputed capped ACPL = 190.0 (accuracy 42.9% is
-        # 100 * e^(-0.00446 * 190.0), confirmed in the accuracy test above).
+        # move whose already-capped eval_drop is 1900. Precomputed ACPL =
+        # 190.0 (accuracy 42.9% is 100 * e^(-0.00446 * 190.0), confirmed in
+        # the accuracy test above).
         moves = [_move("white", 50, 0) for _ in range(9)]
-        moves.append(_move("white", 900, 10900))
+        moves.append(_move("white", 900, 1900))
         assert compute_game_acpl(moves, "white") == 190.0
 
     def test_zero_acpl_for_a_perfectly_played_game(self):
