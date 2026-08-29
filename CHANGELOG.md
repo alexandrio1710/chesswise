@@ -1,5 +1,35 @@
 # Changelog
 
+## v19 — Fetch your own games from the Analyze board; fixed runaway move-list scroll
+
+**"My recent games" panel on the Analyze board.** Previously the only way
+in was pasting a PGN/FEN by hand, even for a game already synced from
+Lichess/Chess.com. Added a panel above the paste box listing the 8 most
+recent analyzed games (reusing `/api/search`'s existing sort+limit —
+no new backend endpoint needed), each opening the full Game Review page
+(`/game?id=…`, which already has everything the one-off paste flow does
+plus persistent notes and cached analysis) instead of re-running a
+one-off Stockfish pass. A "🔄 Refresh from Lichess/Chess.com" button
+reuses the Dashboard's existing `/api/refresh` + `/api/refresh/status`
+background fetch-and-analyze pattern (usernames are still configured on
+the Dashboard, not duplicated here) — verified against the real
+accounts end-to-end: 15 new games fetched, analyzed, and appearing in
+the list.
+
+**Fixed a real bug reported live: stepping through a long game's moves
+scrolled the whole page far away from the board.** `.table-scroll` (the
+move-list wrapper on both the Analyze board and the Game Review page)
+had no height limit at all, so a long game's table just kept growing —
+and `goToPly()`'s `scrollIntoView()` call on the active row had nothing
+to scroll *except* the whole page, which could mean scrolling thousands
+of pixels for a move near the end of a 100+ move game. Gave `.table-scroll`
+a 680px max-height with its own vertical scroll (matching the board's
+own footprint) and a sticky header, on both pages. Verified on a real
+149-move game: the outer page now scrolls a small, roughly constant
+amount regardless of which move is selected (was growing unbounded with
+game length before), while the move list itself does the rest of the
+scrolling internally.
+
 ## v18 — Average centipawn loss added as its own metric, by time control
 
 Insights had accuracy by time control but not the raw ACPL it's derived

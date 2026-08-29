@@ -178,11 +178,19 @@
   #eval-chart { width: 100%; height: 200px; display: block; }
   .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 
-  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  /* Bounded + internally scrollable — a long game's move list used to have
+     no height limit at all, so it just kept growing the whole page taller.
+     Stepping through moves calls scrollIntoView() on the active row, which
+     scrolled the entire PAGE (there was nothing else to scroll) far past
+     the board instead of just nudging this list. max-height keeps it the
+     board's own footprint; the sticky header stays put while it scrolls. */
+  .table-scroll { overflow-x: auto; overflow-y: auto; width: 100%; max-width: 100%; max-height: 680px; }
   table.moves-table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 13px; }
   table.moves-table th {
+    position: sticky; top: 0;
     text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted);
-    font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--gridline);
+    font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--gridline);
+    background: var(--surface-1);
   }
   table.moves-table td { padding: 6px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
   table.moves-table tr.move-row { cursor: pointer; }
@@ -194,6 +202,34 @@
   .tier-pill.inaccuracy { background: var(--status-warning); color: #3a2a00; }
   .tier-pill.mistake { background: #ec835a; color: #3a1400; }
   .tier-pill.blunder { background: var(--status-critical); color: var(--status-critical-text); }
+
+  /* My recent games — fetch/open a synced game instead of pasting a PGN. */
+  .games-panel-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .games-panel-header h2 { font-size: 15px; margin: 0; }
+  #games-refresh-btn {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  #games-refresh-btn:disabled { opacity: 0.55; cursor: default; }
+  .recent-games-list { display: flex; flex-direction: column; gap: 8px; }
+  .recent-game-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--page-plane); text-decoration: none; color: var(--text-primary); font-size: 13px;
+  }
+  .recent-game-item:hover { background: var(--accent-soft); }
+  .recent-game-item .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 100px; color: #fff; flex-shrink: 0;
+  }
+  .recent-game-item .badge.lichess { background: var(--series-1); }
+  .recent-game-item .badge.chesscom { background: var(--series-2); }
+  .recent-game-item .result-tag { font-weight: 700; flex-shrink: 0; }
+  .recent-game-item .result-tag.win { color: var(--status-good); }
+  .recent-game-item .result-tag.loss { color: var(--status-critical); }
+  .recent-game-item .result-tag.draw { color: var(--text-muted); }
+  .recent-game-item .opponent { flex: 1; min-width: 120px; }
+  .recent-game-item .meta { color: var(--text-muted); font-size: 12px; }
 
   /* Board + vertical eval bar + move list, Chess.com-analysis-style ------
      Board column widened from a 460px cap to 680px (Chess.com-sized on a
@@ -318,7 +354,16 @@
   </header>
 
   <section class="card">
-    <p class="loading-text" style="margin-top:0;">Paste a PGN (a full game) or a single FEN (one position) — including from an over-the-board game that never touched Lichess or Chess.com.</p>
+    <div class="games-panel-header">
+      <h2>My recent games</h2>
+      <button type="button" id="games-refresh-btn">🔄 Refresh from Lichess/Chess.com</button>
+    </div>
+    <p class="loading-text" id="games-status"><span class="spinner"></span>Loading…</p>
+    <div class="recent-games-list" id="recent-games-list"></div>
+  </section>
+
+  <section class="card">
+    <p class="loading-text" style="margin-top:0;">Or paste a PGN (a full game) or a single FEN (one position) — including from an over-the-board game that never touched Lichess or Chess.com.</p>
     <textarea id="pgn-input" placeholder="Paste PGN or FEN here…"></textarea>
     <div class="input-row">
       <button id="analyze-btn">Analyze</button>
@@ -400,6 +445,103 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
   const XLINK_NS = "http://www.w3.org/1999/xlink";
   const CAP = 1000;
+
+  // --- My recent games: open an already-synced game instead of pasting a
+  // PGN. Reuses /api/search (limit + sort gives "N most recent analyzed
+  // games" for free) and the same /api/refresh + /api/refresh/status
+  // background-fetch pattern the Dashboard's Settings panel already uses —
+  // usernames themselves are configured there, not duplicated here.
+
+  async function loadRecentGames() {
+    const status = document.getElementById("games-status");
+    const list = document.getElementById("recent-games-list");
+    try {
+      const res = await fetch("/api/search?limit=8&sort_by=date&sort_dir=desc");
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const data = await res.json();
+      const games = data.games || [];
+      if (!games.length) {
+        status.classList.remove("hidden");
+        status.innerHTML = "No analyzed games yet — refresh above (after linking an account in Dashboard → Settings), or paste a PGN below.";
+        list.innerHTML = "";
+        return;
+      }
+      status.classList.add("hidden");
+      list.innerHTML = games.map(g => {
+        const date = new Date(g.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+        const sourceLabel = g.source === "lichess" ? "Lichess" : g.source === "chesscom" ? "Chess.com" : g.source;
+        const sourceClass = g.source === "lichess" || g.source === "chesscom" ? g.source : "";
+        const resultLabel = g.result === "win" ? "Won" : g.result === "loss" ? "Lost" : "Draw";
+        const blunderNote = g.blunder_count ? ` · ${g.blunder_count} blunder${g.blunder_count === 1 ? "" : "s"}` : "";
+        return `
+          <a class="recent-game-item" href="/game?id=${g.id}">
+            <span class="badge ${sourceClass}">${escapeHtml(sourceLabel)}</span>
+            <span class="result-tag ${g.result}">${resultLabel}</span>
+            <span class="opponent">vs ${escapeHtml(g.opponent || "?")}</span>
+            <span class="meta">${escapeHtml(g.time_control || "")} · ${date}${blunderNote}</span>
+          </a>
+        `;
+      }).join("");
+    } catch (err) {
+      status.classList.remove("hidden");
+      status.textContent = "Couldn't load recent games — check your connection and reload.";
+    }
+  }
+
+  async function pollGamesRefreshStatus() {
+    const status = document.getElementById("games-status");
+    const res = await fetch("/api/refresh/status");
+    const data = await res.json();
+    if (data.running) {
+      status.classList.remove("hidden");
+      status.innerHTML = `<span class="spinner"></span>Refreshing from Lichess/Chess.com — this can take a few minutes…`;
+      setTimeout(pollGamesRefreshStatus, 3000);
+      return;
+    }
+    document.getElementById("games-refresh-btn").disabled = false;
+    if (data.error) {
+      status.classList.remove("hidden");
+      status.textContent = `Refresh failed: ${data.error}`;
+      return;
+    }
+    if (data.finished_at) {
+      const inserted = data.result ? data.result.inserted : 0;
+      status.classList.remove("hidden");
+      status.textContent = inserted ? `Done — ${inserted} new game${inserted === 1 ? "" : "s"}.` : "Done — no new games.";
+    }
+    loadRecentGames();
+  }
+
+  document.getElementById("games-refresh-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("games-refresh-btn");
+    const status = document.getElementById("games-status");
+    btn.disabled = true;
+    status.classList.remove("hidden");
+    status.innerHTML = `<span class="spinner"></span>Starting refresh…`;
+    const res = await fetch("/api/refresh", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      btn.disabled = false;
+      status.textContent = body.detail || "Couldn't start refresh.";
+      return;
+    }
+    pollGamesRefreshStatus();
+  });
+
+  // Pick up an already-running refresh (e.g. started from the Dashboard)
+  // instead of leaving this page's status stuck blank.
+  (async () => {
+    const res = await fetch("/api/refresh/status");
+    const data = await res.json();
+    if (data.running) {
+      document.getElementById("games-refresh-btn").disabled = true;
+      pollGamesRefreshStatus();
+    }
+  })();
+
+  loadRecentGames();
 
   document.getElementById("file-input").addEventListener("change", async (e) => {
     const file = e.target.files[0];

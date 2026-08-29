@@ -170,11 +170,19 @@
     transform: translate(-50%, -110%);
   }
 
-  .table-scroll { overflow-x: auto; width: 100%; max-width: 100%; }
+  /* Bounded + internally scrollable — a long game's move list used to have
+     no height limit at all, so it just kept growing the whole page taller.
+     Stepping through moves calls scrollIntoView() on the active row, which
+     scrolled the entire PAGE (there was nothing else to scroll) far past
+     the board instead of just nudging this list. max-height keeps it the
+     board's own footprint; the sticky header stays put while it scrolls. */
+  .table-scroll { overflow-x: auto; overflow-y: auto; width: 100%; max-width: 100%; max-height: 680px; }
   table.moves-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 13px; }
   table.moves-table th {
+    position: sticky; top: 0;
     text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--text-muted);
-    font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--gridline);
+    font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--gridline);
+    background: var(--surface-1);
   }
   table.moves-table td { padding: 7px 10px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
   table.moves-table tr.move-row { cursor: pointer; }
