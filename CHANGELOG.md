@@ -1,5 +1,39 @@
 # Changelog
 
+## v24 — Move severity/tier classification is now Lichess's own algorithm too
+
+Following v23's accuracy port, this does the same for move-quality
+classification (Inaccuracy/Mistake/Blunder, and the finer Best/Excellent/
+Good bands): `mistakes.py` used flat centipawn thresholds (100/200/400cp),
+which don't distinguish a real swing from one that doesn't change who's
+winning — the same class of problem the missed-mate bug (v20) fixed a
+cruder, narrower version of. Ported Lichess's own move-judgment algorithm
+directly:
+[Advice.scala](https://github.com/lichess-org/lila/blob/master/modules/tree/src/main/Advice.scala) —
+win-probability-based thresholds for the ordinary case (5/10/15 percentage
+points of win% lost), plus a special case for a move that specifically
+creates a forced mate against the mover or loses one they already had,
+graded by the eval right before/after that specific transition rather than
+the win%-loss (which is already saturated for any mate-scale eval).
+
+`eval_drop` itself is unchanged — still a plain, magnitude-capped
+centipawn value for ACPL/rating purposes; only severity and tier now
+derive from win%, computed separately from the stored eval_before/eval_
+after. A migration backfilled every already-analyzed game's stored
+severity/tier from data on disk (no Stockfish re-run): roughly half of
+existing flagged mistakes changed severity, ~12% no longer qualified as a
+mistake at all, and about 29% of every move's finer-grained tier changed.
+Games whose enriched Game Report classification (Brilliant/Great/Miss)
+depended on the old tier had that cache cleared to recompute on next
+view, rather than re-running the expensive Stockfish pass for every
+affected game up front.
+
+Also fixed a second copy of the exact missed-mate bug the migration
+above addresses for saved games: the Analyze board's one-off "paste a
+PGN without saving" path (`manual_analysis._graded_moves`) had its own,
+separate, still-uncapped `eval_before - eval_after`, never touched by the
+original fix since it's a different code path.
+
 ## v23 — Accuracy is now a direct port of Lichess's own algorithm
 
 Reported live: this project's accuracy consistently read higher than

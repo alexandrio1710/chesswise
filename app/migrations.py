@@ -14,6 +14,7 @@ that file — nothing here should ever risk losing already-analyzed games.
 
 import json
 import logging
+import math
 import re
 import shutil
 import sqlite3
@@ -777,6 +778,153 @@ def _migration_018_time_control_adjusted_rating(conn: sqlite3.Connection) -> Non
         )
 
 
+def _migration_019_lichess_move_judgment(conn: sqlite3.Connection) -> None:
+    """Feature — mistakes.py's severity/tier classification (Inaccuracy/
+    Mistake/Blunder, and the finer Best/Excellent/Good bands) used flat
+    centipawn thresholds; a flat threshold doesn't know the difference
+    between a real swing and one that doesn't change who's winning, the
+    same class of problem migration 17 fixed a cruder, narrower version of
+    for mate-adjacent swings specifically. mistakes.py now ports Lichess's
+    own move-judgment algorithm directly (win-probability-based, see
+    https://github.com/lichess-org/lila/blob/master/modules/tree/src/main/Advice.scala) —
+    this migration re-derives severity/tier for every already-analyzed
+    game's stored rows from the raw evals already on disk, without
+    re-running Stockfish.
+
+    Approximation for this backfill only: mistakes.py's real
+    classify_severity/classify_tier also special-case a move that
+    specifically creates or loses a forced mate (Lichess's own MateAdvice),
+    using the exact raw eval right before/after that transition. Only
+    eval_before_cp is stored exactly for game_moves; eval_after has to be
+    recovered as capped_before - eval_drop, which is exact for the ordinary
+    win%-based case (both were already clamped to +-ACCURACY_EVAL_CAP_CP
+    before that subtraction produced eval_drop in the first place) but
+    loses whether the *raw* after-value was itself mate-scale. Skipping the
+    MateAdvice special case for this backfill and using only the ordinary
+    win%-based formula still converges on the same practical verdict for
+    the common, clear-cut cases (a real winning-to-mated collapse already
+    saturates the win% scale hard enough to register as a blunder either
+    way) — the only rows this doesn't perfectly reconstruct are already-
+    near-decided positions that specifically create or lose a forced mate,
+    a narrow edge case. New analyses going forward use the real, exact
+    logic in mistakes.py; only this one-time backfill approximates.
+
+    mistakes rows are keyed on eval_before/eval_after (both stored exactly,
+    mover's-own-perspective, uncapped) — no approximation needed there.
+    """
+    WIN_PERCENT_MULTIPLIER = -0.00368208
+    WIN_PERCENT_CP_CEILING = 1000
+    ACCURACY_EVAL_CAP_CP = 1000
+    INACCURACY_WIN_PERCENT_LOSS = 5.0
+    MISTAKE_WIN_PERCENT_LOSS = 10.0
+    BLUNDER_WIN_PERCENT_LOSS = 15.0
+    BEST_WIN_PERCENT_LOSS = 1.0
+    EXCELLENT_WIN_PERCENT_LOSS = 2.5
+
+    def win_percent(cp):
+        ceiled = max(-WIN_PERCENT_CP_CEILING, min(WIN_PERCENT_CP_CEILING, cp))
+        return 100.0 / (1.0 + math.exp(WIN_PERCENT_MULTIPLIER * ceiled))
+
+    def severity_from_win_percent_loss(loss):
+        if loss >= BLUNDER_WIN_PERCENT_LOSS:
+            return "blunder"
+        if loss >= MISTAKE_WIN_PERCENT_LOSS:
+            return "mistake"
+        if loss >= INACCURACY_WIN_PERCENT_LOSS:
+            return "inaccuracy"
+        return None
+
+    def tier_from_win_percent_loss(loss):
+        loss = max(0.0, loss)
+        severity = severity_from_win_percent_loss(loss)
+        if severity is not None:
+            return severity
+        if loss >= EXCELLENT_WIN_PERCENT_LOSS:
+            return "good"
+        if loss >= BEST_WIN_PERCENT_LOSS:
+            return "excellent"
+        return "best"
+
+    affected_game_ids = set()
+
+    mistake_rows = conn.execute(
+        "SELECT id, game_id, eval_before, eval_after, severity FROM mistakes"
+    ).fetchall()
+    to_delete = []
+    for row in mistake_rows:
+        if row["eval_before"] is None or row["eval_after"] is None:
+            continue
+        loss = win_percent(row["eval_before"]) - win_percent(row["eval_after"])
+        new_severity = severity_from_win_percent_loss(loss)
+        if new_severity is None:
+            to_delete.append(row["id"])
+            affected_game_ids.add(row["game_id"])
+        elif new_severity != row["severity"]:
+            conn.execute("UPDATE mistakes SET severity = ? WHERE id = ?", (new_severity, row["id"]))
+            conn.execute("UPDATE puzzles SET severity = ? WHERE mistake_id = ?", (new_severity, row["id"]))
+            affected_game_ids.add(row["game_id"])
+
+    if to_delete:
+        # Same FK order as migration 17's re-analysis cleanup.
+        placeholders = ",".join("?" * len(to_delete))
+        conn.execute(
+            f"DELETE FROM puzzle_review_state WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(
+            f"DELETE FROM puzzle_attempts WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(
+            f"DELETE FROM puzzle_progress WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(f"DELETE FROM puzzles WHERE mistake_id IN ({placeholders})", to_delete)
+        conn.execute(f"DELETE FROM mistakes WHERE id IN ({placeholders})", to_delete)
+
+    move_rows = conn.execute(
+        "SELECT id, game_id, eval_before_cp, eval_drop, tier, classification FROM game_moves"
+    ).fetchall()
+    reenrichment_needed = set()
+    for row in move_rows:
+        if row["eval_before_cp"] is None or row["eval_drop"] is None:
+            continue
+        capped_before = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, row["eval_before_cp"]))
+        capped_after = capped_before - row["eval_drop"]
+        loss = win_percent(capped_before) - win_percent(capped_after)
+        new_tier = tier_from_win_percent_loss(loss)
+        if new_tier != row["tier"]:
+            conn.execute("UPDATE game_moves SET tier = ? WHERE id = ?", (new_tier, row["id"]))
+            affected_game_ids.add(row["game_id"])
+            if row["classification"] is not None:
+                reenrichment_needed.add(row["game_id"])
+
+    if reenrichment_needed:
+        # classification (the enriched Brilliant/Great/Book/Miss layer) is
+        # derived from tier plus a Stockfish MultiPV=2 pass this migration
+        # can't afford to re-run for every affected game at startup — clear
+        # the stale enrichment so compute_enriched_classification recomputes
+        # it lazily, on-demand, next time that game's Report page is viewed
+        # (same "worth it on-demand, not in bulk" tradeoff as elsewhere).
+        placeholders = ",".join("?" * len(reenrichment_needed))
+        conn.execute(
+            f"UPDATE game_moves SET classification = NULL, is_top_choice = NULL "
+            f"WHERE game_id IN ({placeholders})",
+            list(reenrichment_needed),
+        )
+        conn.execute(f"DELETE FROM game_reports WHERE game_id IN ({placeholders})", list(reenrichment_needed))
+
+    if affected_game_ids:
+        placeholders = ",".join("?" * len(affected_game_ids))
+        conn.execute(
+            f"UPDATE games SET analyzed_at = datetime('now') WHERE id IN ({placeholders})",
+            list(affected_game_ids),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -796,6 +944,7 @@ MIGRATIONS = [
     (16, "Fix Leitner SRS next_review_at datetime format", _migration_016_fix_leitner_srs_datetime_format),
     (17, "Fix missed-mate eval_drop/severity/tier miscalculation", _migration_017_fix_missed_mate_severity_and_tier),
     (18, "Recompute estimated_rating with time-control adjustment + USCF figure", _migration_018_time_control_adjusted_rating),
+    (19, "Recompute move severity/tier with Lichess's own win%-based judgment", _migration_019_lichess_move_judgment),
 ]
 
 

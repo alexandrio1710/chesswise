@@ -244,19 +244,19 @@ class TestWinPercentAndMoveAccuracy:
     """
 
     def test_dead_equal_is_fifty_percent(self):
-        assert stats._win_percent(0) == 50.0
+        assert stats.win_percent(0) == 50.0
 
     def test_positive_cp_favors_the_side_its_measured_from(self):
-        assert stats._win_percent(200) > 50.0
-        assert stats._win_percent(-200) < 50.0
+        assert stats.win_percent(200) > 50.0
+        assert stats.win_percent(-200) < 50.0
 
     def test_a_mate_score_is_capped_to_the_same_ceiling_as_a_thousand_centipawns(self):
         # analysis.py represents mate as roughly +-MATE_SCORE_CP (10000);
         # WIN_PERCENT_CP_CEILING (1000) caps it the same way ACPL capping
         # does elsewhere in this app, so a mate score isn't treated as
         # infinitely more decisive than a 10-pawn material lead.
-        assert stats._win_percent(10000) == stats._win_percent(1000)
-        assert stats._win_percent(-10000) == stats._win_percent(-1000)
+        assert stats.win_percent(10000) == stats.win_percent(1000)
+        assert stats.win_percent(-10000) == stats.win_percent(-1000)
 
     def test_a_move_that_improves_win_percent_is_perfect(self):
         assert stats._move_accuracy(before_win_percent=40, after_win_percent=60) == 100.0

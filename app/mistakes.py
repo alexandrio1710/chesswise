@@ -15,7 +15,7 @@ import re
 from analysis import analyze_game_moves
 from config import STOCKFISH_DEPTH
 from db import get_connection
-from stats import capped_eval_drop
+from stats import capped_eval_drop, win_percent
 
 # Lichess/Chess.com PGNs tag non-standard rule sets with a Variant header
 # (e.g. "Three-check", "Horde", "Atomic", "Crazyhouse"). Those use board
@@ -31,12 +31,35 @@ def get_pgn_variant(pgn_text: str) -> str | None:
     match = re.search(r'\[Variant\s+"([^"]*)"\]', pgn_text)
     return match.group(1) if match else None
 
-# --- Severity thresholds --------------------------------------------------
-# Eval drop is centipawns lost by the mover on a single move, measured from
-# the mover's own perspective (positive = the position got worse for them).
-INACCURACY_THRESHOLD_CP = 100   # 100-199 => inaccuracy
-MISTAKE_THRESHOLD_CP = 200      # 200-399 => mistake
-BLUNDER_THRESHOLD_CP = 400      # 400+    => blunder
+# --- Severity thresholds: Lichess's own move-judgment algorithm -------------
+# https://github.com/lichess-org/lila/blob/master/modules/tree/src/main/Advice.scala
+# Ported directly rather than tuning our own magnitude-capped centipawn
+# thresholds further: a flat centipawn drop doesn't distinguish a real
+# swing from one that doesn't change who's winning (the "moves that miss
+# mate show up as a blunder" bug fixed earlier this session was a cruder,
+# narrower version of exactly this problem) — Lichess's own judgment is
+# win-percentage-based throughout, with a further special case for a move
+# that specifically creates or loses a forced mate.
+#
+# Ordinary case: loss in win% (0-100 scale, stats.win_percent) between the
+# mover's own eval right before and right after their move.
+INACCURACY_WIN_PERCENT_LOSS = 5.0
+MISTAKE_WIN_PERCENT_LOSS = 10.0
+BLUNDER_WIN_PERCENT_LOSS = 15.0
+
+# Special case: a move that creates a forced mate against the mover (from a
+# position that wasn't already a mate either way), or loses a forced mate
+# the mover already had. Severity depends on the mover's own eval right
+# before (creating a mate against yourself matters less if you were already
+# losing badly) or right after (losing your own mate matters less if you're
+# still clearly winning anyway) — Lichess's own MateAdvice thresholds.
+MATE_ADVICE_INACCURACY_CP = 999
+MATE_ADVICE_MISTAKE_CP = 700
+
+# analysis.py represents a forced mate as roughly +-MATE_SCORE_CP (10000);
+# any eval this close to that is mate-encoded, not a real centipawn value —
+# a genuine Stockfish cp eval never gets anywhere near this magnitude.
+MATE_SCORE_DETECTION_THRESHOLD_CP = 9000
 
 # --- Game phase thresholds -------------------------------------------------
 OPENING_MOVE_CUTOFF = 10     # moves 1-10 => opening
@@ -44,68 +67,108 @@ ENDGAME_MOVE_CUTOFF = 30     # move 30+ => endgame, regardless of material
 ENDGAME_PIECE_COUNT = 7      # fewer than 7 non-king pieces on board => endgame
 
 
-def classify_severity(eval_drop_cp: float) -> str | None:
-    """Grade a single move by how much the position's evaluation dropped
-    for the player who made it (already converted to their own
-    perspective by the caller, so a positive number always means "this
-    move made things worse for them" regardless of color).
+def _is_mate_score(cp: float) -> bool:
+    return abs(cp) >= MATE_SCORE_DETECTION_THRESHOLD_CP
 
-    The thresholds (100/200/400cp) are a judgment call, not a rule from
-    chess theory: they roughly follow the bands common chess sites use for
-    "inaccuracy" vs "mistake" vs "blunder", picked so a single pawn's
-    worth of inaccuracy (~100cp) is the noise floor — engines wobble by
-    that much between very similar quiet moves — while a full piece or a
-    missed tactic (~400cp+) reliably lands as a blunder. Tune the *_THRESHOLD_CP
-    constants above if this feels too strict or too lenient for your games.
 
-    Returns None if the drop didn't clear even the inaccuracy bar — most
-    moves in most games, since only real errors get flagged at all.
+def _mate_advice_severity(eval_before_cp: float, eval_after_cp: float) -> str | None:
+    """The two forced-mate-specific cases Lichess's MateAdvice special-cases
+    (see module comment above); None if this move doesn't match either
+    (including "still a forced mate for the same side either way", which
+    falls through to the ordinary win%-based case below — its win% is
+    already saturated by the cap in stats.win_percent, so a mate found a
+    few moves slower than the fastest one available correctly costs ~0).
     """
-    if eval_drop_cp >= BLUNDER_THRESHOLD_CP:
+    before_mate, after_mate = _is_mate_score(eval_before_cp), _is_mate_score(eval_after_cp)
+
+    if not before_mate and after_mate and eval_after_cp < 0:
+        # Walked into a forced mate against yourself.
+        if eval_before_cp < -MATE_ADVICE_INACCURACY_CP:
+            return "inaccuracy"
+        if eval_before_cp < -MATE_ADVICE_MISTAKE_CP:
+            return "mistake"
         return "blunder"
-    if eval_drop_cp >= MISTAKE_THRESHOLD_CP:
+
+    if before_mate and eval_before_cp > 0 and not (after_mate and eval_after_cp > 0):
+        # Had a forced mate, and it's gone (resolved into a plain eval, or
+        # flipped into a mate against you instead).
+        after_cp_or_zero = 0.0 if after_mate else eval_after_cp
+        if after_cp_or_zero > MATE_ADVICE_INACCURACY_CP:
+            return "inaccuracy"
+        if after_cp_or_zero > MATE_ADVICE_MISTAKE_CP:
+            return "mistake"
+        return "blunder"
+
+    return None
+
+
+def _severity_from_win_percent_loss(loss: float) -> str | None:
+    if loss >= BLUNDER_WIN_PERCENT_LOSS:
+        return "blunder"
+    if loss >= MISTAKE_WIN_PERCENT_LOSS:
         return "mistake"
-    if eval_drop_cp >= INACCURACY_THRESHOLD_CP:
+    if loss >= INACCURACY_WIN_PERCENT_LOSS:
         return "inaccuracy"
     return None
 
 
-# --- Move quality tiers (Full Game Review) ----------------------------------
-# classify_severity() above only cares about moves bad enough to flag
-# (>=100cp) — most moves in most games never get graded at all. The Full
-# Game Review wants every move graded, including the good ones, so this
-# adds three tiers BELOW the existing inaccuracy floor. The inaccuracy/
-# mistake/blunder boundaries themselves (100/200/400) are untouched here —
-# changing them would shift the meaning of every already-stored mistake,
-# puzzle, and stat in the app. GOOD_THRESHOLD_CP is therefore pinned to
-# INACCURACY_THRESHOLD_CP so the two scales meet exactly at the same edge
-# rather than leaving an ungraded gap or double-counting a band.
-BEST_THRESHOLD_CP = 10          # 0-10   => best
-EXCELLENT_THRESHOLD_CP = 25     # 10-25  => excellent
-GOOD_THRESHOLD_CP = INACCURACY_THRESHOLD_CP  # 25-100 => good
-
-
-def classify_tier(eval_drop_cp: float) -> str:
-    """Six-tier quality grade for a single move, from an eval drop that's
-    already been converted to the mover's own perspective (same input
-    convention as classify_severity()). Unlike classify_severity(), this
-    always returns something — every move gets graded, not just flagged
-    mistakes.
-
-    A negative eval_drop (the position improved beyond what was already
-    best — happens when the opponent's prior move was itself weak) is
-    clamped to 0 rather than yielding some notion of "better than best".
+def classify_severity(eval_before_cp: float, eval_after_cp: float) -> str | None:
+    """Grade a single move by how much win probability it cost the player
+    who made it — both evals already converted to the mover's own
+    perspective by the caller, so a smaller eval_after always means "this
+    move made things worse for them" regardless of color. Returns None if
+    the loss didn't clear even the inaccuracy bar — most moves in most
+    games, since only real errors get flagged at all.
     """
-    eval_drop_cp = max(0.0, eval_drop_cp)
-    if eval_drop_cp >= BLUNDER_THRESHOLD_CP:
+    mate_severity = _mate_advice_severity(eval_before_cp, eval_after_cp)
+    if mate_severity is not None:
+        return mate_severity
+    loss = win_percent(eval_before_cp) - win_percent(eval_after_cp)
+    return _severity_from_win_percent_loss(loss)
+
+
+# --- Move quality tiers (Full Game Review) ----------------------------------
+# classify_severity() above only cares about moves bad enough to flag —
+# most moves in most games never get graded at all. The Full Game Review
+# wants every move graded, including the good ones, so this adds three
+# tiers BELOW the existing inaccuracy floor. The inaccuracy/mistake/blunder
+# boundaries themselves are untouched here — changing them would shift the
+# meaning of every already-stored mistake, puzzle, and stat in the app.
+# GOOD_WIN_PERCENT_LOSS is therefore pinned to INACCURACY_WIN_PERCENT_LOSS
+# so the two scales meet exactly at the same edge rather than leaving an
+# ungraded gap or double-counting a band. Lichess doesn't publish a
+# best/excellent/good breakdown of its own (only Inaccuracy/Mistake/
+# Blunder) — these three finer bands are this project's own judgment call,
+# same relative proportions as before, just re-expressed on the win%-loss
+# scale that now governs everything else here.
+BEST_WIN_PERCENT_LOSS = 1.0
+EXCELLENT_WIN_PERCENT_LOSS = 2.5
+GOOD_WIN_PERCENT_LOSS = INACCURACY_WIN_PERCENT_LOSS
+
+
+def classify_tier(eval_before_cp: float, eval_after_cp: float) -> str:
+    """Six-tier quality grade for a single move, mover's-own-perspective
+    eval before/after (same input convention as classify_severity()).
+    Unlike classify_severity(), this always returns something — every move
+    gets graded, not just flagged mistakes.
+    """
+    mate_severity = _mate_advice_severity(eval_before_cp, eval_after_cp)
+    if mate_severity is not None:
+        return mate_severity
+
+    # A move that improved the position beyond what was already best
+    # (the opponent's prior move was itself weak) clamps to 0 loss rather
+    # than yielding some notion of "better than best".
+    loss = max(0.0, win_percent(eval_before_cp) - win_percent(eval_after_cp))
+    if loss >= BLUNDER_WIN_PERCENT_LOSS:
         return "blunder"
-    if eval_drop_cp >= MISTAKE_THRESHOLD_CP:
+    if loss >= MISTAKE_WIN_PERCENT_LOSS:
         return "mistake"
-    if eval_drop_cp >= INACCURACY_THRESHOLD_CP:
+    if loss >= INACCURACY_WIN_PERCENT_LOSS:
         return "inaccuracy"
-    if eval_drop_cp >= EXCELLENT_THRESHOLD_CP:
+    if loss >= EXCELLENT_WIN_PERCENT_LOSS:
         return "good"
-    if eval_drop_cp >= BEST_THRESHOLD_CP:
+    if loss >= BEST_WIN_PERCENT_LOSS:
         return "excellent"
     return "best"
 
@@ -147,17 +210,17 @@ def _classify_move(m: dict) -> dict | None:
     is_white = m["color_moved"] == "white"
     eval_before = m["eval_before_cp"] if is_white else -m["eval_before_cp"]
     eval_after = m["eval_after_cp"] if is_white else -m["eval_after_cp"]
-    # Magnitude-capped (see stats.ACCURACY_EVAL_CAP_CP): a move that finds
-    # a slower mate than the fastest one available — still completely
-    # winning either way — used to carry a "drop" in the thousands of
-    # centipawns (analysis.py represents mate scores as roughly
-    # +-MATE_SCORE_CP) and get flagged as a blunder for a position whose
-    # practical outcome didn't actually change.
-    eval_drop = capped_eval_drop(eval_before, eval_after)
 
-    severity = classify_severity(eval_drop)
+    severity = classify_severity(eval_before, eval_after)
     if severity is None:
         return None
+
+    # eval_drop itself stays a magnitude-capped centipawn value (see
+    # stats.ACCURACY_EVAL_CAP_CP) — severity/tier no longer derive from it
+    # (see classify_severity/classify_tier's own win%-based logic above),
+    # but compute_game_acpl and the estimated-rating pipeline still want a
+    # plain, literal "centipawns lost" number.
+    eval_drop = capped_eval_drop(eval_before, eval_after)
 
     phase = classify_phase(m["move_number"], m["non_king_piece_count"])
 
@@ -253,7 +316,7 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
             game_moves_rows.append((
                 game_id, move["ply"], move["move_number"], move["color_moved"],
                 move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
-                eval_before, eval_drop, classify_tier(eval_drop),
+                eval_before, eval_drop, classify_tier(eval_before, eval_after),
             ))
         conn.executemany(
             """

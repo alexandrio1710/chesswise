@@ -693,7 +693,12 @@ WEIGHT_STDEV_MIN = 0.5
 WEIGHT_STDEV_MAX = 12.0
 
 
-def _win_percent(eval_cp: float) -> float:
+def win_percent(eval_cp: float) -> float:
+    """0-100 win percentage for whoever eval_cp is measured from (Lichess's
+    own logistic curve — see module comment above WIN_PERCENT_MULTIPLIER).
+    Shared with mistakes.py's win%-based move-severity classification, not
+    just this module's own accuracy computation.
+    """
     ceiled = max(-WIN_PERCENT_CP_CEILING, min(WIN_PERCENT_CP_CEILING, eval_cp))
     return 100.0 / (1.0 + math.exp(WIN_PERCENT_MULTIPLIER * ceiled))
 
@@ -745,7 +750,7 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
     if len(plies) < 2:
         return None
 
-    win_percents = [_win_percent(INITIAL_POSITION_CP)] + [_win_percent(m["eval_cp"]) for m in plies]
+    win_percents = [win_percent(INITIAL_POSITION_CP)] + [win_percent(m["eval_cp"]) for m in plies]
     window_size = max(WEIGHT_WINDOW_MIN, min(WEIGHT_WINDOW_MAX, len(plies) // 10))
     effective_window = min(window_size, len(win_percents))
 
