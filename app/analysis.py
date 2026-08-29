@@ -12,8 +12,8 @@ import io
 import logging
 
 import chess
+import chess.engine
 import chess.pgn
-from stockfish import Stockfish
 
 from config import STOCKFISH_DEPTH, STOCKFISH_PATH
 
@@ -167,15 +167,20 @@ def _phase_for_ply(ply: int, middle_ply: int | None, end_ply: int | None) -> str
     return "middlegame"
 
 
-def get_engine(depth: int = STOCKFISH_DEPTH) -> Stockfish:
-    """Start a Stockfish engine subprocess. Wrapped so a broken install
-    (wrong architecture, corrupted download, missing execute permission)
-    fails with a message pointing at the actual binary path, rather than
-    whatever raw OSError/subprocess exception the `stockfish` package
-    happens to raise.
+def get_engine() -> chess.engine.SimpleEngine:
+    """Start a Stockfish engine subprocess via python-chess's own UCI
+    wrapper — the same one Lichess's own puzzle generator uses
+    (https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py),
+    rather than the third-party `stockfish` PyPI package this project used
+    to depend on separately from python-chess (already a dependency for
+    board/PGN handling). Wrapped so a broken install (wrong architecture,
+    corrupted download, missing execute permission) fails with a message
+    pointing at the actual binary path, rather than a raw OSError.
     """
     try:
-        return Stockfish(path=STOCKFISH_PATH, depth=depth, parameters={"Threads": 1, "Hash": 128})
+        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+        engine.configure({"Threads": 1, "Hash": 128})
+        return engine
     except Exception as e:
         logger.error(f"Failed to start Stockfish at '{STOCKFISH_PATH}': {e}")
         raise RuntimeError(
@@ -186,29 +191,21 @@ def get_engine(depth: int = STOCKFISH_DEPTH) -> Stockfish:
         ) from e
 
 
-def evaluate_position_cp(engine: Stockfish, white_to_move: bool) -> float:
-    """Return the current position's evaluation in centipawns, normalized
-    to White's perspective (positive = good for White), with mate scores
-    mapped to a large finite value.
+def evaluate_position_cp(engine: chess.engine.SimpleEngine, board: chess.Board, depth: int) -> float:
+    """Return `board`'s evaluation in centipawns, normalized to White's
+    perspective (positive = good for White), with mate scores mapped to a
+    large finite value.
 
-    The `stockfish` package reports evaluations relative to the side to
-    move (standard UCI convention), so we flip sign when it's Black's move.
+    `PovScore.white()` does the side-to-move-to-White conversion natively
+    (no manual sign flip needed), and `.score(mate_score=...)` flattens a
+    mate score to a signed finite value the same way the hand-rolled
+    version here used to — the exact mate distance baked into that value
+    doesn't matter downstream (every consumer clamps to +-1000 or just
+    checks "is this near the ceiling", see stats.WIN_PERCENT_CP_CEILING
+    and mistakes.MATE_SCORE_DETECTION_THRESHOLD_CP).
     """
-    ev = engine.get_evaluation()
-    if ev["type"] == "cp":
-        value = float(ev["value"])
-    else:
-        # ev["type"] == "mate"; mate-in-N relative to the side to move
-        # (positive = side to move mates, negative = side to move gets mated).
-        mate_in = ev["value"]
-        if mate_in > 0:
-            value = MATE_SCORE_CP - mate_in
-        elif mate_in < 0:
-            value = -MATE_SCORE_CP - mate_in
-        else:
-            value = 0.0
-
-    return value if white_to_move else -value
+    info = engine.analyse(board, chess.engine.Limit(depth=depth))
+    return info["score"].white().score(mate_score=MATE_SCORE_CP)
 
 
 def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict]:
@@ -231,7 +228,7 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
     if game is None:
         return []
 
-    engine = get_engine(depth)
+    engine = get_engine()
     try:
         board = game.board()
         results = []
@@ -240,8 +237,7 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
 
         # Eval of the starting position, before any move has been made, so
         # move 1 has a real "before" value instead of an assumed 0.
-        engine.set_fen_position(board.fen())
-        prev_eval_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
+        prev_eval_cp = evaluate_position_cp(engine, board, depth)
 
         node = game
         ply = 0
@@ -264,8 +260,7 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
                 # Stalemate, insufficient material, repetition, 50-move rule, etc.
                 eval_after_cp = 0.0
             else:
-                engine.set_fen_position(board.fen())
-                eval_after_cp = evaluate_position_cp(engine, white_to_move=board.turn == chess.WHITE)
+                eval_after_cp = evaluate_position_cp(engine, board, depth)
 
             full_move_number = (ply + 1) // 2
 
@@ -289,13 +284,13 @@ def analyze_game_moves(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> list[dict
 
         return results
     finally:
-        # Stockfish.__del__ would eventually quit this subprocess via plain
-        # refcounting, but an exception raised mid-loop keeps `engine`
+        # SimpleEngine's __del__ would eventually quit this subprocess via
+        # plain refcounting, but an exception raised mid-loop keeps `engine`
         # alive for as long as its traceback is (e.g. a caller collecting
         # per-game errors across a batch — see batch_analyze.py) — explicit
         # cleanup here means a malformed game can't leak a running Stockfish
         # process for the lifetime of that error.
-        engine.send_quit_command()
+        engine.quit()
 
 
 def _extract_clock_seconds(node: chess.pgn.GameNode) -> int | None:

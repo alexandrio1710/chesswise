@@ -32,6 +32,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 import chess
+import chess.engine
 import chess.pgn
 
 import stats
@@ -140,22 +141,15 @@ def _uscf_from_estimated_rating(estimated_rating: int | None) -> int | None:
 
 # --- Move classification enrichment -----------------------------------------
 
-def _top_moves_cp(engine, white_to_move: bool, n: int = 2) -> list[tuple[str, float]]:
+def _top_moves_cp(engine: chess.engine.SimpleEngine, board: chess.Board, depth: int,
+                   n: int = 2) -> list[tuple[str, float]]:
     """[(uci, cp_from_white's_perspective), ...] for the engine's top `n`
-    moves at whatever position is currently set, best first — same sign
-    convention as analysis.evaluate_position_cp so a difference between two
-    of these values is meaningful regardless of whose move it is.
+    moves at `board`, best first — same sign convention as
+    analysis.evaluate_position_cp so a difference between two of these
+    values is meaningful regardless of whose move it is.
     """
-    raw = engine.get_top_moves(n)
-    out = []
-    for m in raw:
-        if m.get("Mate") is not None:
-            mate_in = m["Mate"]
-            cp = (MATE_SCORE_CP - mate_in) if mate_in > 0 else (-MATE_SCORE_CP - mate_in) if mate_in < 0 else 0.0
-        else:
-            cp = float(m["Centipawn"])
-        out.append((m["Move"], cp if white_to_move else -cp))
-    return out
+    infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=n)
+    return [(info["pv"][0].uci(), info["score"].white().score(mate_score=MATE_SCORE_CP)) for info in infos]
 
 
 def _is_sacrifice(board_before: chess.Board, move: chess.Move) -> bool:
@@ -282,7 +276,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
     book_ply_cutoff = eco_match["ply_count"] if eco_match else 0
 
     move_rows_by_ply = {r["ply"]: r for r in move_rows}
-    engine = get_engine(depth)
+    engine = get_engine()
     try:
         board = game.board()
 
@@ -302,9 +296,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
                 node = next_node
                 continue
 
-            white_to_move = board.turn == chess.WHITE
-            engine.set_fen_position(board.fen())
-            top = _top_moves_cp(engine, white_to_move, n=2)
+            top = _top_moves_cp(engine, board, depth, n=2)
             is_top_choice = bool(top) and top[0][0] == move.uci()
             gap = abs(top[0][1] - top[1][1]) if len(top) >= 2 else None
             sac = _is_sacrifice(board, move) if is_top_choice else False
@@ -321,7 +313,7 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
     finally:
         # See analysis.analyze_game_moves's matching comment: explicit
         # cleanup instead of relying on __del__/refcounting timing.
-        engine.send_quit_command()
+        engine.quit()
 
     conn = get_connection()
     try:

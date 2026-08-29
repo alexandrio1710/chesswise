@@ -1,5 +1,56 @@
 # Changelog
 
+## v31 — Engine calls go through python-chess's own UCI wrapper, not a separate `stockfish` package
+
+Compared this app's Stockfish plumbing against Lichess's own real puzzle
+generator again ([`lichess-puzzler`](https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py)):
+it talks to the engine through `chess.engine.SimpleEngine`, python-chess's
+own official UCI wrapper — not the third-party `stockfish` PyPI package
+this project used to depend on for the exact same job, on top of an
+already-required `chess` dependency for board/PGN handling. Switched all
+three call sites (`analysis.get_engine`, `game_report`'s MultiPV=2 pass,
+`puzzles.get_top_lines`) to `chess.engine`, and dropped `stockfish` from
+requirements.txt entirely — one fewer dependency doing the same job.
+
+Beyond matching Lichess's own choice, `chess.engine` is a genuinely
+better fit here: `PovScore.white()`/`.pov(color)` do the side-to-move
+color conversion natively (this project used to hand-roll that sign flip
+in three places — exactly the kind of thing a related bug already showed
+up in earlier this session), `.score(mate_score=...)` flattens a mate
+score the same way the old manual mate-in arithmetic did, and `analyse()`
+takes a `Board` object directly instead of round-tripping through FEN
+strings on every position. Verified against the real engine (not just
+mocks) via the existing integration test and by regenerating a live game
+report and several puzzles through the dev server.
+
+## v30 — Reverted v29's puzzle uniqueness gate — it didn't hold up
+
+While exploring further Lichess comparisons, checked v29's gate against
+data instead of just theory: ran it against this app's own 1,413
+already-generated puzzles (the ones that were good enough to ship *before*
+v29 existed). Only 67 of them — 4.7% — would still pass. That's not "a bit
+stricter," that's rejecting nearly everything, including the big, obvious,
+clearly-good blunder puzzles a solver would expect to see.
+
+The root cause: Lichess's gate solves a problem this app already solves
+differently. Lichess's puzzles are multi-move sequences with one canonical
+solution line, so a solver finding an equally-good *different* first move
+is a real problem for their format — hence refusing to generate the
+puzzle at all. This app's puzzles are single-move, and its own
+attempt-grading code (`puzzles.py`) already accepts any of the engine's
+top 3 candidate moves as correct if it's within 20cp of the best move (or
+matches its mate distance) — a fairness safeguard already built at *solve*
+time. Near an equal position, that 20cp tolerance corresponds to under 2
+points on this app's win% scale — nowhere close to the 35-point gap
+Lichess's real 0.7-winning-chances threshold converts to. Porting Lichess's
+number on top of an already-solved problem, at a much stricter bar,
+rejected almost everything.
+
+Removed `has_unique_solution`/`_line_eval_cp` and their tests entirely.
+Puzzle generation is back to how it worked before v29: every flagged
+mistake/blunder gets a puzzle, and the existing solve-time tolerance
+handles equally-good alternatives the way it always did.
+
 ## v29 — Puzzle generation now rejects ambiguous positions
 
 Every flagged mistake/blunder was turned into a "find the best move" puzzle

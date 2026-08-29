@@ -4,8 +4,10 @@
 # it is not a Python package. Redis is likewise a separate service, not a
 # Python package — see celery_app.py's docstring.)
 #
-# Top-level: requests, chess, stockfish, fastapi, uvicorn, python-dotenv,
-# celery, redis (client).
+# Top-level: requests, chess, fastapi, uvicorn, python-dotenv, celery,
+# redis (client). Engine communication goes through chess.engine
+# (python-chess's own UCI wrapper, the same one Lichess's own puzzle
+# generator uses) rather than a separate third-party `stockfish` package.
 # Everything else below is their transitive dependencies, pinned so a fresh
 # install can't silently drift to an incompatible version.
 
@@ -38,7 +40,6 @@ python-dotenv==1.2.2
 PyYAML==6.0.3
 requests==2.34.2
 starlette==1.6.0
-stockfish==5.2.0
 typing-inspection==0.4.3
 typing_extensions==4.16.0
 urllib3==2.7.0
