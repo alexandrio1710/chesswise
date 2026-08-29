@@ -540,15 +540,21 @@ class AnalyzePgnRequest(BaseModel):
     save: bool = False
     player_color: str | None = None
     opponent: str | None = None
+    profile_id: int | None = None
 
 
 @app.post("/api/analyze/pgn")
-def api_analyze_pgn(req: AnalyzePgnRequest, _rl: None = Depends(_rate_limit_analysis)):
+def api_analyze_pgn(
+    req: AnalyzePgnRequest, user: dict | None = Depends(auth.get_current_user_optional),
+    _rl: None = Depends(_rate_limit_analysis),
+):
     if req.save:
         if req.player_color not in ("white", "black"):
             raise HTTPException(status_code=400, detail="player_color ('white' or 'black') is required to save.")
+        if req.profile_id is not None:
+            auth.verify_can_access_profile(req.profile_id, user)
         try:
-            game_id = manual_analysis.save_manual_game(req.pgn, req.player_color, req.opponent)
+            game_id = manual_analysis.save_manual_game(req.pgn, req.player_color, req.opponent, req.profile_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return {"saved": True, "game_id": game_id}

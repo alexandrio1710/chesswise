@@ -277,6 +277,26 @@ class TestAnalyzePgnCap:
         assert manual_analysis._count_plies(_long_pgn(10)) == 10
 
 
+class TestAnalyzePgnSaveProfileAccess:
+    """The Analyze board's save flow now takes an explicit profile_id
+    (previously it always landed under whichever profile was created
+    first) — same unowned-or-mine access rule as every other profile_id
+    filter, checked before any Stockfish work runs.
+    """
+
+    def test_someone_elses_profile_id_is_rejected_before_any_engine_work(self):
+        owner = _make_user("owner-analyze-save-1")
+        other = _make_user("other-analyze-save-1")
+        profile_id = _insert_profile(owner["id"])
+
+        resp = client.post(
+            "/api/analyze/pgn",
+            json={"pgn": "1. e4 e5", "save": True, "player_color": "white", "profile_id": profile_id},
+            cookies=_cookie(other),
+        )
+        assert resp.status_code == 404
+
+
 class TestAnalyzeRateLimit:
     def test_returns_429_after_the_per_ip_threshold(self):
         server._analyze_request_log.clear()

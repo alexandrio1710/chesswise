@@ -207,7 +207,9 @@ def _parse_pgn_date(date_str: str) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def save_manual_game(pgn_text: str, player_color: str, opponent_override: str | None = None) -> int:
+def save_manual_game(
+    pgn_text: str, player_color: str, opponent_override: str | None = None, profile_id: int | None = None,
+) -> int:
     """Insert a pasted PGN as a manual game and run it through the exact
     same analysis pipeline as a synced one. Returns the new game_id.
     """
@@ -241,12 +243,16 @@ def save_manual_game(pgn_text: str, player_color: str, opponent_override: str | 
         "opponent": opponent, "result": result, "color": player_color,
         "time_control": "unknown", "opening_name": "", "pgn": pgn_text,
     }
-    # The Analyze board has no profile switcher of its own (Section 9 keeps
-    # it profile-agnostic, same as Puzzles/Explorer/Endgame Trainer) — a
-    # manually-saved game lands under whichever profile was created first.
-    from profiles import default_profile_id
+    # The caller passes the profile currently selected in the Analyze
+    # board's own switcher; a caller with no switcher of its own (the CLI,
+    # or an older client) falls back to whichever profile was created
+    # first, same as before that switcher existed.
+    if profile_id is None:
+        from profiles import default_profile_id
 
-    save_games([normalized], profile_id=default_profile_id())
+        profile_id = default_profile_id()
+
+    save_games([normalized], profile_id=profile_id)
 
     conn = get_connection()
     try:

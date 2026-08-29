@@ -1,5 +1,27 @@
 # Changelog
 
+## v22 — Analyze board is now profile-aware
+
+Reported live: a second profile's ("evelyn") recent games didn't show up
+on the Analyze board at all. Cause: "My recent games" queried `/api/search`
+with no `profile_id`, always returning the 8 most recent games across
+*every* profile combined — a profile with less-recent activity than
+another profile on the same install could get crowded out entirely, or
+its games could show up mixed in with someone else's. The Analyze board
+had no profile switcher of its own (a gap called out directly in
+`profiles.py`'s own docstring), so there was no way to ask for one
+profile's games specifically.
+
+Added a profile dropdown to the Analyze board, reusing the Dashboard's
+existing `/api/profiles` + localStorage pattern (same `profileId` key, so
+picking a profile on the Dashboard carries over here too) — "My recent
+games" now filters to the selected profile, and manually-saved PGNs are
+tagged to it instead of always landing under whichever profile was
+created first (`profiles.default_profile_id()`), the previous behavior
+for a page with no switcher. `/api/analyze/pgn`'s save path validates the
+given `profile_id` through the same unowned-or-mine access check every
+other profile-scoped route already uses.
+
 ## v21 — Estimated rating now adjusts for time control, plus a USCF figure
 
 The Game Report's estimated rating fed a game's raw ACPL through a single

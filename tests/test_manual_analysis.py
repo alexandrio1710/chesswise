@@ -5,7 +5,16 @@ out — these are pure chess-logic additions, not evaluation logic, and the
 happy path is already verified live against the real engine in-browser.
 """
 
+import itertools
+
 import manual_analysis
+import mistakes
+
+_profile_id_counter = itertools.count(1)
+_SAVE_PGN = (
+    '[Event "Test"]\n[White "A"]\n[Black "B"]\n[Result "1-0"]\n\n'
+    "1. e4 e5 2. Nf3 Nc6 1-0\n"
+)
 
 
 class TestAnalyzeFenIncludesResultingPosition:
@@ -99,6 +108,42 @@ class TestApplyMove:
         assert result["is_checkmate"] is True
         assert result["is_check"] is True
         assert result["is_game_over"] is True
+
+
+class TestSaveManualGameProfile:
+    """The Analyze board now has its own profile switcher (previously it
+    had none, so every manually-saved game landed under whichever profile
+    was created first regardless of what the user actually meant) —
+    save_manual_game takes the selected profile_id straight through
+    instead of always falling back to profiles.default_profile_id().
+    analyze_and_store_game is monkeypatched out so this doesn't need a
+    real Stockfish engine — only where the saved row's profile_id lands
+    is under test here.
+    """
+
+    def _saved_game_profile_id(self, game_id: int) -> int | None:
+        from db import get_connection
+
+        conn = get_connection()
+        try:
+            return conn.execute("SELECT profile_id FROM games WHERE id = ?", (game_id,)).fetchone()["profile_id"]
+        finally:
+            conn.close()
+
+    def test_given_profile_id_is_used_over_the_default(self, monkeypatch):
+        monkeypatch.setattr(mistakes, "analyze_and_store_game", lambda game_id, pgn: None)
+        from profiles import create_profile
+
+        profile = create_profile(f"save-test-profile-{next(_profile_id_counter)}")
+        game_id = manual_analysis.save_manual_game(_SAVE_PGN, "white", profile_id=profile["id"])
+        assert self._saved_game_profile_id(game_id) == profile["id"]
+
+    def test_omitted_profile_id_falls_back_to_the_default(self, monkeypatch):
+        monkeypatch.setattr(mistakes, "analyze_and_store_game", lambda game_id, pgn: None)
+        from profiles import default_profile_id
+
+        game_id = manual_analysis.save_manual_game(_SAVE_PGN, "black")
+        assert self._saved_game_profile_id(game_id) == default_profile_id()
 
 
 class TestAnalyzePgnOneoffIncludesBoardTrace:
