@@ -206,6 +206,11 @@
   /* My recent games — fetch/open a synced game instead of pasting a PGN. */
   .games-panel-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
   .games-panel-header h2 { font-size: 15px; margin: 0; }
+  .games-panel-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .profile-select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
   #games-refresh-btn {
     font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--border);
     background: var(--surface-1); color: var(--text-primary); cursor: pointer;
@@ -356,7 +361,10 @@
   <section class="card">
     <div class="games-panel-header">
       <h2>My recent games</h2>
-      <button type="button" id="games-refresh-btn">🔄 Refresh from Lichess/Chess.com</button>
+      <div class="games-panel-actions">
+        <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
+        <button type="button" id="games-refresh-btn">🔄 Refresh from Lichess/Chess.com</button>
+      </div>
     </div>
     <p class="loading-text" id="games-status"><span class="spinner"></span>Loading…</p>
     <div class="recent-games-list" id="recent-games-list"></div>
@@ -452,11 +460,46 @@
   // background-fetch pattern the Dashboard's Settings panel already uses —
   // usernames themselves are configured there, not duplicated here.
 
+  // Same localStorage key as the Dashboard's own switcher (index.html),
+  // so picking a profile there carries over here too — one page reported
+  // showing a second, less-active profile's recent games mixed in (or not
+  // at all) because this page had no profile filter, always querying
+  // "the 8 most recent games across every profile."
+  let currentProfileId = localStorage.getItem("profileId") || "";
+  let allProfiles = [];
+
+  async function loadProfileOptions() {
+    const select = document.getElementById("profile-select");
+    try {
+      allProfiles = await fetch("/api/profiles").then(r => r.json());
+      select.innerHTML = `<option value="">All profiles</option>` +
+        allProfiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && allProfiles.some(p => String(p.id) === currentProfileId)) {
+        select.value = currentProfileId;
+      } else {
+        currentProfileId = "";
+        localStorage.removeItem("profileId");
+      }
+    } catch {
+      // Profiles are a nice-to-have filter, not load-bearing — a failed
+      // fetch here shouldn't block the rest of the page from loading.
+    }
+  }
+
+  document.getElementById("profile-select").addEventListener("change", () => {
+    currentProfileId = document.getElementById("profile-select").value;
+    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
+    else localStorage.removeItem("profileId");
+    loadRecentGames();
+  });
+
   async function loadRecentGames() {
     const status = document.getElementById("games-status");
     const list = document.getElementById("recent-games-list");
     try {
-      const res = await fetch("/api/search?limit=8&sort_by=date&sort_dir=desc");
+      const params = new URLSearchParams({ limit: "8", sort_by: "date", sort_dir: "desc" });
+      if (currentProfileId) params.set("profile_id", currentProfileId);
+      const res = await fetch(`/api/search?${params}`);
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
       const data = await res.json();
       const games = data.games || [];
@@ -541,7 +584,7 @@
     }
   })();
 
-  loadRecentGames();
+  loadProfileOptions().then(loadRecentGames);
 
   document.getElementById("file-input").addEventListener("change", async (e) => {
     const file = e.target.files[0];
@@ -773,6 +816,10 @@
       body.player_color = document.getElementById("save-color").value;
       const opponent = document.getElementById("save-opponent").value.trim();
       if (opponent) body.opponent = opponent;
+      // Tag it under whichever profile this page's own switcher has
+      // selected, so it shows up under the right person instead of
+      // whichever profile happens to have been created first.
+      if (currentProfileId) body.profile_id = Number(currentProfileId);
     }
 
     const res = await fetch("/api/analyze/pgn", {
