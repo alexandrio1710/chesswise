@@ -527,6 +527,151 @@ def _migration_016_fix_leitner_srs_datetime_format(conn: sqlite3.Connection) -> 
     )
 
 
+def _migration_017_fix_missed_mate_severity_and_tier(conn: sqlite3.Connection) -> None:
+    """Bug fix — a move that finds a slower forced mate than the fastest
+    one available (still completely winning either way) used to get its
+    eval_drop computed as a raw, uncapped difference of mover-perspective
+    evals. Since analysis.py represents mate scores as roughly
+    +-MATE_SCORE_CP (10000), such a move could carry a "drop" in the
+    thousands of centipawns and get flagged as a blunder despite nothing
+    practical changing — reported live as "moves that miss mate show up
+    as a blunder." mistakes.py now caps eval_before/eval_after to
+    stats.ACCURACY_EVAL_CAP_CP before differencing (stats.capped_eval_drop)
+    at analysis time; this migration re-derives eval_drop/severity/tier
+    for every already-analyzed game's stored rows from the raw evals
+    already on disk, without re-running Stockfish.
+
+    Deliberately not imported from mistakes.py/stats.py: db.py runs
+    migrations at its own import time, and stats.py itself imports `from
+    db import get_connection` near its top (before capped_eval_drop is
+    even defined further down the file), so importing back from stats/
+    mistakes here — even deferred inside the function — hits stats.py
+    mid-initialization and fails ("partially initialized module"),
+    confirmed by actually running this migration. A migration should
+    encode a fixed, point-in-time transformation anyway, so these are
+    intentionally frozen copies of the current thresholds/logic rather
+    than a live dependency on code that could change under it later.
+    """
+    ACCURACY_EVAL_CAP_CP = 1000
+    INACCURACY_THRESHOLD_CP = 100
+    MISTAKE_THRESHOLD_CP = 200
+    BLUNDER_THRESHOLD_CP = 400
+    EXCELLENT_THRESHOLD_CP = 25
+    BEST_THRESHOLD_CP = 10
+
+    def capped_eval_drop(eval_before_cp, eval_after_cp):
+        capped_before = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_before_cp))
+        capped_after = max(-ACCURACY_EVAL_CAP_CP, min(ACCURACY_EVAL_CAP_CP, eval_after_cp))
+        return max(0.0, capped_before - capped_after)
+
+    def classify_severity(eval_drop_cp):
+        if eval_drop_cp >= BLUNDER_THRESHOLD_CP:
+            return "blunder"
+        if eval_drop_cp >= MISTAKE_THRESHOLD_CP:
+            return "mistake"
+        if eval_drop_cp >= INACCURACY_THRESHOLD_CP:
+            return "inaccuracy"
+        return None
+
+    def classify_tier(eval_drop_cp):
+        eval_drop_cp = max(0.0, eval_drop_cp)
+        if eval_drop_cp >= BLUNDER_THRESHOLD_CP:
+            return "blunder"
+        if eval_drop_cp >= MISTAKE_THRESHOLD_CP:
+            return "mistake"
+        if eval_drop_cp >= INACCURACY_THRESHOLD_CP:
+            return "inaccuracy"
+        if eval_drop_cp >= EXCELLENT_THRESHOLD_CP:
+            return "good"
+        if eval_drop_cp >= BEST_THRESHOLD_CP:
+            return "excellent"
+        return "best"
+
+    affected_game_ids: set[int] = set()
+
+    mistake_rows = conn.execute(
+        "SELECT id, game_id, eval_before, eval_after, eval_drop, severity FROM mistakes"
+    ).fetchall()
+    to_delete = []
+    for row in mistake_rows:
+        if row["eval_before"] is None or row["eval_after"] is None:
+            continue
+        new_drop = capped_eval_drop(row["eval_before"], row["eval_after"])
+        new_severity = classify_severity(new_drop)
+        if new_severity is None:
+            # The mate-swing (or similar) that used to clear the
+            # inaccuracy bar no longer does — this mistake, and any
+            # puzzle/practice history generated from it, no longer apply.
+            to_delete.append(row["id"])
+            affected_game_ids.add(row["game_id"])
+        elif new_drop != row["eval_drop"] or new_severity != row["severity"]:
+            conn.execute(
+                "UPDATE mistakes SET eval_drop = ?, severity = ? WHERE id = ?",
+                (new_drop, new_severity, row["id"]),
+            )
+            if new_severity != row["severity"]:
+                conn.execute(
+                    "UPDATE puzzles SET severity = ? WHERE mistake_id = ?",
+                    (new_severity, row["id"]),
+                )
+            affected_game_ids.add(row["game_id"])
+
+    if to_delete:
+        placeholders = ",".join("?" * len(to_delete))
+        # Same FK order as analyze_and_store_game()'s re-analysis cleanup
+        # (puzzles before mistakes), extended to the SRS/attempt-history
+        # tables that also reference puzzles.id and would otherwise violate
+        # the foreign key once puzzles are deleted.
+        conn.execute(
+            f"DELETE FROM puzzle_review_state WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(
+            f"DELETE FROM puzzle_attempts WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(
+            f"DELETE FROM puzzle_progress WHERE puzzle_id IN "
+            f"(SELECT id FROM puzzles WHERE mistake_id IN ({placeholders}))",
+            to_delete,
+        )
+        conn.execute(f"DELETE FROM puzzles WHERE mistake_id IN ({placeholders})", to_delete)
+        conn.execute(f"DELETE FROM mistakes WHERE id IN ({placeholders})", to_delete)
+
+    move_rows = conn.execute(
+        "SELECT id, game_id, eval_before_cp, eval_drop, tier FROM game_moves"
+    ).fetchall()
+    for row in move_rows:
+        if row["eval_before_cp"] is None or row["eval_drop"] is None:
+            continue
+        # The old code stored eval_drop = eval_before_cp - eval_after_cp
+        # (plain, uncapped subtraction), so eval_after_cp is exactly
+        # recoverable from the two values already on disk.
+        eval_after_cp = row["eval_before_cp"] - row["eval_drop"]
+        new_drop = capped_eval_drop(row["eval_before_cp"], eval_after_cp)
+        new_tier = classify_tier(new_drop)
+        if new_drop != row["eval_drop"] or new_tier != row["tier"]:
+            conn.execute(
+                "UPDATE game_moves SET eval_drop = ?, tier = ? WHERE id = ?",
+                (new_drop, new_tier, row["id"]),
+            )
+            affected_game_ids.add(row["game_id"])
+
+    if affected_game_ids:
+        # Bumping analyzed_at invalidates any cached Game Report for these
+        # games (generate_game_report's computed_at >= analyzed_at
+        # freshness check) so the next view recomputes the enriched
+        # classification from the now-corrected game_moves.tier, without
+        # this migration needing to re-run Stockfish itself.
+        placeholders = ",".join("?" * len(affected_game_ids))
+        conn.execute(
+            f"UPDATE games SET analyzed_at = datetime('now') WHERE id IN ({placeholders})",
+            list(affected_game_ids),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -544,6 +689,7 @@ MIGRATIONS = [
     (14, "Add analysis_status/analysis_task_id/analysis_error to games", _migration_014_analysis_status),
     (15, "Add game_moves classification/phase columns and game_reports table", _migration_015_game_reports),
     (16, "Fix Leitner SRS next_review_at datetime format", _migration_016_fix_leitner_srs_datetime_format),
+    (17, "Fix missed-mate eval_drop/severity/tier miscalculation", _migration_017_fix_missed_mate_severity_and_tier),
 ]
 
 

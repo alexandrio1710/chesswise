@@ -1,5 +1,60 @@
 # Changelog
 
+## v20 — Fixed missed-mate blunders, Explore-board freeze, eval bar, and autoscroll
+
+**Fixed a real bug reported live: moves that missed a faster mate showed
+up as blunders losing thousands of centipawns.** `analysis.py` represents
+forced mate as roughly ±`MATE_SCORE_CP` (10000) so eval comparisons don't
+need special-case mate handling — but `mistakes.py` diffed `eval_before`/
+`eval_after` raw, so a move that found a *slower* mate than the fastest
+one available (still completely winning either way) could carry a "drop"
+in the thousands of centipawns and get flagged as a blunder for a
+position whose practical outcome never changed. This was the same root
+cause as the accuracy-cratering bug fixed in v18, but affecting the
+actual severity/tier classification pipeline, not just the aggregate
+accuracy stat. Fixed by capping `eval_before`/`eval_after` to
+`stats.ACCURACY_EVAL_CAP_CP` *before* differencing, applied once at the
+point `eval_drop` is first computed (`stats.capped_eval_drop`) — every
+downstream consumer (severity, tier, accuracy, ACPL, the Game Report)
+now reads that already-capped value instead of re-deriving it. Added a
+migration (schema v17) that re-derives `eval_drop`/`severity`/`tier` for
+every already-analyzed game from the raw evals already on disk, no
+Stockfish re-run needed — mistakes that no longer clear the inaccuracy
+bar (and their generated puzzles/practice history) are removed; real
+winning-to-losing blunders are untouched.
+
+**Fixed the Explore board (click-to-move analysis on the Game Review
+page) freezing at checkmate/stalemate.** Selecting the only remaining
+piece at a game-over position showed a highlighted square with no legal
+destinations and no explanation — clicking it again just re-selected the
+same dead end, which is exactly what "freezes up... until I press back
+to game" described. Now shows a clear "Game over — no legal moves" note
+instead. Also added a visible "Analyzing…" state (dimmed board, cursor:
+wait) while waiting on the engine after each move — previously a several-
+second Stockfish call gave zero feedback, which read as another kind of
+freeze.
+
+**Fixed the eval bar rendering upside-down when viewing a game as
+Black.** The bar's white-colored fill always grew from the bottom
+regardless of board orientation, so on a Black-oriented board (Black's
+pieces drawn at the bottom) a White advantage visually stacked against
+Black's own side. The fill percentage was already correct — only the
+anchor edge needed to flip with the board's orientation, so it now grows
+from the top when viewing as Black.
+
+**Eliminated the move-list's page-level autoscroll entirely.** v19
+bounded `.table-scroll`'s height, but `scrollIntoView()` still walked
+every scrollable ancestor including the window, so the page kept
+nudging on every single move-advance. Replaced it with a scroll function
+that only ever sets the `.table-scroll` container's own `scrollTop`
+(measured via `getBoundingClientRect()` deltas, so it can't touch
+`window.scrollY`), on both the Game Review and Analyze pages.
+
+**The Game Review timeline now only tags your own moves.** Inaccuracy/
+mistake/blunder/miss tags and row highlighting previously showed for
+both players; since the page is about reviewing your own play, the
+opponent's moves no longer carry a severity or tier tag.
+
 ## v19 — Fetch your own games from the Analyze board; fixed runaway move-list scroll
 
 **"My recent games" panel on the Analyze board.** Previously the only way

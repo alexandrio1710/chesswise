@@ -826,8 +826,22 @@
     document.querySelectorAll(".move-row").forEach(r => r.classList.remove("highlighted"));
     if (currentPly > 0) {
       const row = document.querySelector(`.move-row[data-ply="${currentPly}"]`);
-      if (row) { row.classList.add("highlighted"); row.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      if (row) { row.classList.add("highlighted"); scrollRowIntoContainer(row); }
     }
+  }
+
+  // Scrolls only the move list's own .table-scroll container — never the
+  // page. scrollIntoView() walks every scrollable ancestor including the
+  // window, which is exactly what dragged the whole page down on every
+  // move-advance despite .table-scroll's bounded height (see the CSS
+  // comment above .table-scroll).
+  function scrollRowIntoContainer(row) {
+    const container = row.closest(".table-scroll");
+    if (!container) return;
+    const rowRect = row.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const delta = (rowRect.top + rowRect.height / 2) - (containerRect.top + containerRect.height / 2);
+    container.scrollTo({ top: container.scrollTop + delta, behavior: "smooth" });
   }
 
   function setUpBoardNav() {

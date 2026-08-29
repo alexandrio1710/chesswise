@@ -281,6 +281,7 @@
     background: var(--page-plane); color: var(--text-primary); cursor: pointer;
   }
   .board-nav button:disabled { opacity: 0.4; cursor: default; }
+  #game-board.board-busy { cursor: wait; opacity: 0.85; }
   .board-move-label { text-align: center; font-size: 13px; color: var(--text-secondary); margin-top: 8px; min-height: 18px; }
   .board-move-label .tier-pill { margin-left: 6px; }
 
@@ -793,10 +794,15 @@
       body.innerHTML = `<tr><td colspan="6" class="empty-note">No move data for this game.</td></tr>`;
       return;
     }
+    const trackedColor = currentGame ? currentGame.color : null;
     body.innerHTML = moves.map(m => {
-      const flagClass = m.severity ? `flagged` : "";
-      const flagStyle = m.severity ? `style="--flag-color: var(--status-${m.severity === 'blunder' ? 'critical' : m.severity === 'mistake' ? 'serious' : 'warning'})"` : "";
-      const tierLabel = m.classification || m.tier;
+      // Severity/tier tags flag YOUR mistakes to review — showing them on
+      // the opponent's moves too just doubled the noise in the timeline
+      // for no benefit, since this page is about improving your own play.
+      const isOwnMove = m.color_moved === trackedColor;
+      const flagClass = (isOwnMove && m.severity) ? `flagged` : "";
+      const flagStyle = (isOwnMove && m.severity) ? `style="--flag-color: var(--status-${m.severity === 'blunder' ? 'critical' : m.severity === 'mistake' ? 'serious' : 'warning'})"` : "";
+      const tierLabel = isOwnMove ? (m.classification || m.tier) : null;
       const tierPill = tierLabel ? `<span class="tier-pill ${tierLabel}">${tierLabel}</span>` : "";
       const practiceLink = m.puzzle_id ? `<a class="practice-link" href="/puzzles?id=${m.puzzle_id}">Practice →</a>` : "";
       return `
@@ -816,12 +822,26 @@
     });
   }
 
+  // Scrolls only the move list's own .table-scroll container — never the
+  // page. scrollIntoView() walks every scrollable ancestor including the
+  // window, which is exactly what dragged the whole page down on every
+  // move-advance despite .table-scroll's bounded height (see the CSS
+  // comment above .table-scroll).
+  function scrollRowIntoContainer(row) {
+    const container = row.closest(".table-scroll");
+    if (!container) return;
+    const rowRect = row.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const delta = (rowRect.top + rowRect.height / 2) - (containerRect.top + containerRect.height / 2);
+    container.scrollTo({ top: container.scrollTop + delta, behavior: "smooth" });
+  }
+
   function highlightMoveRow(ply) {
     document.querySelectorAll(".move-row").forEach(r => r.classList.remove("highlighted"));
     const row = document.querySelector(`.move-row[data-ply="${ply}"]`);
     if (row) {
       row.classList.add("highlighted");
-      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      scrollRowIntoContainer(row);
     }
   }
 
@@ -907,6 +927,13 @@
     const value = document.getElementById(valueId);
     const pct = Math.max(0, Math.min(100, ((cp + CAP) / (2 * CAP)) * 100));
     fill.style.height = `${pct}%`;
+    // pct is the White-colored fraction of the bar; it belongs next to
+    // wherever White's pieces are drawn. The board flips to put Black at
+    // the bottom when the tracked player is Black (see `orientation` in
+    // renderCurrentBoard), so the bar's anchor edge has to flip with it —
+    // otherwise White's fill stacks against Black's side of a flipped board.
+    fill.parentElement.style.justifyContent =
+      (currentGame && currentGame.color === "black") ? "flex-start" : "flex-end";
     value.textContent = formatEval(cp);
   }
 
@@ -1007,6 +1034,9 @@
   async function playExploreMove(fromSq, toSq) {
     if (exploreMoveInFlight) return;
     exploreMoveInFlight = true;
+    document.getElementById("game-board").classList.add("board-busy");
+    document.getElementById("board-move-label").innerHTML =
+      `<span style="color:var(--text-muted)">Analyzing…</span>`;
     try {
       const res = await fetch("/api/analyze/move", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1021,11 +1051,16 @@
       exploreHistoryIdx = exploreHistory.length - 1;
       exploreLastMove = [fromSq, toSq];
       await refreshExploreAnalysis(data.fen);
-      document.getElementById("board-move-label").innerHTML =
-        `${escapeHtml(data.san)} (${formatEval(evalCpFromLine(data.fen, exploreBaseData.top_lines[0]))}) `
+      let label = `${escapeHtml(data.san)} (${formatEval(evalCpFromLine(data.fen, exploreBaseData.top_lines[0]))}) `
         + `<span style="color:var(--text-muted)">— your move</span>`;
+      if (exploreBaseData.legal_moves.length === 0) {
+        label += `<br><span style="color:var(--text-secondary)">Game over — no legal moves from here. `
+          + `Use "Undo" or "Back to game" to continue.</span>`;
+      }
+      document.getElementById("board-move-label").innerHTML = label;
     } finally {
       exploreMoveInFlight = false;
+      document.getElementById("game-board").classList.remove("board-busy");
     }
   }
 
@@ -1035,6 +1070,7 @@
     exploreHistory = [];
     exploreHistoryIdx = 0;
     exploreLastMove = [];
+    clearExploreSelection();
     setExploreUIVisible(false);
   }
 
@@ -1053,10 +1089,23 @@
       exploreHistoryIdx = 0;
       exploreLastMove = [];
       setExploreUIVisible(true);
-      refreshExploreAnalysis(fen).then(() => onGameSquareClick(square));
+      document.getElementById("game-board").classList.add("board-busy");
+      document.getElementById("board-move-label").innerHTML =
+        `<span style="color:var(--text-muted)">Analyzing…</span>`;
+      refreshExploreAnalysis(fen).then(() => {
+        document.getElementById("game-board").classList.remove("board-busy");
+        if (exploreBaseData.legal_moves.length === 0) {
+          document.getElementById("board-move-label").innerHTML =
+            `<span style="color:var(--text-secondary)">Game over — no legal moves to explore from here.</span>`;
+          return;
+        }
+        document.getElementById("board-move-label").innerHTML = "";
+        onGameSquareClick(square);
+      });
       return;
     }
     if (exploreMoveInFlight || !exploreBaseData) return;
+    if (exploreBaseData.legal_moves.length === 0) return; // game over — nothing to select, message already shown
     if (exploreSelectedSquare) {
       const dests = exploreLegalDestinationsFrom(exploreSelectedSquare);
       if (dests.includes(square)) {
@@ -1087,7 +1136,11 @@
     if (exploreHistoryIdx <= 0) { goToPly(currentPly); return; }
     exploreHistoryIdx -= 1;
     exploreLastMove = [];
+    clearExploreSelection();
+    document.getElementById("game-board").classList.add("board-busy");
+    document.getElementById("board-move-label").innerHTML = "";
     await refreshExploreAnalysis(exploreHistory[exploreHistoryIdx]);
+    document.getElementById("game-board").classList.remove("board-busy");
   });
 
   function escapeHtml(s) {

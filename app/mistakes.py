@@ -15,6 +15,7 @@ import re
 from analysis import analyze_game_moves
 from config import STOCKFISH_DEPTH
 from db import get_connection
+from stats import capped_eval_drop
 
 # Lichess/Chess.com PGNs tag non-standard rule sets with a Variant header
 # (e.g. "Three-check", "Horde", "Atomic", "Crazyhouse"). Those use board
@@ -146,7 +147,13 @@ def _classify_move(m: dict) -> dict | None:
     is_white = m["color_moved"] == "white"
     eval_before = m["eval_before_cp"] if is_white else -m["eval_before_cp"]
     eval_after = m["eval_after_cp"] if is_white else -m["eval_after_cp"]
-    eval_drop = eval_before - eval_after
+    # Magnitude-capped (see stats.ACCURACY_EVAL_CAP_CP): a move that finds
+    # a slower mate than the fastest one available — still completely
+    # winning either way — used to carry a "drop" in the thousands of
+    # centipawns (analysis.py represents mate scores as roughly
+    # +-MATE_SCORE_CP) and get flagged as a blunder for a position whose
+    # practical outcome didn't actually change.
+    eval_drop = capped_eval_drop(eval_before, eval_after)
 
     severity = classify_severity(eval_drop)
     if severity is None:
@@ -242,7 +249,7 @@ def analyze_and_store_game(game_id: int, pgn_text: str, depth: int = STOCKFISH_D
             is_white = move["color_moved"] == "white"
             eval_before = move["eval_before_cp"] if is_white else -move["eval_before_cp"]
             eval_after = move["eval_after_cp"] if is_white else -move["eval_after_cp"]
-            eval_drop = eval_before - eval_after
+            eval_drop = capped_eval_drop(eval_before, eval_after)
             game_moves_rows.append((
                 game_id, move["ply"], move["move_number"], move["color_moved"],
                 move["move_san"], move["eval_cp"], move["clock_seconds_remaining"],
