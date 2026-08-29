@@ -578,6 +578,45 @@
     loadPosition();
   }
 
+  // Lichess's public opening-explorer API started returning a bare 401 to
+  // anonymous requests (confirmed live, and via community reports of the
+  // same change) — a personal API access token, sent as a Bearer header,
+  // is the documented way around it. Prompted here, in place, rather than
+  // in a separate settings panel: this is the one moment the user actually
+  // needs it, and where "why is this asking me for a token" is obvious.
+  function renderTokenPrompt(container) {
+    container.innerHTML = `
+      <p class="empty-note">
+        Lichess's community explorer now requires a personal API token for anonymous requests.
+        <a href="https://lichess.org/account/oauth/token/create?scopes=&description=Chesswise+opening+explorer" target="_blank" rel="noopener">
+          Generate a free token
+        </a> (no special access needed) and paste it below.
+      </p>
+      <div style="display:flex; gap:6px; margin-top:6px;">
+        <input type="password" id="lichess-token-input" placeholder="Lichess API token"
+          style="flex:1; min-width:0; font:inherit; font-size:12px; padding:6px 8px; border-radius:8px; border:1px solid var(--border); background:var(--page-plane); color:var(--text-primary);">
+        <button type="button" id="lichess-token-save"
+          style="font:inherit; font-size:12px; padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--surface-1); color:var(--text-primary); cursor:pointer;">
+          Save
+        </button>
+      </div>
+      <p class="empty-note" id="lichess-token-status" style="margin-top:6px;"></p>
+    `;
+    document.getElementById("lichess-token-save").addEventListener("click", async () => {
+      const input = document.getElementById("lichess-token-input");
+      const status = document.getElementById("lichess-token-status");
+      const token = input.value.trim();
+      if (!token) return;
+      status.textContent = "Saving…";
+      await fetch("/api/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lichess_api_token: token }),
+      });
+      status.textContent = "Saved — reloading…";
+      loadPosition();
+    });
+  }
+
   function renderStats() {
     const mine = currentData.mine;
     const mineEl = document.getElementById("mine-summary");
@@ -598,7 +637,9 @@
 
     const community = currentData.community;
     const commEl = document.getElementById("community-summary");
-    if (!community.available) {
+    if (!community.available && community.needs_auth) {
+      renderTokenPrompt(commEl);
+    } else if (!community.available) {
       commEl.innerHTML = `<p class="empty-note">Community reference data unavailable right now.</p>`;
     } else {
       const total = community.white + community.draws + community.black;

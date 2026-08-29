@@ -115,6 +115,7 @@ def health():
 class SettingsUpdate(BaseModel):
     lichess_user: str | None = None
     chesscom_user: str | None = None
+    lichess_api_token: str | None = None
 
 
 # Per-user override for /api/settings and /api/refresh: cli_state.json
@@ -132,15 +133,22 @@ def _settings_for(user: dict | None) -> dict:
     return cli_state.load_state() if user is None else dict(_user_settings.get(user["id"], {}))
 
 
-def _save_settings_for(user: dict | None, lichess_user: str | None, chesscom_user: str | None) -> dict:
+def _save_settings_for(
+    user: dict | None, lichess_user: str | None, chesscom_user: str | None,
+    lichess_api_token: str | None = None,
+) -> dict:
     if user is None:
-        cli_state.save_state(lichess_user=lichess_user, chesscom_user=chesscom_user)
+        cli_state.save_state(
+            lichess_user=lichess_user, chesscom_user=chesscom_user, lichess_api_token=lichess_api_token,
+        )
         return cli_state.load_state()
     current = _user_settings.setdefault(user["id"], {})
     if lichess_user is not None:
         current["lichess_user"] = lichess_user
     if chesscom_user is not None:
         current["chesscom_user"] = chesscom_user
+    if lichess_api_token is not None:
+        current["lichess_api_token"] = lichess_api_token
     return dict(current)
 
 
@@ -158,7 +166,7 @@ def api_get_settings(user: dict | None = Depends(auth.get_current_user_optional)
 
 @app.post("/api/settings")
 def api_save_settings(settings: SettingsUpdate, user: dict | None = Depends(auth.get_current_user_optional)):
-    return _save_settings_for(user, settings.lichess_user, settings.chesscom_user)
+    return _save_settings_for(user, settings.lichess_user, settings.chesscom_user, settings.lichess_api_token)
 
 
 def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None) -> None:
@@ -373,15 +381,19 @@ def api_export_stats(source: str | None = Query(default=None), profile_id: int |
 
 
 @app.get("/api/explorer")
-def api_explorer(moves: str = Query(default=""), source: str | None = Query(default=None)):
+def api_explorer(
+    moves: str = Query(default=""), source: str | None = Query(default=None),
+    user: dict | None = Depends(auth.get_current_user_optional),
+):
     """`moves` is a comma-separated list of UCI moves from the starting
     position (e.g. "e2e4,e7e5,g1f3") — empty string means the starting
     position itself.
     """
     source = _normalize_source(source)
     move_ucis = [m for m in moves.split(",") if m]
+    api_token = _settings_for(user).get("lichess_api_token")
     try:
-        return opening_explorer.explore_position(move_ucis, source=source)
+        return opening_explorer.explore_position(move_ucis, source=source, lichess_api_token=api_token)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid move sequence: {e}")
 

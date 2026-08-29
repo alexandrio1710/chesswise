@@ -47,17 +47,34 @@ DIVERGENCE_COMMUNITY_MIN_PCT = 20.0
 DIVERGENCE_MIN_WIN_RATE_EDGE = 10.0
 
 
-def query_community_explorer(fen: str) -> dict | None:
+def query_community_explorer(fen: str, lichess_api_token: str | None = None) -> tuple[dict | None, bool]:
     """Aggregate stats from Lichess's public opening explorer for a FEN.
-    Returns None (rather than raising) on failure — this is reference data
-    from a third-party service; its own stats should still render if the
-    explorer API is briefly unreachable.
+    Returns (data, needs_auth) — data is None (rather than raising) on any
+    failure, since this is reference data from a third-party service and
+    the rest of the explorer should still render if it's briefly
+    unreachable; needs_auth is True specifically when the failure was a
+    401, so the caller can surface an actionable message instead of a
+    generic "unavailable" one.
+
+    As of mid-2026 explorer.lichess.org started returning a bare 401
+    ("Authorization Required") to anonymous requests — confirmed live
+    against the real API and against community reports of the same
+    change, not something this project can fix on its own. Passing a
+    personal Lichess API access token (any logged-in Lichess account can
+    generate one for free at lichess.org/account/oauth/token — no special
+    scope needed just to read explorer data) as a Bearer token is the
+    documented way to authenticate a Lichess API request; if one isn't
+    configured, this still attempts the request unauthenticated in case
+    Lichess's policy changes back, rather than refusing to try at all.
     """
-    if fen in _community_cache:
-        return _community_cache[fen]
+    cache_key = (fen, bool(lichess_api_token))
+    if cache_key in _community_cache:
+        return _community_cache[cache_key]
 
     params = {"variant": "standard", "fen": fen, "speeds": "blitz,rapid,classical"}
     headers = {"User-Agent": EXPLORER_USER_AGENT, "Accept": "application/json"}
+    if lichess_api_token:
+        headers["Authorization"] = f"Bearer {lichess_api_token}"
 
     last_error = None
     for attempt in range(1, API_MAX_RETRIES + 1):
@@ -69,16 +86,21 @@ def query_community_explorer(fen: str) -> dict | None:
                 continue
             resp.raise_for_status()
             data = resp.json()
-            _community_cache[fen] = data
-            return data
+            result = (data, False)
+            _community_cache[cache_key] = result
+            return result
         except requests.exceptions.RequestException as e:
             last_error = e
+            if getattr(e.response, "status_code", None) == 401:
+                break  # won't succeed on retry without a different token
             if attempt < API_MAX_RETRIES:
                 time.sleep(API_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
+    needs_auth = getattr(getattr(last_error, "response", None), "status_code", None) == 401
     logger.warning(f"Opening explorer API unreachable for this position: {last_error}")
-    _community_cache[fen] = None
-    return None
+    result = (None, needs_auth)
+    _community_cache[cache_key] = result
+    return result
 
 
 def _board_at_moves(move_ucis: list[str]) -> chess.Board:
@@ -261,11 +283,11 @@ def _legal_moves_deduped(board: chess.Board) -> list[dict]:
     return [{"uci": m.uci(), "san": board.san(m)} for m in best_by_squares.values()]
 
 
-def explore_position(move_ucis: list[str], source: str | None = None) -> dict:
+def explore_position(move_ucis: list[str], source: str | None = None, lichess_api_token: str | None = None) -> dict:
     board = _board_at_moves(move_ucis)
     fen = board.fen()
 
-    community = query_community_explorer(fen)
+    community, community_needs_auth = query_community_explorer(fen, lichess_api_token=lichess_api_token)
     community_moves = _community_move_stats(community, white_to_move=board.turn == chess.WHITE) if community else []
     mine = get_my_stats_at_position(move_ucis, source=source)
 
@@ -277,6 +299,7 @@ def explore_position(move_ucis: list[str], source: str | None = None) -> dict:
         "legal_moves": legal_moves,
         "community": {
             "available": community is not None,
+            "needs_auth": community_needs_auth,
             "white": community.get("white") if community else None,
             "draws": community.get("draws") if community else None,
             "black": community.get("black") if community else None,

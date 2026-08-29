@@ -1,5 +1,28 @@
 # Changelog
 
+## v25 — Fixed the Opening Explorer's silently-broken Lichess community data
+
+Investigated the existing Opening Explorer (Advanced features, Section 2 —
+already a real feature, using Lichess's public API for community
+reference stats alongside the player's own game history) and found its
+"Lichess community" panel has been silently returning "unavailable" for
+every position: `explorer.lichess.org` now returns a bare 401
+("Authorization Required") to anonymous requests, confirmed live against
+the real API and against a live Lichess forum report of the same change —
+not a bug introduced by this project, but a Lichess-side policy change
+this project had no way to detect other than actually hitting the API and
+reading the response.
+
+Added support for an optional personal Lichess API access token, sent as
+a Bearer header — the documented way to authenticate a Lichess API
+request, free to generate, no special scope needed. When the community
+panel can't load because of this specifically (not a generic network
+hiccup), the Explorer page now shows an in-place prompt with a link to
+generate a token and a field to save it, instead of a silent, unexplained
+"unavailable." Unauthenticated and authenticated results are cached
+separately, so adding a token later in the same server session isn't
+blocked by an already-cached failed attempt.
+
 ## v24 — Move severity/tier classification is now Lichess's own algorithm too
 
 Following v23's accuracy port, this does the same for move-quality
