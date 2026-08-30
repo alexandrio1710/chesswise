@@ -165,59 +165,91 @@ def _top_moves_cp(engine: chess.engine.SimpleEngine, board: chess.Board, depth: 
 
 
 def _is_sacrifice(board_before: chess.Board, move: chess.Move) -> bool:
-    """True if `move` puts its own piece on a square the opponent can
-    capture AND the mover has nothing defending that square — a genuine,
-    uncompensated material offer, not an ordinary trade.
+    """True if the opponent's best full capture sequence on move.to_square
+    (see _see) nets them at least SACRIFICE_MIN_NET_CP more than the mover
+    just captured getting there — a genuine, uncompensated material
+    offer, not an ordinary trade.
 
-    Both conditions matter. Checking only "the opponent can capture on
-    move.to_square" isn't enough: most developed pieces sit on squares
-    something could technically capture on but a pawn or piece also
-    guards, so taking it just costs the opponent their own piece back —
-    an ordinary trade, not a sacrifice. And checking "is anything on the
-    board capturable afterward" (rather than specifically the piece that
-    just moved) is worse: in a rough game with an unrelated piece already
-    hanging from an earlier move, that flagged ordinary quiet moves —
-    developing a knight, castling — as sacrifices with no connection to
-    the move actually played.
+    Uses Static Exchange Evaluation
+    (https://www.chessprogramming.org/Static_Exchange_Evaluation) rather
+    than the one-ply "is there any defender at all" check this used to be:
+    that couldn't tell a real sacrifice from a square defended once but
+    attacked twice (the second attacker gets punished by a third
+    defender, so the FIRST attacker taking is still fine for the mover),
+    and it always assumed capturing was worth it for the opponent the
+    moment any of their pieces attacked the square, even when a deeper
+    look shows they'd come out behind by doing so.
 
-    Still a static one-ply heuristic, not an engine call: it can't see a
-    sacrifice that only pays off several moves later, or one that leaves
-    some other already-loose piece hanging instead of the piece just
-    moved, and it can't tell a genuine sacrifice from one the opponent
-    can't safely take (e.g. the recapturing piece is pinned). Acceptable
-    misses for something whose job is narrowing "best, top-choice moves"
-    down to the ones worth flagging as Brilliant, not proving a sacrifice
-    is objectively sound.
+    Still not an engine call: it can't see a sacrifice that only pays off
+    several moves later, or one that leaves some other already-loose
+    piece hanging instead of the piece just moved. Acceptable misses for
+    something whose job is narrowing "best, top-choice moves" down to the
+    ones worth flagging as Brilliant, not proving a sacrifice is
+    objectively sound.
     """
-    mover_color = board_before.turn
-    moved_piece = board_before.piece_at(move.from_square)
-    moved_value = PIECE_VALUES[moved_piece.piece_type] if moved_piece else 0
-    captured = board_before.piece_at(move.to_square)
-    captured_value = PIECE_VALUES[captured.piece_type] if captured else 0
+    captured_value = _capture_value(board_before, move)
 
     board_after = board_before.copy()
     board_after.push(move)
 
-    opponent_can_capture = any(
-        reply.to_square == move.to_square
-        for reply in board_after.legal_moves
-        if board_after.is_capture(reply)
-    )
-    if not opponent_can_capture:
-        return False
-
-    # If the mover still has a piece defending the square it just landed
-    # on, the opponent capturing there just leads to an even recapture —
-    # a completely ordinary trade (e.g. developing a knight to a square a
-    # pawn already guards), not a sacrifice. Without this check, any
-    # defended piece offered for trade looked identical to a real
-    # giveaway — this was the actual bug behind the false positives this
-    # heuristic first shipped with.
-    if board_after.attackers(mover_color, move.to_square):
-        return False
-
-    net_material_offered = moved_value - captured_value
+    opponent_gain = _see(board_after, move.to_square)
+    net_material_offered = opponent_gain - captured_value
     return net_material_offered >= SACRIFICE_MIN_NET_CP
+
+
+# SEE needs a real, large value for "a king is capturing" so it's only
+# ever used as a last resort (no other legal recapture exists) — the King
+# entry in PIECE_VALUES is 0, but that's a placeholder for a king being
+# *captured*, which never happens in legal chess and is never exercised.
+_SEE_KING_ATTACKER_VALUE = 1000
+
+
+def _see_attacker_value(board: chess.Board, square: chess.Square) -> int:
+    piece = board.piece_at(square)
+    return _SEE_KING_ATTACKER_VALUE if piece.piece_type == chess.KING else PIECE_VALUES[piece.piece_type]
+
+
+def _capture_value(board: chess.Board, move: chess.Move) -> int:
+    """Value (pawns) of whatever `move` captures on `board`, 0 if it's not
+    a capture. Handles en passant, where the captured pawn doesn't sit on
+    move.to_square."""
+    if board.is_en_passant(move):
+        return PIECE_VALUES[chess.PAWN]
+    captured = board.piece_at(move.to_square)
+    return PIECE_VALUES[captured.piece_type] if captured else 0
+
+
+def _see(board: chess.Board, square: chess.Square) -> int:
+    """Static Exchange Evaluation: net material (pawns) the side to move
+    in `board` can force by capturing on `square` and continuing to trade
+    only when it's still profitable, cheapest attacker first each time —
+    the standard recursive formulation
+    (https://www.chessprogramming.org/Static_Exchange_Evaluation).
+    0 if they have no legal capture there, or if capturing isn't worth it
+    (a side can always choose not to continue an exchange that loses them
+    material, which is what the max(0, ...) below encodes).
+
+    Walks the sequence with real Board.push() calls and real legal moves
+    rather than hand-rolled attacker bitboards, so promotions, en passant,
+    and check/pin legality all fall out for free — including cases a
+    typical bitboard SEE glosses over, like a piece that can't recapture
+    because it's pinned to its own king.
+    """
+    candidates = [m for m in board.legal_moves if m.to_square == square and board.is_capture(m)]
+    if not candidates:
+        return 0
+    # PIECE_VALUES[KING] is 0 — a placeholder that's never exercised for a
+    # *captured* piece (kings are never actually captured in legal chess)
+    # but would be very wrong here, where the king can be one of the
+    # candidates doing the capturing: picking the "cheapest" attacker by
+    # that value would greedily grab with the king first, when SEE needs
+    # the opposite — spend it only when it's the sole legal recapture.
+    move = min(candidates, key=lambda m: _see_attacker_value(board, m.from_square))
+    captured_value = _capture_value(board, move)
+
+    board = board.copy()
+    board.push(move)
+    return max(0, captured_value - _see(board, square))
 
 
 def _classify_enriched(*, tier: str, eval_before_cp: float, is_top_choice: bool,

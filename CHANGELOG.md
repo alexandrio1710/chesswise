@@ -1,5 +1,40 @@
 # Changelog
 
+## v35 — Brilliant-move detection now uses real Static Exchange Evaluation
+
+The Game Report's "was this sacrifice actually sound" check
+(`_is_sacrifice`, used to decide Brilliant) was a one-ply heuristic: does
+the mover's piece land on a square the opponent can capture, and does the
+mover have at least one piece defending it? That check couldn't tell a
+real sacrifice from a square attacked twice but defended only once — it
+stopped as soon as it found the *first* defender, never noticing a second
+attacker was still waiting behind it — nor could it correctly bail out of
+a multi-piece exchange early when continuing stopped being worth it for
+either side.
+
+Replaced it with real Static Exchange Evaluation
+([chessprogramming.org](https://www.chessprogramming.org/Static_Exchange_Evaluation)),
+the standard technique chess engines use for exactly this question: play
+out the full likely capture sequence on a square, cheapest attacker first
+each time, with either side free to stop trading the moment it's no
+longer profitable for them. Implemented with python-chess's own real
+`Board.push()`/legal-move generation rather than hand-rolled attacker
+bitboards, so promotions, en passant, and check/pin legality (including a
+piece that can't recapture because it's pinned to its own king — a case
+even a typical bitboard SEE glosses over) all fall out for free, at the
+cost of being slower than a bitboard version — an acceptable trade for
+something that runs once per already-identified best move, not in an
+engine's search loop.
+
+Caught and fixed a real bug in my own first draft here: this project's
+`PIECE_VALUES` maps King to 0 for a completely different reason (a king is
+never actually the piece being *captured* in legal chess, so it's a
+never-exercised placeholder) — reusing that value for "the king as an
+*attacker*" during the exchange walk would have made SEE greedily
+capture with the king first, backwards from correct play. Gave the king a
+distinctly large value for that one purpose so it's only ever spent as a
+last resort.
+
 ## v34 — The Game Report's USCF figure now uses US Chess's own real conversion formula
 
 This project's estimated-rating-to-USCF conversion was its own guess: a

@@ -1,5 +1,7 @@
 # Database and its backups — contains personal game data, never committed.
 chess_tracker.db
+chess_tracker.db-shm
+chess_tracker.db-wal
 chess_tracker_backup_*.db
 
 # Secrets / environment config

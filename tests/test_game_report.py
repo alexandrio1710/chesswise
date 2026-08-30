@@ -10,6 +10,8 @@ DECISION is under test.
 
 import itertools
 
+import chess
+
 import game_report
 from db import get_connection
 
@@ -159,3 +161,58 @@ class TestUscfRating:
 
     def test_none_in_none_out(self):
         assert game_report._uscf_from_estimated_rating(None) is None
+
+
+class TestSee:
+    def test_no_attacker_returns_zero(self):
+        board = chess.Board("4k3/8/8/3n4/8/8/8/4K3 w - - 0 1")
+        assert game_report._see(board, chess.D5) == 0
+
+    def test_undefended_capture_wins_its_full_value(self):
+        board = chess.Board("4k3/8/8/3n4/8/8/8/3RK3 w - - 0 1")
+        assert game_report._see(board, chess.D5) == 3  # rook takes knight, nothing recaptures
+
+    def test_a_losing_trade_is_clamped_to_zero_rather_than_going_negative(self):
+        # Rxd5 wins a knight (3) but a pawn recaptures the rook (5) — net
+        # -2 for White, so SEE correctly says "don't bother" (0), not -2.
+        board = chess.Board("4k3/8/4p3/3n4/8/8/8/3RK3 w - - 0 1")
+        assert game_report._see(board, chess.D5) == 0
+
+    def test_a_multi_ply_exchange_nets_the_right_material(self):
+        # cxd5 (pawn takes knight, +3) then exd5 (pawn recaptures pawn,
+        # -1) — no further attackers either side. Net +2 for White.
+        board = chess.Board("4k3/8/4p3/3n4/2P5/8/8/4K3 w - - 0 1")
+        assert game_report._see(board, chess.D5) == 2
+
+
+class TestIsSacrifice:
+    def test_a_hanging_queen_move_is_a_sacrifice(self):
+        # Qd1-d5 is a quiet move (d5 is empty) into a square only a black
+        # rook attacks, with nothing defending it — a pure giveaway.
+        board = chess.Board("4k3/8/8/r7/8/8/8/3QK3 w - - 0 1")
+        move = chess.Move.from_uci("d1d5")
+        assert game_report._is_sacrifice(board, move) is True
+
+    def test_an_even_trade_is_not_a_sacrifice(self):
+        # Nf4-d5 (quiet) into a square attacked once (Nb6) and defended
+        # once (Nc3) by equal-value pieces — capture, recapture, done.
+        board = chess.Board("4k3/8/1n6/8/5N2/2N5/8/4K3 w - - 0 1")
+        move = chess.Move.from_uci("f4d5")
+        assert game_report._is_sacrifice(board, move) is False
+
+    def test_a_second_attacker_beyond_the_first_defender_is_still_a_sacrifice(self):
+        # Nf4-d5 (quiet) into a square attacked by a knight AND a rook,
+        # but defended by only one knight: Nxd5, Nxd5, Rxd5 — White's two
+        # knights fall for Black's one, a real net loss the old one-ply
+        # "is there a defender at all" check couldn't see (it stopped
+        # after confirming Nc3 defends, never noticing the rook behind it).
+        board = chess.Board("3rk3/8/1n6/8/5N2/2N5/8/K7 w - - 0 1")
+        move = chess.Move.from_uci("f4d5")
+        assert game_report._is_sacrifice(board, move) is True
+
+    def test_capturing_something_on_the_way_in_offsets_what_gets_lost_back(self):
+        # Rxd5 captures a bishop (3) but a pawn recaptures the rook (5) —
+        # net -2 for White, a real sacrifice (worse than SACRIFICE_MIN_NET_CP).
+        board = chess.Board("4k3/8/4p3/3b4/8/8/8/3RK3 w - - 0 1")
+        move = chess.Move.from_uci("d1d5")
+        assert game_report._is_sacrifice(board, move) is True
