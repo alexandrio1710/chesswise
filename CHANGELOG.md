@@ -1,5 +1,23 @@
 # Changelog
 
+## v32 — Stockfish calls now have a wall-clock safety net
+
+Every engine call in this project (routine per-move analysis, the
+MultiPV=2 enrichment pass, puzzle generation) was depth-only: `go depth
+N`, no time or node ceiling. A pure depth target has no wall-clock bound —
+an unusually sharp position can occasionally take far longer than the
+typical ~0.1-0.5s to reach the same nominal depth, and with no cap that
+stalls a whole batch run behind one game. Lichess's own puzzle generator
+guards against exactly this with a combined limit — depth, time, and
+nodes together, whichever is hit first
+([generator.py's `pair_limit`](https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py)).
+
+Added `STOCKFISH_MAX_SECONDS_PER_POSITION` (10s, overridable) as that same
+kind of combined ceiling on all three call sites, enabled directly by
+v31's move to `chess.engine.Limit`, which already accepts `depth` and
+`time` together. It's a rare safety net, not a normal-case constraint —
+confirmed a real position still finishes in ~0.2s, nowhere near the cap.
+
 ## v31 — Engine calls go through python-chess's own UCI wrapper, not a separate `stockfish` package
 
 Compared this app's Stockfish plumbing against Lichess's own real puzzle

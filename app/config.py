@@ -44,6 +44,16 @@ STOCKFISH_DEPTH = int(os.environ.get("STOCKFISH_DEPTH", "15"))
 PUZZLE_DEPTH = int(os.environ.get("PUZZLE_DEPTH", "18"))
 PUZZLE_TOP_LINES = int(os.environ.get("PUZZLE_TOP_LINES", "3"))
 
+# A pure depth target has no wall-clock ceiling: search extensions in an
+# unusually sharp position can occasionally make one position take far
+# longer than the ~0.1-0.5s typical case above, stalling a whole batch
+# run behind it. Lichess's own puzzle generator guards the same way —
+# combined depth/time/nodes limits, whichever is hit first
+# (https://github.com/ornicar/lichess-puzzler/blob/master/generator/generator.py,
+# `pair_limit`) — so this is a rare safety net, not a normal-case
+# constraint: every routine position finishes well under it.
+STOCKFISH_MAX_SECONDS_PER_POSITION = float(os.environ.get("STOCKFISH_MAX_SECONDS_PER_POSITION", "10"))
+
 # Games analyzed in parallel during batch analysis (Final Pass 5). Each
 # worker runs its own single-threaded Stockfish subprocess (see
 # analysis.get_engine's Threads=1), so this is roughly one CPU core per

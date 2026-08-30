@@ -15,7 +15,7 @@ import chess
 import chess.engine
 import chess.pgn
 
-from config import STOCKFISH_DEPTH, STOCKFISH_PATH
+from config import STOCKFISH_DEPTH, STOCKFISH_MAX_SECONDS_PER_POSITION, STOCKFISH_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def evaluate_position_cp(engine: chess.engine.SimpleEngine, board: chess.Board, 
     checks "is this near the ceiling", see stats.WIN_PERCENT_CP_CEILING
     and mistakes.MATE_SCORE_DETECTION_THRESHOLD_CP).
     """
-    info = engine.analyse(board, chess.engine.Limit(depth=depth))
+    info = engine.analyse(board, chess.engine.Limit(depth=depth, time=STOCKFISH_MAX_SECONDS_PER_POSITION))
     return info["score"].white().score(mate_score=MATE_SCORE_CP)
 
 

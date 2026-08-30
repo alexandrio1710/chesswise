@@ -37,7 +37,7 @@ import chess.pgn
 
 import stats
 from analysis import MATE_SCORE_CP, get_engine
-from config import STOCKFISH_DEPTH
+from config import STOCKFISH_DEPTH, STOCKFISH_MAX_SECONDS_PER_POSITION
 from db import get_connection
 from eco import classify_game_opening, moves_from_pgn
 
@@ -148,7 +148,8 @@ def _top_moves_cp(engine: chess.engine.SimpleEngine, board: chess.Board, depth: 
     analysis.evaluate_position_cp so a difference between two of these
     values is meaningful regardless of whose move it is.
     """
-    infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=n)
+    limit = chess.engine.Limit(depth=depth, time=STOCKFISH_MAX_SECONDS_PER_POSITION)
+    infos = engine.analyse(board, limit, multipv=n)
     return [(info["pv"][0].uci(), info["score"].white().score(mate_score=MATE_SCORE_CP)) for info in infos]
 
 

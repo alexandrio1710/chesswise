@@ -18,7 +18,7 @@ import chess.engine
 import chess.pgn
 
 from analysis import get_engine
-from config import PUZZLE_DEPTH, PUZZLE_TOP_LINES
+from config import PUZZLE_DEPTH, PUZZLE_TOP_LINES, STOCKFISH_MAX_SECONDS_PER_POSITION
 from db import get_connection, get_pgn
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,8 @@ def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_T
     board = chess.Board(fen)
     engine = get_engine()
     try:
-        infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=num_lines)
+        limit = chess.engine.Limit(depth=depth, time=STOCKFISH_MAX_SECONDS_PER_POSITION)
+        infos = engine.analyse(board, limit, multipv=num_lines)
     finally:
         # See analysis.analyze_game_moves's matching comment: explicit
         # cleanup instead of relying on __del__/refcounting timing.
