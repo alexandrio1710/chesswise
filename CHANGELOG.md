@@ -1,5 +1,36 @@
 # Changelog
 
+## v33 — Every eval bar now uses Stockfish's own real win-rate model
+
+Widened the search past Lichess to the wider open-source chess world for
+this one. All five eval bars in this app (Game Report, Analysis Board,
+Opening Explorer, Endgame Trainer, Puzzles) filled by a fixed *linear*
+cp-to-percent mapping — `(cp + 1000) / 2000`. That treats a +300
+advantage as equally significant whether it's early middlegame with all
+the pieces on, or a bare king-and-pawn endgame, when in practice the same
+raw eval means very different practical chances depending on how much
+material is left.
+
+Stockfish's own official engine source has a real answer to this — the
+win-rate model behind its own "win/draw/loss %" UCI output, fit on real
+fishtest self-play statistics
+([`official-stockfish/WDL_model`](https://github.com/official-stockfish/Stockfish/blob/master/src/uci.cpp),
+`win_rate_model`): a material-dependent logistic curve, steeper with
+fewer pieces on the board. Ported it faithfully to JS in all five pages —
+including correctly un-doing the UCI "display cp" normalization the raw
+formula doesn't expect (`v = cp * a / 100`, inverting Stockfish's own
+`to_cp`), and using *expected score* (win% + half of draw%) rather than
+raw win% for the bar fill, since the raw model treats draws as a separate
+outcome and is deliberately well under 50% at a dead-equal eval — an
+eval bar should read 50% there, not something lower.
+
+This is visibly more dramatic than the old bar or Lichess's own
+(unrelated) win% sigmoid used elsewhere in this app for accuracy grading
+— confirmed and explicitly signed off on before shipping, since it's a
+real, authoritative model calibrated for a different question ("how does
+this resolve under perfect continued play") than Lichess's curve answers
+("how good was this specific human move").
+
 ## v32 — Stockfish calls now have a wall-clock safety net
 
 Every engine call in this project (routine per-move analysis, the

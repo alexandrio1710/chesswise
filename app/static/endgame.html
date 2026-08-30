@@ -466,7 +466,47 @@
     const pawns = (cp / 100).toFixed(2);
     return cp > 0 ? `+${pawns}` : pawns;
   }
-  function updateEvalBar(cp, mateIn) {
+  // Stockfish's own official win-rate model (github.com/official-stockfish/
+  // WDL_model), fitted on real fishtest self-play statistics: the eval bar
+  // is meant to show the position's objective status, and this is the
+  // literal model Stockfish's own "win/draw/loss %" UCI output uses for
+  // that — including that the win chance implied by a given eval depends
+  // on how much material is left, not just the raw centipawn number. That
+  // matters especially here: the Endgame Trainer's positions are, by
+  // design, always down near the low-material end of that range.
+  function materialCount(fen) {
+    const VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+    let total = 0;
+    for (const ch of fen.split(" ")[0]) {
+      const v = VALUES[ch.toLowerCase()];
+      if (v) total += v;
+    }
+    return total;
+  }
+
+  function stockfishExpectedScorePercent(cp, fen) {
+    const m = Math.max(17, Math.min(78, materialCount(fen))) / 58;
+    const AS = [-72.32565836, 185.93832038, -144.58862193, 416.44950446];
+    const BS = [83.86794042, -136.06112997, 69.98820887, 47.62901433];
+    const a = ((AS[0] * m + AS[1]) * m + AS[2]) * m + AS[3];
+    const b = ((BS[0] * m + BS[1]) * m + BS[2]) * m + BS[3];
+    // win_rate_model operates on Stockfish's internal eval units; this app
+    // stores the UCI-normalized "display" cp (what Stockfish's own to_cp()
+    // produces for the info score cp value), so undo that scaling first —
+    // to_cp(v) = 100*v/a, so v = cp*a/100.
+    const v = (cp * a) / 100;
+    const winRate = (x) => 1 / (1 + Math.exp((a - x) / b));
+    const w = winRate(v);
+    const l = winRate(-v);
+    const d = 1 - w - l;
+    // Bar fill is "expected score" (win + half of draw), not raw win rate —
+    // matches what an eval bar traditionally communicates (50% at dead
+    // equal), where win_rate_model's raw W is deliberately well under 50%
+    // at eval 0 since it treats draws as a separate outcome.
+    return (w + d / 2) * 100;
+  }
+
+  function updateEvalBar(cp, mateIn, fen) {
     const fill = document.getElementById("endgame-eval-fill");
     const value = document.getElementById("endgame-eval-value");
     let pct, label;
@@ -474,7 +514,7 @@
       pct = mateIn > 0 ? 100 : 0;
       label = `${mateIn > 0 ? "" : "-"}M${Math.abs(mateIn)}`;
     } else {
-      pct = Math.max(0, Math.min(100, ((cp + EVAL_CAP) / (2 * EVAL_CAP)) * 100));
+      pct = fen ? stockfishExpectedScorePercent(cp, fen) : Math.max(0, Math.min(100, ((cp + EVAL_CAP) / (2 * EVAL_CAP)) * 100));
       label = formatEval(cp);
     }
     fill.style.height = `${pct}%`;
@@ -512,7 +552,7 @@
     const sign = sideToMove(fen) === "white" ? 1 : -1;
     const cp = best ? best.eval_cp * sign : 0;
     const mateIn = best && best.mate_in != null ? best.mate_in * sign : null;
-    updateEvalBar(cp, mateIn);
+    updateEvalBar(cp, mateIn, fen);
     return true;
   }
 
