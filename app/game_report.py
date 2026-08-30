@@ -123,20 +123,31 @@ def _time_control_adjusted_acpl(acpl: float, time_control: str | None) -> float:
     return acpl / ACPL_TIME_CONTROL_DIVISOR.get(time_control, 1.0)
 
 
-# US Chess (USCF) ratings are commonly cited as running somewhat below
-# FIDE/online ratings for players of comparable real-world strength. The
-# actual gap varies by rating band and is itself a matter of informal
-# consensus rather than a precise conversion, so — consistent with this
-# module's other estimates — this applies one flat, clearly-approximate
-# offset rather than fabricating a curve with no more real backing than a
-# straight line would have.
-USCF_RATING_OFFSET = 100
+# US Chess's own real, published FIDE-to-US-Chess conversion formula —
+# not this project's own approximation. Effective 2024-01-01 (alongside a
+# matching overhaul of FIDE's own rating system), replacing US Chess's
+# previous flat "+100" rule of thumb with this two-piece linear fit
+# (continuous at the seam: both pieces give exactly 2060 at FIDE 2000):
+# https://new.uschess.org/civicrm/mailing/view?id=4405
+# US Chess's own stated purpose for this formula is converting a *real*
+# FIDE tournament rating into an equivalent US Chess one (e.g. assigning
+# an initial rating to a new US Chess player who already has FIDE
+# results) — this project's estimated_rating is instead an ACPL-derived
+# guess already calibrated to "feel like" that same kind of Elo-ish
+# figure (see ACPL_RATING_ANCHORS above), not a rating from real games,
+# so treat the USCF figure this produces with that same grain of salt.
+USCF_CONVERSION_BREAKPOINT = 2000
+USCF_CONVERSION_LOW = (932, 0.564)   # FIDE <= 2000: 932 + 0.564*FIDE
+USCF_CONVERSION_HIGH = (20, 1.02)    # FIDE > 2000:  20 + 1.02*FIDE
 
 
 def _uscf_from_estimated_rating(estimated_rating: int | None) -> int | None:
     if estimated_rating is None:
         return None
-    return max(0, estimated_rating - USCF_RATING_OFFSET)
+    base, slope = (
+        USCF_CONVERSION_LOW if estimated_rating <= USCF_CONVERSION_BREAKPOINT else USCF_CONVERSION_HIGH
+    )
+    return max(0, round(base + slope * estimated_rating))
 
 
 # --- Move classification enrichment -----------------------------------------

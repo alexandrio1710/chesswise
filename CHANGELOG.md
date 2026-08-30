@@ -1,5 +1,30 @@
 # Changelog
 
+## v34 — The Game Report's USCF figure now uses US Chess's own real conversion formula
+
+This project's estimated-rating-to-USCF conversion was its own guess: a
+flat "-100," on the assumption that US Chess ratings run somewhat below
+FIDE-ish ratings for the same real strength. That assumption was
+backwards. US Chess has published several rules of thumb over the years
+for converting a FIDE rating to an equivalent US Chess one, and every one
+of them — old and new — runs the *other* direction, adding rather than
+subtracting ("USCF = FIDE + 100" being the most commonly cited one).
+
+Replaced the flat offset with US Chess's actual current formula, updated
+2024-01-01 alongside a matching overhaul of FIDE's own rating system:
+`932 + 0.564×FIDE` at or below 2000, `20 + 1.02×FIDE` above it (continuous
+at the seam — both pieces give exactly 2060 at FIDE 2000)
+([US Chess's own announcement](https://new.uschess.org/civicrm/mailing/view?id=4405)).
+US Chess's own stated purpose for this formula is converting a *real*
+FIDE tournament rating, not an ACPL-derived guess like this project's
+estimated_rating — that gap was already true of the old flat offset too,
+so it's not a new caveat, just an existing one this is still subject to.
+
+A migration recomputed the USCF figure baked into every already-cached
+Game Report's summary sentence (the number itself was never stored
+separately — computed fresh from estimated_rating on every read — so nothing
+else needed touching).
+
 ## v33 — Every eval bar now uses Stockfish's own real win-rate model
 
 Widened the search past Lichess to the wider open-source chess world for

@@ -1026,6 +1026,82 @@ def _migration_020_lichess_game_phase_divider(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_021_real_uscf_conversion_formula(conn: sqlite3.Connection) -> None:
+    """Fix — game_report._uscf_from_estimated_rating() used this project's
+    own guess (a flat "-100", on the assumption US Chess ratings run below
+    FIDE-ish ones for the same strength) instead of US Chess's own real,
+    published conversion formula — which runs the *opposite* direction
+    (US Chess ratings come out HIGHER than the FIDE-ish input, matching
+    every rule of thumb US Chess has ever published, pre- or post-2024):
+    https://new.uschess.org/civicrm/mailing/view?id=4405
+
+    estimated_rating itself is untouched by this fix (only the USCF figure
+    derived from it), and that figure is computed on the fly at read time
+    (_report_row_to_dict), never stored — so the only stale data is the
+    USCF number already baked into each cached game_reports.summary
+    sentence. Recomputes just that sentence for every cached report,
+    without bumping games.analyzed_at (unlike migrations 18-20): nothing
+    here depends on Stockfish or invalidates the accuracy/tier data those
+    migrations were correcting, so forcing a full report recompute would
+    only cost time for no benefit.
+    """
+    USCF_CONVERSION_BREAKPOINT = 2000
+    USCF_CONVERSION_LOW = (932, 0.564)
+    USCF_CONVERSION_HIGH = (20, 1.02)
+
+    def uscf_from_estimated_rating(estimated_rating):
+        if estimated_rating is None:
+            return None
+        base, slope = (
+            USCF_CONVERSION_LOW if estimated_rating <= USCF_CONVERSION_BREAKPOINT else USCF_CONVERSION_HIGH
+        )
+        return max(0, round(base + slope * estimated_rating))
+
+    def build_summary(accuracy, rating, rating_uscf, tier_counts, phase_accuracy):
+        if accuracy is None:
+            return "Not enough analyzed moves to summarize this game."
+        parts = [f"You played this game at {accuracy}% accuracy"]
+        parts[0] += f", roughly the move quality of a {rating}-rated player (about {rating_uscf} USCF)." if rating else "."
+        brilliant = tier_counts.get("brilliant", 0)
+        if brilliant:
+            parts.append(f"You found {brilliant} brilliant move{'s' if brilliant != 1 else ''}.")
+        great = tier_counts.get("great", 0)
+        if great:
+            parts.append(f"{great} great move{'s' if great != 1 else ''} held the position together in a sharp moment.")
+        miss = tier_counts.get("miss", 0)
+        if miss:
+            parts.append(f"You missed {miss} winning tactic{'s' if miss != 1 else ''} — worth reviewing in Puzzles.")
+        present = {p: a for p, a in phase_accuracy.items() if a is not None}
+        if len(present) > 1:
+            weakest = min(present, key=present.get)
+            parts.append(f"Your {weakest} was the weakest phase this game ({present[weakest]}% accuracy).")
+        return " ".join(parts)
+
+    rows = conn.execute(
+        """
+        SELECT game_id, estimated_rating, accuracy_overall, accuracy_opening,
+               accuracy_middlegame, accuracy_endgame, tier_counts
+        FROM game_reports WHERE estimated_rating IS NOT NULL
+        """
+    ).fetchall()
+
+    for row in rows:
+        phase_accuracy = {
+            "opening": row["accuracy_opening"],
+            "middlegame": row["accuracy_middlegame"],
+            "endgame": row["accuracy_endgame"],
+        }
+        summary = build_summary(
+            row["accuracy_overall"], row["estimated_rating"],
+            uscf_from_estimated_rating(row["estimated_rating"]),
+            json.loads(row["tier_counts"]), phase_accuracy,
+        )
+        conn.execute(
+            "UPDATE game_reports SET summary = ? WHERE game_id = ?",
+            (summary, row["game_id"]),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1047,6 +1123,7 @@ MIGRATIONS = [
     (18, "Recompute estimated_rating with time-control adjustment + USCF figure", _migration_018_time_control_adjusted_rating),
     (19, "Recompute move severity/tier with Lichess's own win%-based judgment", _migration_019_lichess_move_judgment),
     (20, "Recompute game phase with Lichess's own Divider algorithm", _migration_020_lichess_game_phase_divider),
+    (21, "Recompute cached USCF figures with US Chess's real 2024 conversion formula", _migration_021_real_uscf_conversion_formula),
 ]
 
 
