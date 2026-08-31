@@ -16,18 +16,41 @@ trend tracking.
 ## Features
 
 - Fetches and normalizes games from both Lichess and Chess.com into one
-  internal shape
-- Classifies every move by severity (inaccuracy / mistake / blunder) and
-  game phase (opening / middlegame / endgame)
-- A dashboard: mistakes by phase, worst games, monthly trend, and an
-  openings view (win rate and mistake rate by opening family, ranked by
-  impact)
+  internal shape, with optional Lichess OAuth login and multiple local
+  profiles (more than one person's data, or one person's separate
+  accounts, in a single install)
+- Classifies every move on a ten-tier scale (best/excellent/good/
+  inaccuracy/mistake/blunder, plus brilliant/great/book/miss) and by game
+  phase (opening/middlegame/endgame), using Lichess's own real move-
+  judgment and phase-detection algorithms rather than ad hoc thresholds
+- A Game Report per game: accuracy (Lichess's own real accuracy formula),
+  an estimated rating (with a USCF-equivalent figure via US Chess's actual
+  published conversion formula), and a short written summary
+- A dashboard: mistakes by phase, worst games, monthly trend, an openings
+  view (win rate and mistake rate by opening family), a real FIDE
+  Tournament Performance Rating by time control, and a time-management
+  (Clock) view correlating move quality with time spent
+- An Opening Explorer (your own games plus a live Lichess community
+  reference, filterable by rating band) and an Endgame Tablebase trainer
+  (replays your own endgame mistakes against Lichess's free tablebase API
+  for provably perfect defense)
 - A puzzle trainer generated from your own flagged mistakes — find the
-  move you missed, see the engine's top lines, with a "practice my
-  mistakes" mode that prioritizes your biggest leak
+  move you missed, see the engine's top lines, with spaced-repetition
+  scheduling (SM-2) and a "practice my mistakes" mode
+- **Coaching Report**: bulk-import a bunch of games at once and get a
+  batch-level report designed to catch a pattern no single-game review
+  can — "quiet strategic drift" (individually fine moves that add up to a
+  worse plan than an available alternative), broken down by time control
+  and by your own repertoire's known structural trouble spots (e.g. a
+  Sicilian Dragon opposite-castling race, a King's Indian Mar del Plata
+  structure), with the highlighted positions turned into attemptable
+  practice puzzles and a trend note against your last batch. Optionally
+  chat about a generated report with a locally-run, free LLM (via
+  [Ollama](https://ollama.com) — no API key, no cost) grounded in that
+  report's own data.
 - An optional weekly Discord digest
 - Runs entirely locally: SQLite file, no external services required
-  (Discord is opt-in)
+  beyond the Stockfish binary (Discord and the chat coach are opt-in)
 
 ## Setup
 
@@ -61,7 +84,21 @@ not a Python package).
    The app auto-detects it (PATH, then common install locations). If it
    can't find it, set `STOCKFISH_PATH` in your `.env`.
 
-3. **Configure `.env`** (optional — everything has a sensible default)
+3. **(Optional) Install Ollama for the Coaching Report chat coach**
+
+   Only needed if you want to chat about a generated Coaching Report —
+   everything else works without it.
+
+   ```
+   # Install from https://ollama.com, then:
+   ollama pull llama3.1
+   ```
+
+   Free and fully local — no API key, no per-message cost. The chat box
+   only appears on the Coaching Report page when Ollama is actually
+   running; nothing else in the app depends on it.
+
+4. **Configure `.env`** (optional — everything has a sensible default)
 
    ```
    cp .env.example .env
@@ -71,7 +108,7 @@ not a Python package).
    you want the digest, or tuning knobs like `STOCKFISH_DEPTH`. See
    `.env.example` for the full list.
 
-4. **Run it**
+5. **Run it**
 
    ```
    cd app
@@ -81,7 +118,9 @@ not a Python package).
    python cli.py serve
    ```
 
-   Then open http://127.0.0.1:8000.
+   Then open http://127.0.0.1:8000. The Coaching Report (bulk-batch
+   pattern mining) is web-UI only, at `/coaching-report` — paste a
+   multi-game PGN export there rather than through the CLI.
 
 ## Usage
 
@@ -141,12 +180,9 @@ alive.
 
 Ideas for later, not committed to any particular order:
 
-- Spaced-repetition tracking for puzzles (which ones you've solved, missed,
-  and should see again)
-- Lichess/Chess.com OAuth so this could run as a shared multi-user service
-  instead of one local DB per person
-- A proper ECO opening database, so opening-family grouping doesn't rely on
-  the string heuristics it uses today
+- Multi-move puzzle verification ("cooking" — checking that a puzzle's
+  full forced sequence holds up, not just its first move), the way
+  Lichess's own puzzle generator does
 - Push notifications / mobile app wrapper around the dashboard
 
 ## License

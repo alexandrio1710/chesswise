@@ -23,6 +23,7 @@ import alerts
 import auth
 import cli_state
 import clock_analysis
+import coaching_chat
 import coaching_report
 import export
 import game_report
@@ -624,6 +625,47 @@ def api_coaching_report_get(report_id: int, user: dict | None = Depends(auth.get
     if report is None:
         raise HTTPException(status_code=404, detail="Coaching report not found")
     return report
+
+
+@app.get("/api/coaching-report/chat/available")
+def api_coaching_chat_available():
+    """Whether a local Ollama server is actually reachable right now —
+    checked once by the frontend to decide whether to show the chat box,
+    rather than every user hitting an error from the chat endpoint itself.
+    """
+    return {"available": coaching_chat.is_configured()}
+
+
+class CoachingChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class CoachingChatRequest(BaseModel):
+    message: str
+    history: list[CoachingChatMessage] = []
+
+
+@app.post("/api/coaching-report/{report_id}/chat")
+def api_coaching_report_chat(report_id: int, req: CoachingChatRequest, user: dict | None = Depends(auth.get_current_user_optional)):
+    """One turn of the Coaching Report chat coach (coaching_chat.py) —
+    stateless like Ollama's own /api/chat: the client resends its own
+    conversation history each call. Talks to a local Ollama server, so
+    (unlike a hosted API) this can be slow on modest hardware but costs
+    nothing.
+    """
+    auth.verify_can_access_coaching_report(report_id, user)
+    report = coaching_report.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Coaching report not found")
+
+    try:
+        reply = coaching_chat.send_message(
+            report, [m.model_dump() for m in req.history], req.message,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"reply": reply}
 
 
 @app.get("/api/drift-puzzles/{puzzle_id}")

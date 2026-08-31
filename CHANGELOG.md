@@ -1,5 +1,36 @@
 # Changelog
 
+## v38 — A free, local chat coach for the Coaching Report
+
+The Coaching Report was still a one-way document — you could read its
+findings and practice the highlighted positions, but not ask it anything.
+Added a chat box on the report page grounded in that specific report's
+own computed data (the headline, time-control/structure stats, the
+highlighted positions with their real engine lines, the repertoire
+checklists) — it quotes the actual numbers back rather than reasoning
+about chess from scratch, and its system prompt explicitly frames drift
+candidates as "worth reviewing," never as confirmed errors, the same
+standard this whole project already holds its own heuristics to.
+
+First pass used the Anthropic API — but that costs real money per
+message, which isn't the right tradeoff for a personal-scale tool run
+locally next to a free, local Stockfish. Switched to a locally-run
+[Ollama](https://ollama.com) instead: free forever, no API key, plain
+HTTP via `requests` (already a dependency — no new package needed at
+all). Considered chess-specific open-source LLMs first (ChessGPT,
+arXiv:2306.09200) but passed: it's a 3B-parameter model from 2023, and
+its own paper found the chat-tuned variant is *less* accurate at chess
+state-tracking than the un-tuned base — a poor fit against a modern
+general-purpose local model, especially since this feature's grounding
+design means the model mostly needs to read structured data and discuss
+it coherently, not independently know chess.
+
+The chat box only appears when Ollama is actually reachable right now —
+a live check (`GET /api/tags`), not just "is a config value set", since
+installed-but-not-running is exactly the case a static check would get
+wrong. No chat history is persisted server-side; each browser tab keeps
+its own conversation for the report currently on screen.
+
 ## v37 — Coaching Report highlights are now practicable, not just readable
 
 A report that only describes a pattern is a step short of actually

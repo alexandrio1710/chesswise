@@ -206,3 +206,25 @@ SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower()
 # the result backend here — one moving part instead of two for a project
 # this size.
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
+# --- Coaching Report chat coach (coaching_chat.py) --------------------------
+
+# Talks to a locally-run Ollama (https://ollama.com) instead of a paid API —
+# free forever, no API key, runs entirely on this machine. The Coaching
+# Report page's chat feature is only offered when Ollama is actually
+# reachable here (coaching_chat.is_configured() — a live check, not just
+# "is this URL set", since Ollama being installed doesn't mean it's
+# currently running).
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# A broadly-available, commonly-pulled default — still needs `ollama pull
+# <model>` run once on this machine before it'll actually work, same as any
+# Ollama model. Configurable since which models are pulled/how capable this
+# machine is varies a lot more than anything else in this file.
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+
+# Local inference on modest hardware can be genuinely slow (unlike a paid
+# API's managed infrastructure) — generous rather than the short timeout a
+# hosted API call would warrant.
+OLLAMA_CHAT_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_CHAT_TIMEOUT_SECONDS", "120"))

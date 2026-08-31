@@ -127,6 +127,9 @@
   .history-list { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
   .history-item { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
   .history-item:hover { background: var(--accent-soft); }
+  .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; max-width: 85%; white-space: pre-wrap; }
+  .chat-bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .chat-bubble.assistant { align-self: flex-start; background: var(--page-plane); }
 </style>
 </head>
 <body>
@@ -221,6 +224,22 @@
     <ul class="checklist" id="what-to-work-on"></ul>
   </section>
 
+  <section class="card" id="chat-section" style="display:none;">
+    <h2>Ask about this report</h2>
+    <p class="empty-note" style="margin-top:-6px;">
+      Grounded in this report's own data — quotes the actual numbers and positions above,
+      and will say so rather than guess if a question goes beyond what this data can answer.
+      Each message costs real Anthropic API usage.
+    </p>
+    <div id="chat-log" style="display:flex; flex-direction:column; gap:10px; margin:14px 0; max-height:420px; overflow-y:auto;"></div>
+    <div class="input-row">
+      <input type="text" id="chat-input" placeholder="e.g. Why does the Dragon race matter in game 2?"
+             style="flex:1; min-width:220px; font:inherit; font-size:13px; padding:8px 12px; border-radius:10px; border:1px solid var(--border); background:var(--page-plane); color:var(--text-primary);">
+      <button class="btn-primary" id="chat-send-btn">Send</button>
+    </div>
+    <p class="status-text" id="chat-status"></p>
+  </section>
+
   <section class="card">
     <h2>Past reports</h2>
     <div class="history-list" id="history-list"><p class="empty-note">Select a profile to see its report history.</p></div>
@@ -231,6 +250,8 @@
   let currentProfileId = localStorage.getItem("profileId") || "";
   let importPollTimer = null;
   let generatePollTimer = null;
+  let currentReportId = null;
+  let chatHistory = []; // [{role, content}, ...] — this tab's conversation only, not persisted server-side
 
   function escapeHtml(s) {
     const div = document.createElement("div");
@@ -461,6 +482,14 @@
     document.getElementById("report-headline").textContent = report.headline;
     document.getElementById("report-trend").textContent = report.trend_note || "";
 
+    // A fresh report means a fresh conversation — the chat is grounded in
+    // whichever report is currently on screen, so switching reports without
+    // resetting would silently answer new questions against stale context.
+    currentReportId = report.id;
+    chatHistory = [];
+    document.getElementById("chat-log").innerHTML = "";
+    checkChatAvailability();
+
     const tcBody = document.querySelector("#tc-table tbody");
     const tcEntries = Object.entries(report.time_control_stats).sort((a, b) => b[1].games - a[1].games);
     tcBody.innerHTML = tcEntries.length
@@ -543,6 +572,66 @@
       });
     });
   }
+
+  // --- Chat coach (coaching_chat.py — local Ollama, no API cost) ------------
+
+  async function checkChatAvailability() {
+    const section = document.getElementById("chat-section");
+    try {
+      const { available } = await fetch("/api/coaching-report/chat/available").then(r => r.json());
+      section.style.display = available ? "block" : "none";
+    } catch {
+      section.style.display = "none";
+    }
+  }
+
+  function appendChatBubble(role, text) {
+    const log = document.getElementById("chat-log");
+    const bubble = document.createElement("div");
+    bubble.className = `chat-bubble ${role}`;
+    bubble.textContent = text;
+    log.appendChild(bubble);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function sendChatMessage() {
+    const input = document.getElementById("chat-input");
+    const message = input.value.trim();
+    if (!message || !currentReportId) return;
+
+    input.value = "";
+    input.disabled = true;
+    document.getElementById("chat-send-btn").disabled = true;
+    appendChatBubble("user", message);
+    document.getElementById("chat-status").innerHTML = `<span class="spinner"></span>Thinking… (running locally, can take a while)`;
+
+    try {
+      const res = await fetch(`/api/coaching-report/${currentReportId}/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, history: chatHistory }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("chat-status").textContent = data.detail || "Something went wrong.";
+        return;
+      }
+      chatHistory.push({ role: "user", content: message });
+      chatHistory.push({ role: "assistant", content: data.reply });
+      appendChatBubble("assistant", data.reply);
+      document.getElementById("chat-status").textContent = "";
+    } catch {
+      document.getElementById("chat-status").textContent = "Couldn't reach the server.";
+    } finally {
+      input.disabled = false;
+      document.getElementById("chat-send-btn").disabled = false;
+      input.focus();
+    }
+  }
+
+  document.getElementById("chat-send-btn").addEventListener("click", sendChatMessage);
+  document.getElementById("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendChatMessage();
+  });
 
   loadProfileOptions();
 
