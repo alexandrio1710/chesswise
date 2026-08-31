@@ -12,6 +12,7 @@ trend tracking.
 
 ![Dashboard overview](docs/screenshots/dashboard.png)
 ![Puzzle trainer](docs/screenshots/puzzles.png)
+![Coaching Report](docs/screenshots/coaching_report.png)
 
 ## Engineering highlights
 
