@@ -13,7 +13,6 @@ import itertools
 
 import chess
 import chess.pgn
-import pytest
 from fastapi.testclient import TestClient
 
 import auth

@@ -24,5 +24,9 @@ venv/
 .vscode/
 .DS_Store
 
+# Claude Code's own local tool state (settings, dev-server launch config,
+# scheduled-task locks, background-task worktrees) — never project content.
+.claude/
+
 # Logs
 *.log

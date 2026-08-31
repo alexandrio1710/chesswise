@@ -150,7 +150,6 @@ def get_my_stats_at_position(move_ucis: list[str], source: str | None = None) ->
     docstring.
     """
     games = get_all_games(source=source)
-    n_target = len(move_ucis)
 
     reached_games = []
     next_move_counts: dict[str, dict] = {}  # uci -> {count, wins, draws, losses, san}

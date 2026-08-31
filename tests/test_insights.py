@@ -77,7 +77,7 @@ class TestRatingProgressIncludesTimeControl:
         assert all("time_control" in r for r in rows)
 
     def test_time_control_value_is_preserved_correctly(self):
-        game_id = _insert_rated_game("lichess", "rapid", 1800)
+        _insert_rated_game("lichess", "rapid", 1800)
         rows = [r for r in rating_progress() if r["player_rating"] == 1800]
         assert any(r["time_control"] == "rapid" for r in rows)
 
@@ -97,7 +97,7 @@ class TestUnparseableDateDoesNotCrash:
         assert isinstance(result, dict)
 
     def test_valid_iso_date_is_still_counted(self):
-        game_id = _insert_game_with_date("2026-08-10T14:30:00+00:00")
+        _insert_game_with_date("2026-08-10T14:30:00+00:00")
         by_day = win_rate_by_day_of_week()
         total_games = sum(v["games"] for v in by_day.values())
         assert total_games >= 1
@@ -137,7 +137,7 @@ class TestAccuracyByTimeControl:
     def test_games_with_no_computable_accuracy_are_excluded_from_the_average(self, monkeypatch):
         tc = f"tc-none-{next(_id_counter)}"
         g1 = _insert_game_with_time_control(tc)
-        g2 = _insert_game_with_time_control(tc)
+        _insert_game_with_time_control(tc)
 
         monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
         monkeypatch.setattr(
@@ -182,7 +182,7 @@ class TestAcplByTimeControl:
     def test_games_with_no_computable_acpl_are_excluded_from_the_average(self, monkeypatch):
         tc = f"tc-acpl-none-{next(_id_counter)}"
         g1 = _insert_game_with_time_control(tc)
-        g2 = _insert_game_with_time_control(tc)
+        _insert_game_with_time_control(tc)
 
         monkeypatch.setattr(insights.stats, "get_game_moves", lambda gid: [{"gid": gid}])
         monkeypatch.setattr(

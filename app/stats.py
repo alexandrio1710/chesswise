@@ -886,7 +886,6 @@ def get_critical_moment(game_id: int, game_pgn: str, player_color: str) -> dict 
     # No puzzle (inaccuracy-severity critical moment) — get the position
     # and best move fresh. One Stockfish call, not stored, since this is a
     # one-off detail-view lookup rather than something replayed later.
-    import chess
     from puzzles import board_before_ply, get_top_lines
 
     board = board_before_ply(game_pgn, d["ply"])
