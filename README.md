@@ -13,6 +13,29 @@ trend tracking.
 ![Dashboard overview](docs/screenshots/dashboard.png)
 ![Puzzle trainer](docs/screenshots/puzzles.png)
 
+## Engineering highlights
+
+- **Real published algorithms, not approximations** — Lichess's own
+  accuracy-scoring and move-judgment formulas, Stockfish's own win-rate
+  model, US Chess's actual 2024 rating-conversion formula, and Static
+  Exchange Evaluation for tactical detection, each verified against its
+  original source and against real game data, not implemented from memory.
+- **Caught and reverted my own regression** — shipped a puzzle-quality
+  filter, then tested it against the app's own puzzle history and found
+  it rejected 95% of puzzles that were already good. Diagnosed why,
+  reverted it, and wrote up the postmortem in the changelog rather than
+  quietly patching over it.
+- **300+ automated tests** — hand-verified unit tests for chess-specific
+  edge cases (multi-piece tactical exchanges, mate-distance handling,
+  opposite-side-castling detection) plus a real-engine integration test,
+  running on every push via CI.
+- A numbered schema-migration system with automatic pre-migration
+  backups — 23 migrations shipped over the project's life without losing
+  data.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, detailed history of *why*
+each design decision was made, not just what changed.
+
 ## Features
 
 - Fetches and normalizes games from both Lichess and Chess.com into one
