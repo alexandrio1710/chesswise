@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chesswise — Coaching Report</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<style>
+  :root {
+    color-scheme: dark;
+    --surface-1: #1c2e3c;
+    --surface-1-glass: rgba(28,46,60,0.72);
+    --page-plane: #131f29;
+    --text-primary: #dfe8ed;
+    --text-secondary: #a8bcc7;
+    --text-muted: #748994;
+    --gridline: #2c4356;
+    --border: rgba(223,232,237,0.14);
+    --series-1: #7fabc4;
+    --status-critical: #e2707f;
+    --status-good: #7fbd96;
+    --accent: #6b9bb8;
+    --accent-soft: rgba(107,155,184,0.18);
+    --accent-glow: rgba(107,155,184,0.35);
+    --bg-art: linear-gradient(180deg, #0f1922 0%, #16242f 55%, #1e3140 100%);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --surface-1: #ffffff;
+    --surface-1-glass: rgba(255,255,255,0.75);
+    --page-plane: #eef2f5;
+    --text-primary: #2b3c46;
+    --text-secondary: #57707d;
+    --text-muted: #869aa5;
+    --gridline: #d7e2e8;
+    --border: rgba(43,60,70,0.14);
+    --series-1: #5a8aa6;
+    --status-critical: #c94d5f;
+    --status-good: #4a9268;
+    --accent: #4d84a3;
+    --accent-soft: rgba(77,132,163,0.14);
+    --accent-glow: rgba(77,132,163,0.28);
+    --bg-art: linear-gradient(180deg, #eef2f5 0%, #e3ebef 55%, #d7e2e8 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    margin: 0; min-height: 100vh; background-image: var(--bg-art); background-size: cover;
+    background-position: bottom center; background-repeat: no-repeat; background-attachment: fixed;
+    background-color: var(--page-plane); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding: 28px 40px 64px;
+  }
+  .page { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  nav.top-nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px; padding: 7px 14px;
+    border: 1px solid var(--border); border-radius: 999px; transition: background .15s, color .15s, border-color .15s;
+  }
+  nav.top-nav a:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
+  .nav-dropdown { position: relative; display: inline-block; }
+  .nav-dropdown-toggle {
+    font: inherit; font-size: 13px; padding: 7px 14px; border: 1px solid var(--border);
+    border-radius: 999px; background: none; color: var(--text-secondary); cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .nav-dropdown-toggle:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
+  .nav-dropdown-toggle.active-section { background: var(--accent); color: #fff; border-color: transparent; }
+  .nav-dropdown-menu {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 6px; min-width: 160px; box-shadow: 0 12px 32px rgba(17,17,26,0.25);
+  }
+  .nav-dropdown.open .nav-dropdown-menu { display: block; }
+  .nav-dropdown-menu a { display: block; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: var(--text-secondary); text-decoration: none; white-space: nowrap; }
+  .nav-dropdown-menu a:hover { background: var(--accent-soft); color: var(--text-primary); }
+  .nav-dropdown-menu a.active { background: var(--accent); color: #fff; }
+  .icon-btn {
+    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .icon-btn:hover:not(:disabled) { background: var(--accent-soft); border-color: transparent; }
+  .card {
+    background: var(--surface-1-glass); -webkit-backdrop-filter: blur(20px) saturate(150%); backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid var(--border); border-radius: 20px; padding: 20px; min-width: 0;
+    box-shadow: 0 1px 2px rgba(17,17,26,0.06), 0 24px 48px -24px var(--accent-glow);
+  }
+  .profile-select, select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary);
+  }
+  textarea#pgn-input {
+    width: 100%; min-height: 160px; font: 13px/1.5 ui-monospace, monospace; padding: 12px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--page-plane); color: var(--text-primary); resize: vertical;
+  }
+  .input-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .input-row button, .input-row select {
+    font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  }
+  .btn-primary { background: var(--series-1); color: #fff; border-color: transparent; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .empty-note { color: var(--text-secondary); font-size: 13px; }
+  .status-text { color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 7px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .headline { font-size: 15px; line-height: 1.6; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  table.tc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tc-table th, table.tc-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.tc-table th { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+  .checklist { display: flex; flex-direction: column; gap: 8px; padding-left: 0; margin: 0; list-style: none; }
+  .checklist li { padding: 10px 12px; background: var(--page-plane); border-radius: 10px; font-size: 13px; line-height: 1.5; }
+  .position-card { display: flex; gap: 16px; padding: 14px; background: var(--page-plane); border-radius: 12px; flex-wrap: wrap; }
+  .mini-board { display: grid; grid-template-columns: repeat(8, 1fr); width: 220px; height: 220px; border-radius: 8px; overflow: hidden; flex-shrink: 0; border: 1px solid var(--border); }
+  .mini-board .sq { display: flex; align-items: center; justify-content: center; font-size: 26px; user-select: none; }
+  .mini-board .sq.light { background: #d7e2e8; }
+  .mini-board .sq.dark { background: #7fabc4; }
+  :root[data-theme="light"] .mini-board .sq.dark { background: #5a8aa6; }
+  .position-detail { flex: 1; min-width: 220px; font-size: 13px; line-height: 1.6; }
+  .position-detail .label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .alt-line { padding: 3px 0; }
+  .history-list { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .history-item { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .history-item:hover { background: var(--accent-soft); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Coaching Report</h1>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <nav class="top-nav">
+        <a href="/">Dashboard</a>
+        <a href="/puzzles">Puzzles</a>
+        <div class="nav-dropdown">
+          <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">Train ▾</button>
+          <div class="nav-dropdown-menu">
+            <a href="/explorer">Explorer</a>
+            <a href="/endgame">Endgame</a>
+            <a href="/analyze">Analyze</a>
+          </div>
+        </div>
+        <div class="nav-dropdown">
+          <button type="button" class="nav-dropdown-toggle active-section" aria-haspopup="true" aria-expanded="false">Insights ▾</button>
+          <div class="nav-dropdown-menu">
+            <a href="/insights">Insights</a>
+            <a href="/clock">Clock</a>
+            <a href="/progress">Progress</a>
+            <a href="/coaching-report" class="active">Coaching Report</a>
+          </div>
+        </div>
+        <a href="/search">Search</a>
+      </nav>
+      <select class="profile-select" id="profile-select"><option value="">Select a profile…</option></select>
+      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <p class="empty-note">
+    Paste a multi-game PGN export for one profile, then generate a coaching-style report that looks across the
+    whole batch for recurring patterns — not just a list of individual blunders. Every "worth reviewing" flag
+    is exactly that: a close engine decision the played move wasn't wrong to consider, not a verdict.
+  </p>
+
+  <section class="card">
+    <h2>1. Import games</h2>
+    <textarea id="pgn-input" placeholder="Paste a multi-game PGN export here…"></textarea>
+    <div class="input-row">
+      <select id="default-color">
+        <option value="">Detect color from known usernames only</option>
+        <option value="white">Assume I played White</option>
+        <option value="black">Assume I played Black</option>
+      </select>
+      <button class="btn-primary" id="import-btn">Import &amp; analyze</button>
+    </div>
+    <p class="status-text" id="import-status"></p>
+  </section>
+
+  <section class="card">
+    <h2>2. Generate report</h2>
+    <p class="empty-note" style="margin-top:-6px;">
+      Runs a deeper engine pass (MultiPV) over this profile's already-analyzed games since the last report —
+      real engine time across a batch this size, so this always runs in the background.
+    </p>
+    <div class="input-row">
+      <button class="btn-primary" id="generate-btn">Generate report</button>
+    </div>
+    <p class="status-text" id="generate-status"></p>
+  </section>
+
+  <section class="card" id="report-section" style="display:none;">
+    <h2>Report</h2>
+    <p class="headline" id="report-headline"></p>
+    <p class="status-text" id="report-trend"></p>
+
+    <div class="stats-grid" style="margin-top:16px;">
+      <div>
+        <h2>By time control</h2>
+        <table class="tc-table" id="tc-table"><thead>
+          <tr><th>Time control</th><th>Games</th><th>Win rate</th><th>ACPL</th><th>Drift rate</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <div>
+        <h2>By repertoire structure</h2>
+        <table class="tc-table" id="structure-table"><thead>
+          <tr><th>Structure</th><th>Games</th><th>ACPL</th><th>Drift rate</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <h2 style="margin-top:20px;">Highlighted positions</h2>
+    <div id="highlighted-positions" style="display:flex; flex-direction:column; gap:12px;"></div>
+
+    <h2 style="margin-top:20px;">What to work on next</h2>
+    <ul class="checklist" id="what-to-work-on"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Past reports</h2>
+    <div class="history-list" id="history-list"><p class="empty-note">Select a profile to see its report history.</p></div>
+  </section>
+</div>
+
+<script>
+  let currentProfileId = localStorage.getItem("profileId") || "";
+  let importPollTimer = null;
+  let generatePollTimer = null;
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s ?? "";
+    return div.innerHTML;
+  }
+
+  async function loadProfileOptions() {
+    const select = document.getElementById("profile-select");
+    try {
+      const profiles = await fetch("/api/profiles").then(r => r.json());
+      select.innerHTML = `<option value="">Select a profile…</option>` +
+        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
+        select.value = currentProfileId;
+        loadHistory();
+      }
+    } catch {
+      // Nice-to-have — a failed fetch shouldn't block the rest of the page.
+    }
+  }
+
+  document.getElementById("profile-select").addEventListener("change", () => {
+    currentProfileId = document.getElementById("profile-select").value;
+    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
+    else localStorage.removeItem("profileId");
+    document.getElementById("report-section").style.display = "none";
+    loadHistory();
+  });
+
+  function requireProfile() {
+    if (!currentProfileId) {
+      alert("Select a profile first.");
+      return false;
+    }
+    return true;
+  }
+
+  // --- Import -----------------------------------------------------------
+
+  document.getElementById("import-btn").addEventListener("click", async () => {
+    if (!requireProfile()) return;
+    const pgn = document.getElementById("pgn-input").value.trim();
+    if (!pgn) { alert("Paste a PGN export first."); return; }
+    const defaultColor = document.getElementById("default-color").value || null;
+
+    const res = await fetch("/api/coaching-report/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pgn, profile_id: Number(currentProfileId), default_color: defaultColor }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      document.getElementById("import-status").textContent = data.detail || "Import failed to start.";
+      return;
+    }
+    document.getElementById("import-status").innerHTML = `<span class="spinner"></span>Importing and analyzing…`;
+    pollImportStatus();
+  });
+
+  function pollImportStatus() {
+    clearTimeout(importPollTimer);
+    const check = async () => {
+      const res = await fetch(`/api/coaching-report/import/status?profile_id=${currentProfileId}`);
+      const data = await res.json();
+      const el = document.getElementById("import-status");
+      if (data.status === "computing") {
+        el.innerHTML = `<span class="spinner"></span>Importing and analyzing…`;
+        importPollTimer = setTimeout(check, 3000);
+      } else if (data.status === "ready") {
+        const r = data.result;
+        el.textContent = `Done — ${r.inserted} new game(s) imported (${r.skipped} already had a copy, ${r.unattributable} couldn't be attributed to this profile).`;
+      } else if (data.status === "failed") {
+        el.textContent = `Import failed: ${data.error}`;
+      }
+    };
+    check();
+  }
+
+  // --- Generate report ----------------------------------------------------
+
+  document.getElementById("generate-btn").addEventListener("click", async () => {
+    if (!requireProfile()) return;
+    const res = await fetch("/api/coaching-report/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile_id: Number(currentProfileId) }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      document.getElementById("generate-status").textContent = data.detail || "Couldn't start report generation.";
+      return;
+    }
+    document.getElementById("generate-status").innerHTML = `<span class="spinner"></span>Analyzing this batch (this can take a while for a large batch)…`;
+    pollGenerateStatus();
+  });
+
+  function pollGenerateStatus() {
+    clearTimeout(generatePollTimer);
+    const check = async () => {
+      const res = await fetch(`/api/coaching-report/generate/status?profile_id=${currentProfileId}`);
+      const data = await res.json();
+      const el = document.getElementById("generate-status");
+      if (data.status === "computing") {
+        el.innerHTML = `<span class="spinner"></span>Analyzing this batch (this can take a while for a large batch)…`;
+        generatePollTimer = setTimeout(check, 5000);
+      } else if (data.status === "ready") {
+        el.textContent = "Report ready.";
+        renderReport(data.report);
+        loadHistory();
+      } else if (data.status === "failed") {
+        el.textContent = `Report generation failed: ${data.error}`;
+      }
+    };
+    check();
+  }
+
+  // --- Rendering ----------------------------------------------------------
+
+  function fenToPieceMap(fen) {
+    const rows = fen.split(" ")[0].split("/");
+    const map = {};
+    rows.forEach((row, r) => {
+      const rank = 8 - r;
+      let file = 0;
+      for (const ch of row) {
+        if (/\d/.test(ch)) { file += parseInt(ch, 10); }
+        else { map[String.fromCharCode(97 + file) + rank] = ch; file += 1; }
+      }
+    });
+    return map;
+  }
+
+  const PIECE_GLYPH = {
+    K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
+    k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+  };
+
+  function isLightSquare(file, rank) { return (file + rank) % 2 !== 0; }
+
+  function renderMiniBoard(fen) {
+    const pieceMap = fenToPieceMap(fen);
+    const cells = [];
+    for (let rank = 8; rank >= 1; rank--) {
+      for (let file = 0; file < 8; file++) {
+        const square = `${String.fromCharCode(97 + file)}${rank}`;
+        const piece = pieceMap[square];
+        cells.push(
+          `<div class="sq ${isLightSquare(file, rank) ? "light" : "dark"}">${piece ? PIECE_GLYPH[piece] : ""}</div>`
+        );
+      }
+    }
+    return `<div class="mini-board">${cells.join("")}</div>`;
+  }
+
+  function formatEval(cp, mateIn) {
+    if (mateIn != null) return `${mateIn > 0 ? "" : "-"}M${Math.abs(mateIn)}`;
+    if (cp == null) return "—";
+    const pawns = (cp / 100).toFixed(2);
+    return cp > 0 ? `+${pawns}` : pawns;
+  }
+
+  function renderReport(report) {
+    document.getElementById("report-section").style.display = "block";
+    document.getElementById("report-headline").textContent = report.headline;
+    document.getElementById("report-trend").textContent = report.trend_note || "";
+
+    const tcBody = document.querySelector("#tc-table tbody");
+    const tcEntries = Object.entries(report.time_control_stats).sort((a, b) => b[1].games - a[1].games);
+    tcBody.innerHTML = tcEntries.length
+      ? tcEntries.map(([tc, s]) => `
+          <tr>
+            <td>${escapeHtml(tc)}</td><td>${s.games}</td><td>${s.win_rate_pct}%</td>
+            <td>${s.acpl ?? "—"}</td><td>${s.drift_rate ?? "—"}${s.drift_rate != null ? "%" : ""}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="5" class="empty-note">No data.</td></tr>`;
+
+    const structBody = document.querySelector("#structure-table tbody");
+    const structEntries = Object.entries(report.structure_stats).sort((a, b) => b[1].games - a[1].games);
+    structBody.innerHTML = structEntries.length
+      ? structEntries.map(([name, s]) => `
+          <tr>
+            <td>${escapeHtml(name)}</td><td>${s.games}</td><td>${s.acpl ?? "—"}</td>
+            <td>${s.drift_rate ?? "—"}${s.drift_rate != null ? "%" : ""}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="4" class="empty-note">No games matched a known repertoire structure in this batch.</td></tr>`;
+
+    const positionsEl = document.getElementById("highlighted-positions");
+    positionsEl.innerHTML = report.highlighted_positions.length
+      ? report.highlighted_positions.map(p => `
+          <div class="position-card">
+            ${renderMiniBoard(p.fen_before)}
+            <div class="position-detail">
+              <div class="label">Played</div>
+              <div><strong>${escapeHtml(p.played_move_san)}</strong> — ${escapeHtml(p.played_move_explanation || "")}</div>
+              <div class="label" style="margin-top:8px;">Engine's top choice</div>
+              <div><strong>${escapeHtml(p.best_move_san)}</strong> — ${escapeHtml(p.best_move_explanation || "")}</div>
+              <div class="label" style="margin-top:8px;">Close alternatives considered</div>
+              ${p.close_alternatives.map((line, i) => `
+                <div class="alt-line">${i + 1}. ${escapeHtml(line.move_san)} (${formatEval(line.eval_cp, line.mate_in)})</div>
+              `).join("")}
+            </div>
+          </div>
+        `).join("")
+      : `<p class="empty-note">No drift candidates in a roughly-balanced position turned up in this batch.</p>`;
+
+    const checklistEl = document.getElementById("what-to-work-on");
+    checklistEl.innerHTML = report.what_to_work_on.length
+      ? report.what_to_work_on.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+      : `<li>No known repertoire structure showed up in this batch.</li>`;
+  }
+
+  // --- History --------------------------------------------------------------
+
+  async function loadHistory() {
+    const el = document.getElementById("history-list");
+    if (!currentProfileId) {
+      el.innerHTML = `<p class="empty-note">Select a profile to see its report history.</p>`;
+      return;
+    }
+    const reports = await fetch(`/api/coaching-report/history?profile_id=${currentProfileId}`).then(r => r.json());
+    if (!reports.length) {
+      el.innerHTML = `<p class="empty-note">No reports generated yet for this profile.</p>`;
+      return;
+    }
+    el.innerHTML = reports.map(r => `
+      <div class="history-item" data-id="${r.id}">
+        <span>${escapeHtml(r.created_at)} — ${r.game_count} game(s)</span>
+        <span class="empty-note">${escapeHtml(r.headline.slice(0, 60))}${r.headline.length > 60 ? "…" : ""}</span>
+      </div>
+    `).join("");
+    el.querySelectorAll(".history-item").forEach(item => {
+      item.addEventListener("click", async () => {
+        const report = await fetch(`/api/coaching-report/${item.dataset.id}`).then(r => r.json());
+        renderReport(report);
+        document.getElementById("report-section").scrollIntoView({ behavior: "smooth" });
+      });
+    });
+  }
+
+  loadProfileOptions();
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+  }
+  applyTheme(localStorage.getItem("theme") || "system");
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const current = localStorage.getItem("theme") || "system";
+    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+    localStorage.setItem("theme", next);
+    applyTheme(next);
+  });
+
+  document.querySelectorAll(".nav-dropdown-toggle").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const dropdown = btn.closest(".nav-dropdown");
+      const wasOpen = dropdown.classList.contains("open");
+      document.querySelectorAll(".nav-dropdown.open").forEach(d => {
+        d.classList.remove("open");
+        d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+      });
+      if (!wasOpen) {
+        dropdown.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".nav-dropdown.open").forEach(d => {
+      d.classList.remove("open");
+      d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+    });
+  });
+</script>
+</body>
+</html>

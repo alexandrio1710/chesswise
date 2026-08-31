@@ -54,6 +54,27 @@ PUZZLE_TOP_LINES = int(os.environ.get("PUZZLE_TOP_LINES", "3"))
 # constraint: every routine position finishes well under it.
 STOCKFISH_MAX_SECONDS_PER_POSITION = float(os.environ.get("STOCKFISH_MAX_SECONDS_PER_POSITION", "10"))
 
+# Coaching report (coaching_report.py) — a dedicated MultiPV pass, kept
+# out of routine per-move analysis the same way game_report.py's own
+# MultiPV=2 enrichment already is (see that module's docstring): worth
+# paying for on-demand batch review, not for every synced game forever.
+COACHING_REPORT_DEPTH = int(os.environ.get("COACHING_REPORT_DEPTH", "16"))
+COACHING_REPORT_MULTIPV = int(os.environ.get("COACHING_REPORT_MULTIPV", "4"))
+
+# A "close decision" position: at least 2 of the top-N engine lines are
+# within this many centipawns of the best one — the threshold where plan
+# quality, not calculation, actually decides the choice. A first
+# calibrated guess (per the user's own suggested 15-25cp range), meant to
+# be tuned after checking flagged positions against real games feel like
+# real turning points (see coaching_report.py's module docstring).
+DRIFT_CLOSE_DECISION_THRESHOLD_CP = int(os.environ.get("DRIFT_CLOSE_DECISION_THRESHOLD_CP", "20"))
+
+# A drift candidate additionally requires the played move to not have
+# been objectively bad on its own — otherwise it's already caught as an
+# inaccuracy/mistake/blunder, and double-counting a real error as "just
+# drift" would understate how bad it actually was.
+DRIFT_MAX_EVAL_DROP_CP = int(os.environ.get("DRIFT_MAX_EVAL_DROP_CP", "40"))
+
 # Games analyzed in parallel during batch analysis (Final Pass 5). Each
 # worker runs its own single-threaded Stockfish subprocess (see
 # analysis.get_engine's Threads=1), so this is roughly one CPU core per

@@ -23,6 +23,7 @@ import alerts
 import auth
 import cli_state
 import clock_analysis
+import coaching_report
 import export
 import game_report
 import insights
@@ -493,6 +494,138 @@ def api_game_report(game_id: int, force: bool = Query(default=False), _access: d
     return {"status": "computing"}
 
 
+# Coaching report (coaching_report.py) — bulk PGN ingestion + cross-game
+# pattern mining for one profile. Two separate background jobs, same
+# "in-memory status dict + poll" shape as _refresh_status/_report_jobs
+# above, both keyed by profile_id (a report/import batch is always scoped
+# to one profile): _coaching_import_jobs covers import + the existing
+# routine single-PV batch_analyze pass (needed before a report can use
+# these games at all); _coaching_report_jobs covers the separate,
+# slower MultiPV pass generate_report() itself runs.
+_coaching_import_jobs: dict[int, dict] = {}
+_coaching_report_jobs: dict[int, dict] = {}
+
+
+class CoachingImportRequest(BaseModel):
+    pgn: str
+    profile_id: int
+    default_color: str | None = None
+
+
+def _run_coaching_import(profile_id: int, pgn_text: str, default_color: str | None) -> None:
+    from batch_analyze import run_batch_analysis
+
+    try:
+        result = coaching_report.bulk_import_pgn(pgn_text, profile_id, default_color)
+        run_batch_analysis(workers=1)  # forced sequential — see _run_refresh's own comment
+        _coaching_import_jobs[profile_id]["result"] = result
+        _coaching_import_jobs[profile_id]["error"] = None
+    except Exception as e:
+        logger.exception(f"Coaching-report bulk import failed for profile_id={profile_id}")
+        _coaching_import_jobs[profile_id]["error"] = str(e)
+    finally:
+        _coaching_import_jobs[profile_id]["running"] = False
+
+
+@app.post("/api/coaching-report/import")
+def api_coaching_report_import(req: CoachingImportRequest, user: dict | None = Depends(auth.get_current_user_optional)):
+    """Import a multi-game PGN paste for one profile and analyze it with
+    the existing routine pipeline, in the background — poll
+    /api/coaching-report/import/status?profile_id= for progress, same
+    "computing" -> "ready"/"failed" shape as the Game Report endpoint.
+    """
+    auth.verify_can_access_profile(req.profile_id, user)
+    if _coaching_import_jobs.get(req.profile_id, {}).get("running"):
+        raise HTTPException(status_code=409, detail="An import is already running for this profile.")
+
+    _coaching_import_jobs[req.profile_id] = {"running": True, "error": None, "result": None}
+    threading.Thread(
+        target=_run_coaching_import, args=(req.profile_id, req.pgn, req.default_color), daemon=True,
+    ).start()
+    return {"status": "started"}
+
+
+@app.get("/api/coaching-report/import/status")
+def api_coaching_report_import_status(profile_id: int | None = Depends(auth.require_profile_filter_access)):
+    if profile_id is None:
+        raise HTTPException(status_code=400, detail="profile_id is required.")
+    job = _coaching_import_jobs.get(profile_id)
+    if job is None:
+        return {"status": "idle"}
+    if job["running"]:
+        return {"status": "computing"}
+    if job["error"]:
+        return {"status": "failed", "error": job["error"]}
+    return {"status": "ready", "result": job["result"]}
+
+
+class CoachingReportRequest(BaseModel):
+    profile_id: int
+    game_ids: list[int] | None = None
+
+
+def _run_coaching_report(profile_id: int, game_ids: list[int] | None) -> None:
+    try:
+        report = coaching_report.generate_report(profile_id, game_ids=game_ids)
+        _coaching_report_jobs[profile_id]["report_id"] = report["id"]
+        _coaching_report_jobs[profile_id]["error"] = None
+    except Exception as e:
+        logger.exception(f"Coaching report generation failed for profile_id={profile_id}")
+        _coaching_report_jobs[profile_id]["error"] = str(e)
+    finally:
+        _coaching_report_jobs[profile_id]["running"] = False
+
+
+@app.post("/api/coaching-report/generate")
+def api_coaching_report_generate(req: CoachingReportRequest, user: dict | None = Depends(auth.get_current_user_optional)):
+    """Kicks off a coaching report for a profile's already-analyzed games
+    (all games since the profile's last report if game_ids is omitted) —
+    poll /api/coaching-report/generate/status?profile_id= for progress.
+    This is the slow, MultiPV-backed pass (coaching_report.py's own
+    docstring: real engine time per own-color move across the whole
+    batch), so it always runs in the background, never synchronously.
+    """
+    auth.verify_can_access_profile(req.profile_id, user)
+    if _coaching_report_jobs.get(req.profile_id, {}).get("running"):
+        raise HTTPException(status_code=409, detail="A report is already being generated for this profile.")
+
+    _coaching_report_jobs[req.profile_id] = {"running": True, "error": None, "report_id": None}
+    threading.Thread(
+        target=_run_coaching_report, args=(req.profile_id, req.game_ids), daemon=True,
+    ).start()
+    return {"status": "started"}
+
+
+@app.get("/api/coaching-report/generate/status")
+def api_coaching_report_generate_status(profile_id: int | None = Depends(auth.require_profile_filter_access)):
+    if profile_id is None:
+        raise HTTPException(status_code=400, detail="profile_id is required.")
+    job = _coaching_report_jobs.get(profile_id)
+    if job is None:
+        return {"status": "idle"}
+    if job["running"]:
+        return {"status": "computing"}
+    if job["error"]:
+        return {"status": "failed", "error": job["error"]}
+    return {"status": "ready", "report": coaching_report.get_report(job["report_id"])}
+
+
+@app.get("/api/coaching-report/history")
+def api_coaching_report_history(profile_id: int | None = Depends(auth.require_profile_filter_access)):
+    if profile_id is None:
+        raise HTTPException(status_code=400, detail="profile_id is required.")
+    return coaching_report.list_reports(profile_id)
+
+
+@app.get("/api/coaching-report/{report_id}")
+def api_coaching_report_get(report_id: int, user: dict | None = Depends(auth.get_current_user_optional)):
+    auth.verify_can_access_coaching_report(report_id, user)
+    report = coaching_report.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Coaching report not found")
+    return report
+
+
 # Coarse per-IP throttle on the two unauthenticated, Stockfish-backed
 # Analyze Board endpoints below: each request costs real engine time (a
 # full pass per ply for /pgn — see manual_analysis.MAX_ANALYSIS_PLIES),
@@ -830,6 +963,11 @@ def search_page():
 @app.get("/insights", response_class=HTMLResponse)
 def insights_page():
     return (STATIC_DIR / "insights.html").read_text(encoding="utf-8")
+
+
+@app.get("/coaching-report", response_class=HTMLResponse)
+def coaching_report_page():
+    return (STATIC_DIR / "coaching_report.html").read_text(encoding="utf-8")
 
 
 @app.get("/api/clock-analysis")

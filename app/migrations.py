@@ -1102,6 +1102,56 @@ def _migration_021_real_uscf_conversion_formula(conn: sqlite3.Connection) -> Non
         )
 
 
+def _migration_022_coaching_report(conn: sqlite3.Connection) -> None:
+    """Feature — the coaching-style batch report (bulk PGN ingestion +
+    cross-game pattern mining, see coaching_report.py). Three additions:
+
+    - game_moves.multipv_lines: the top-4 engine candidates at that
+      position (same JSON-blob shape as puzzles.top_lines), from a
+      dedicated MultiPV-4 pass coaching_report.py runs on demand — kept
+      off game_moves' normal population path (mistakes.analyze_and_store_game)
+      the same way game_report.py's own MultiPV=2 enrichment already is,
+      so routine sync speed is unaffected.
+    - game_moves.is_drift_candidate: a move whose position had multiple
+      engine-close options (per multipv_lines) but wasn't the top choice,
+      while still not being bad enough to already be a mistake/blunder —
+      the "individually fine, collectively a worse plan" pattern standard
+      ACPL can't see. A separate boolean rather than a new `classification`
+      value: unlike brilliant/great/book/miss (mutually-exclusive upgrades
+      of one tier slot), a move can be both e.g. "good" tier and a drift
+      candidate at once.
+    - games.repertoire_structure: which of this player's known repertoire
+      lines (Dragon, King's Indian, Grünfeld, London, ...) this game
+      reached, tagged by coaching_report.repertoire.py from the PGN alone
+      (no Stockfish needed) so it's cheap to compute once and reuse.
+    - coaching_reports: one row per generated batch report, so a later
+      batch can compare its own per-time-control drift rate against the
+      profile's previous report (the whole point of tracking this over
+      time, not just once).
+    """
+    existing_moves = {row["name"] for row in conn.execute("PRAGMA table_info(game_moves)")}
+    for col_name, col_type in (("multipv_lines", "TEXT"), ("is_drift_candidate", "INTEGER")):
+        if col_name not in existing_moves:
+            conn.execute(f"ALTER TABLE game_moves ADD COLUMN {col_name} {col_type}")
+
+    existing_games = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    if "repertoire_structure" not in existing_games:
+        conn.execute("ALTER TABLE games ADD COLUMN repertoire_structure TEXT")
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS coaching_reports (
+            id INTEGER PRIMARY KEY,
+            profile_id INTEGER NOT NULL REFERENCES profiles(id),
+            created_at TEXT NOT NULL,
+            game_ids TEXT NOT NULL,
+            time_control_stats TEXT NOT NULL,
+            structure_stats TEXT NOT NULL,
+            headline TEXT NOT NULL,
+            full_report TEXT NOT NULL
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1124,6 +1174,7 @@ MIGRATIONS = [
     (19, "Recompute move severity/tier with Lichess's own win%-based judgment", _migration_019_lichess_move_judgment),
     (20, "Recompute game phase with Lichess's own Divider algorithm", _migration_020_lichess_game_phase_divider),
     (21, "Recompute cached USCF figures with US Chess's real 2024 conversion formula", _migration_021_real_uscf_conversion_formula),
+    (22, "Add coaching-report schema: game_moves MultiPV/drift columns, games.repertoire_structure, coaching_reports table", _migration_022_coaching_report),
 ]
 
 

@@ -1,5 +1,59 @@
 # Changelog
 
+## v36 — Coaching Report: bulk-batch pattern mining for quiet strategic drift
+
+A new feature built around a specific diagnosed problem, not a generic
+"run Stockfish on everything" tool: better ACPL in rapid than in blitz/
+bullet, but worse rapid results relative to bullet/blitz on the same
+platforms — the opposite of what blunder-counting alone would predict.
+The working theory is "quiet strategic drift": sequences of individually
+fine moves (low centipawn loss) that are collectively a worse plan than
+an available alternative, invisible to single-best-move analysis because
+it only flags moves that are objectively bad.
+
+**Bulk import.** Paste a multi-game PGN export for one profile; reuses
+this app's existing dedup path (`db.save_games`) and PGN-splitting
+(`fetchers._split_pgn_blobs`) rather than a parallel importer, then runs
+the existing routine analysis pipeline (`batch_analyze.run_batch_analysis`)
+on it, all in the background.
+
+**Drift-candidate detection.** A dedicated MultiPV-4 pass (own-color
+moves only, kept separate from routine analysis the same way the
+existing Game Report's own MultiPV=2 enrichment already is — see that
+module's docstring) flags a move as a "drift candidate" when the
+position had multiple engine-close options (within ~20cp of each other)
+but the played move wasn't the top choice, while still not being bad
+enough to already count as an inaccuracy/mistake/blunder. Book-theory
+moves are excluded (confirmed necessary live: an early pass flagged a
+game's literal first move, d4 vs e4, before this exclusion existed).
+Every flagged position is framed as "worth reviewing," never a verdict —
+an engine's win-percentage number can't determine whether a plan was
+actually wrong on its own.
+
+**Repertoire-aware structure tagging** (`repertoire.py`, new): hand-authored
+detectors — not ported from anywhere, documented plainly as heuristics —
+for this player's specific repertoire and its known failure patterns:
+London (symmetric/minority-attack vs. IQP structure), Sicilian Dragon/
+Hyperaccelerated Dragon (opposite-castling race, dark-squared-bishop
+timing, ...Rxc3 timing), King's Indian Mar del Plata (locked-center race),
+and Grünfeld (central-tension judgment). Each attaches its own checklist
+of known failure modes to the report, plus a rough pawn-storm tempo count
+for the two opposite-wing races.
+
+**The report itself**: a headline comparing ACPL and win-rate leaders
+across time controls (the actual diagnostic signal, not just ACPL alone),
+a time-control and repertoire-structure breakdown, up to five highlighted
+drift positions (each with a rendered board, the move played, the
+engine's top choice, and the close alternatives actually on the table),
+a "what to work on" list pulled from whichever repertoire structures
+showed up, and a trend note comparing this batch's drift rate against
+the profile's previous report — the whole point being to watch whether
+it improves over time, not a one-off score.
+
+New schema: `game_moves.multipv_lines`/`is_drift_candidate`,
+`games.repertoire_structure`, and a `coaching_reports` table recording
+each generated batch for that cross-batch trend comparison.
+
 ## v35 — Brilliant-move detection now uses real Static Exchange Evaluation
 
 The Game Report's "was this sacrifice actually sound" check

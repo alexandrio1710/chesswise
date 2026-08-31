@@ -449,6 +449,16 @@ def require_note_access(note_id: int, user: dict | None = Depends(get_current_us
     return verify_can_access_note(note_id, user)
 
 
+def verify_can_access_coaching_report(report_id: int, user: dict | None) -> None:
+    """Coaching reports have no owner column of their own either —
+    ownership is inherited from the profile they were generated for."""
+    _owned_row(
+        "SELECT p.user_id AS owner_user_id FROM coaching_reports cr "
+        "JOIN profiles p ON p.id = cr.profile_id WHERE cr.id = ?",
+        (report_id,), "Coaching report not found", user,
+    )
+
+
 def verify_can_access_goal(goal_id: int, user: dict | None) -> None:
     """Goals have no owner column either, and aren't required to have a
     profile_id at all (progress.create_goal). No profile, or a profile
