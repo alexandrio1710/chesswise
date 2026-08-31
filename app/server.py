@@ -626,6 +626,26 @@ def api_coaching_report_get(report_id: int, user: dict | None = Depends(auth.get
     return report
 
 
+@app.get("/api/drift-puzzles/{puzzle_id}")
+def api_get_drift_puzzle(puzzle_id: int, user: dict | None = Depends(auth.get_current_user_optional)):
+    """A coaching report's highlighted drift position, playable the same
+    way as any other puzzle — see coaching_report.py's own module comment
+    on why these are worth practicing, not verdicts. Answer fields
+    (best_move_san/top_lines) are deliberately omitted, same as the main
+    /api/puzzles/{id} route, and only revealed via the /attempt response
+    (see api_drift_puzzle_attempt, further down once PuzzleAttempt exists).
+    """
+    auth.verify_can_access_drift_puzzle(puzzle_id, user)
+    puzzle = coaching_report.get_drift_puzzle(puzzle_id)
+    if puzzle is None:
+        raise HTTPException(status_code=404, detail="Drift puzzle not found")
+    return {
+        "id": puzzle["id"], "fen_before": puzzle["fen_before"], "side_to_move": puzzle["side_to_move"],
+        "legal_moves": puzzles.legal_moves_for_fen(puzzle["fen_before"]),
+        "game_id": puzzle["game_id"], "attempts": puzzle["attempts"], "correct": puzzle["correct"],
+    }
+
+
 # Coarse per-IP throttle on the two unauthenticated, Stockfish-backed
 # Analyze Board endpoints below: each request costs real engine time (a
 # full pass per ply for /pgn — see manual_analysis.MAX_ANALYSIS_PLIES),
@@ -866,6 +886,21 @@ def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt, _access: dict | N
     )
     result["srs"] = srs_state
     return result
+
+
+@app.post("/api/drift-puzzles/{puzzle_id}/attempt")
+def api_drift_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt, user: dict | None = Depends(auth.get_current_user_optional)):
+    """No SRS history here (see migration 23's docstring — a deliberate
+    scope limit for this feature's first cut, not an oversight): just
+    attempts/correct counters on the drift_puzzles row itself.
+    """
+    auth.verify_can_access_drift_puzzle(puzzle_id, user)
+    try:
+        return coaching_report.record_drift_puzzle_attempt(puzzle_id, attempt.from_square, attempt.to_square)
+    except puzzles.IllegalMoveError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # --- Opening-based puzzles (Lichess-sourced, user-requested addition) -------

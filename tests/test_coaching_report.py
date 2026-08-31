@@ -233,3 +233,121 @@ class TestHighlightedPositions:
     def test_ignores_non_drift_candidates(self):
         drift_by_game = {1: [{"game_id": 1, "ply": 5, "is_drift_candidate": False, "eval_before_cp": 0}]}
         assert coaching_report._highlighted_positions(drift_by_game) == []
+
+
+def _insert_game(profile_id: int) -> int:
+    conn = get_connection()
+    try:
+        game_id = conn.execute(
+            "INSERT INTO games (source, source_game_id, date, result, color, analyzed, profile_id) "
+            "VALUES ('manual', ?, datetime('now'), 'win', 'white', 1, ?)",
+            (f"drift-puzzle-test-{next(_id_counter)}", profile_id),
+        ).lastrowid
+        conn.commit()
+        return game_id
+    finally:
+        conn.close()
+
+
+def _insert_coaching_report(profile_id: int) -> int:
+    conn = get_connection()
+    try:
+        report_id = conn.execute(
+            "INSERT INTO coaching_reports "
+            "(profile_id, created_at, game_ids, time_control_stats, structure_stats, headline, full_report) "
+            "VALUES (?, datetime('now'), '[]', '{}', '{}', 'test', '{}')",
+            (profile_id,),
+        ).lastrowid
+        conn.commit()
+        return report_id
+    finally:
+        conn.close()
+
+
+def _highlighted_position(game_id: int, ply: int = 5) -> dict:
+    return {
+        "game_id": game_id, "ply": ply,
+        "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "played_move_san": "d4", "played_move_explanation": "The pawn develops the position.",
+        "best_move_san": "e4", "best_move_explanation": "The pawn develops the position.",
+        "close_alternatives": [
+            {"move_uci": "e2e4", "move_san": "e4", "eval_cp": 30, "mate_in": None},
+            {"move_uci": "d2d4", "move_san": "d4", "eval_cp": 25, "mate_in": None},
+        ],
+    }
+
+
+class TestCreateDriftPuzzles:
+    def test_creates_one_puzzle_per_highlighted_position(self):
+        profile_id, _ = _new_profile_with_username()
+        report_id = _insert_coaching_report(profile_id)
+        game_id = _insert_game(profile_id)
+
+        ids = coaching_report.create_drift_puzzles(report_id, [_highlighted_position(game_id)])
+
+        assert len(ids) == 1
+        puzzle = coaching_report.get_drift_puzzle(ids[0])
+        assert puzzle["game_id"] == game_id
+        assert puzzle["best_move_uci"] == "e2e4"
+        assert puzzle["top_lines"][0]["move_san"] == "e4"
+
+    def test_re_highlighting_the_same_position_returns_the_same_id_not_a_duplicate(self):
+        profile_id, _ = _new_profile_with_username()
+        report_id = _insert_coaching_report(profile_id)
+        game_id = _insert_game(profile_id)
+        position = _highlighted_position(game_id)
+
+        first_ids = coaching_report.create_drift_puzzles(report_id, [position])
+        second_report_id = _insert_coaching_report(profile_id)
+        second_ids = coaching_report.create_drift_puzzles(second_report_id, [position])
+
+        assert first_ids == second_ids
+
+    def test_ids_align_positionally_even_when_some_already_exist(self):
+        # Regression check: create_drift_puzzles must return one id per
+        # input position in order, not silently drop entries that
+        # INSERT OR IGNORE skipped as already-existing.
+        profile_id, _ = _new_profile_with_username()
+        report_id = _insert_coaching_report(profile_id)
+        game_a, game_b = _insert_game(profile_id), _insert_game(profile_id)
+        pos_a, pos_b = _highlighted_position(game_a, ply=3), _highlighted_position(game_b, ply=7)
+
+        coaching_report.create_drift_puzzles(report_id, [pos_a])  # pos_a already exists now
+        ids = coaching_report.create_drift_puzzles(report_id, [pos_a, pos_b])
+
+        assert len(ids) == 2
+        assert coaching_report.get_drift_puzzle(ids[0])["game_id"] == game_a
+        assert coaching_report.get_drift_puzzle(ids[1])["game_id"] == game_b
+
+
+class TestRecordDriftPuzzleAttempt:
+    def test_correct_attempt_increments_both_counters(self):
+        profile_id, _ = _new_profile_with_username()
+        report_id = _insert_coaching_report(profile_id)
+        game_id = _insert_game(profile_id)
+        puzzle_id = coaching_report.create_drift_puzzles(report_id, [_highlighted_position(game_id)])[0]
+
+        result = coaching_report.record_drift_puzzle_attempt(puzzle_id, "e2", "e4")
+
+        assert result["correct"] is True
+        puzzle = coaching_report.get_drift_puzzle(puzzle_id)
+        assert puzzle["attempts"] == 1
+        assert puzzle["correct"] == 1
+
+    def test_incorrect_attempt_increments_only_attempts(self):
+        profile_id, _ = _new_profile_with_username()
+        report_id = _insert_coaching_report(profile_id)
+        game_id = _insert_game(profile_id)
+        puzzle_id = coaching_report.create_drift_puzzles(report_id, [_highlighted_position(game_id)])[0]
+
+        result = coaching_report.record_drift_puzzle_attempt(puzzle_id, "g1", "f3")
+
+        assert result["correct"] is False
+        puzzle = coaching_report.get_drift_puzzle(puzzle_id)
+        assert puzzle["attempts"] == 1
+        assert puzzle["correct"] == 0
+
+    def test_missing_puzzle_raises_value_error(self):
+        import pytest
+        with pytest.raises(ValueError):
+            coaching_report.record_drift_puzzle_attempt(999999, "e2", "e4")

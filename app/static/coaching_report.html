@@ -369,7 +369,7 @@
 
   function isLightSquare(file, rank) { return (file + rank) % 2 !== 0; }
 
-  function renderMiniBoard(fen) {
+  function renderMiniBoard(fen, boardId) {
     const pieceMap = fenToPieceMap(fen);
     const cells = [];
     for (let rank = 8; rank >= 1; rank--) {
@@ -377,11 +377,76 @@
         const square = `${String.fromCharCode(97 + file)}${rank}`;
         const piece = pieceMap[square];
         cells.push(
-          `<div class="sq ${isLightSquare(file, rank) ? "light" : "dark"}">${piece ? PIECE_GLYPH[piece] : ""}</div>`
+          `<div class="sq ${isLightSquare(file, rank) ? "light" : "dark"}" data-square="${square}">${piece ? PIECE_GLYPH[piece] : ""}</div>`
         );
       }
     }
-    return `<div class="mini-board">${cells.join("")}</div>`;
+    return `<div class="mini-board" ${boardId ? `id="${boardId}"` : ""}>${cells.join("")}</div>`;
+  }
+
+  // --- Practice mode: click-to-select-then-click-to-move on a highlighted
+  // position, answer hidden until an attempt is submitted — turns "here's a
+  // pattern to review" into an actual quiz. See coaching_report.py's own
+  // module comment on why this exists at all (a report that only describes
+  // a pattern is a step short of actually coaching).
+  const practiceSelection = {};
+
+  async function startPractice(puzzleId, cardId) {
+    const card = document.getElementById(cardId);
+    const detail = card.querySelector(".position-detail");
+    const boardWrap = card.querySelector(".mini-board");
+    const boardId = `practice-board-${puzzleId}`;
+    boardWrap.outerHTML = renderMiniBoard(boardWrap.dataset.fen, boardId);
+    detail.innerHTML = `<p class="empty-note">Find the best move — click a piece, then click where it goes.</p>`;
+    practiceSelection[puzzleId] = null;
+
+    const puzzle = await fetch(`/api/drift-puzzles/${puzzleId}`).then(r => r.json());
+    const board = document.getElementById(boardId);
+    board.querySelectorAll(".sq").forEach(sq => {
+      sq.addEventListener("click", () => onPracticeSquareClick(puzzleId, boardId, puzzle, sq.dataset.square, detail));
+    });
+  }
+
+  function onPracticeSquareClick(puzzleId, boardId, puzzle, square, detailEl) {
+    const board = document.getElementById(boardId);
+    const selected = practiceSelection[puzzleId];
+
+    if (!selected) {
+      const hasLegalMoveFrom = puzzle.legal_moves.some(m => m.from === square);
+      if (!hasLegalMoveFrom) return;
+      practiceSelection[puzzleId] = square;
+      board.querySelector(`[data-square="${square}"]`).style.outline = "2px solid var(--accent)";
+      return;
+    }
+
+    board.querySelectorAll(".sq").forEach(sq => sq.style.outline = "");
+    practiceSelection[puzzleId] = null;
+    if (square === selected) return; // clicked the same square twice — deselect only
+
+    submitPracticeAttempt(puzzleId, selected, square, detailEl);
+  }
+
+  async function submitPracticeAttempt(puzzleId, fromSquare, toSquare, detailEl) {
+    const res = await fetch(`/api/drift-puzzles/${puzzleId}/attempt`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: fromSquare, to: toSquare }),
+    });
+    if (!res.ok) {
+      detailEl.innerHTML = `<p class="empty-note">That wasn't a legal move here — try again.</p>`;
+      return;
+    }
+    const result = await res.json();
+    detailEl.innerHTML = `
+      <div style="color:${result.correct ? "var(--status-good)" : "var(--status-critical)"}; font-weight:600;">
+        ${result.correct ? "That holds up." : "Not quite."}
+      </div>
+      <div class="label" style="margin-top:8px;">You played</div>
+      <div>${escapeHtml(result.played_san)} — ${escapeHtml(result.played_explanation || "")}</div>
+      <div class="label" style="margin-top:8px;">Engine's top choice</div>
+      <div><strong>${escapeHtml(result.best_move_san)}</strong> — ${escapeHtml(result.best_move_explanation || "")}</div>
+      <div class="label" style="margin-top:8px;">Close alternatives considered</div>
+      ${result.top_lines.map((line, i) => `<div class="alt-line">${i + 1}. ${escapeHtml(line.move_san)} (${formatEval(line.eval_cp, line.mate_in)})</div>`).join("")}
+    `;
   }
 
   function formatEval(cp, mateIn) {
@@ -420,9 +485,13 @@
 
     const positionsEl = document.getElementById("highlighted-positions");
     positionsEl.innerHTML = report.highlighted_positions.length
-      ? report.highlighted_positions.map(p => `
-          <div class="position-card">
-            ${renderMiniBoard(p.fen_before)}
+      ? report.highlighted_positions.map((p, i) => {
+          const cardId = `position-card-${i}`;
+          const board = renderMiniBoard(p.fen_before);
+          const boardWithFen = board.replace('class="mini-board"', `class="mini-board" data-fen="${p.fen_before}"`);
+          return `
+          <div class="position-card" id="${cardId}">
+            ${boardWithFen}
             <div class="position-detail">
               <div class="label">Played</div>
               <div><strong>${escapeHtml(p.played_move_san)}</strong> — ${escapeHtml(p.played_move_explanation || "")}</div>
@@ -432,9 +501,13 @@
               ${p.close_alternatives.map((line, i) => `
                 <div class="alt-line">${i + 1}. ${escapeHtml(line.move_san)} (${formatEval(line.eval_cp, line.mate_in)})</div>
               `).join("")}
+              ${p.drift_puzzle_id ? `<div class="input-row" style="margin-top:10px;">
+                <button onclick="startPractice(${p.drift_puzzle_id}, '${cardId}')">Practice this position</button>
+              </div>` : ""}
             </div>
           </div>
-        `).join("")
+        `;
+        }).join("")
       : `<p class="empty-note">No drift candidates in a roughly-balanced position turned up in this batch.</p>`;
 
     const checklistEl = document.getElementById("what-to-work-on");

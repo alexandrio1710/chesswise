@@ -1152,6 +1152,50 @@ def _migration_022_coaching_report(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_023_drift_puzzles(conn: sqlite3.Connection) -> None:
+    """Feature — turns a coaching report's highlighted drift positions
+    into puzzles a solver can actually attempt, so the report assigns
+    concrete practice rather than just describing a pattern (see
+    coaching_report.create_drift_puzzles).
+
+    Deliberately a separate table from the existing `puzzles`, not a
+    relaxed version of it: `puzzles.mistake_id` is NOT NULL by design
+    (every existing puzzle traces back to a real, objectively-bad flagged
+    mistake), and a drift candidate is specifically NOT that — it's a
+    close engine decision the played move wasn't wrong to make. Same
+    reasoning `opening_puzzles` already documents for being its own table
+    rather than shoehorned into `puzzles`.
+
+    Self-contained attempt tracking (own attempts/correct counters)
+    rather than wiring into the shared puzzle_attempts/puzzle_review_state/
+    puzzle_progress SRS tables — those FK specifically to puzzles.id, and
+    extending three heavily-used tables to a second, polymorphic source
+    is a bigger, riskier change than this feature's first cut needs. A
+    real scope limit, not an oversight: no spaced-repetition scheduling
+    for these yet, unlike the main puzzle set.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS drift_puzzles (
+            id INTEGER PRIMARY KEY,
+            coaching_report_id INTEGER NOT NULL REFERENCES coaching_reports(id),
+            game_id INTEGER NOT NULL REFERENCES games(id),
+            ply INTEGER NOT NULL,
+            fen_before TEXT NOT NULL,
+            side_to_move TEXT NOT NULL,
+            played_move_san TEXT NOT NULL,
+            played_move_explanation TEXT,
+            best_move_uci TEXT NOT NULL,
+            best_move_san TEXT NOT NULL,
+            best_move_explanation TEXT,
+            top_lines TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            correct INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(game_id, ply)
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1175,6 +1219,7 @@ MIGRATIONS = [
     (20, "Recompute game phase with Lichess's own Divider algorithm", _migration_020_lichess_game_phase_divider),
     (21, "Recompute cached USCF figures with US Chess's real 2024 conversion formula", _migration_021_real_uscf_conversion_formula),
     (22, "Add coaching-report schema: game_moves MultiPV/drift columns, games.repertoire_structure, coaching_reports table", _migration_022_coaching_report),
+    (23, "Add drift_puzzles table for practicing coaching-report highlights", _migration_023_drift_puzzles),
 ]
 
 

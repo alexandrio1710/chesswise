@@ -1,5 +1,34 @@
 # Changelog
 
+## v37 — Coaching Report highlights are now practicable, not just readable
+
+A report that only describes a pattern is a step short of actually
+coaching — a real coach assigns practice. Every highlighted drift
+position now becomes a puzzle: click a piece, click where it goes, and
+find out immediately whether it holds up, with the same grading
+tolerance (within 20cp of best, or matching mate distance) every other
+puzzle in this app already uses (`puzzles.check_attempt`, reused
+directly rather than re-implemented). The answer stays hidden until an
+attempt is submitted, unlike the report's own always-visible explanation
+of the same position.
+
+New `drift_puzzles` table, deliberately separate from the existing
+`puzzles` table rather than a relaxed version of it: every row in
+`puzzles` traces back to a real, objectively-bad flagged mistake
+(`mistake_id NOT NULL` by design), and a drift candidate is specifically
+not that. Same reasoning `opening_puzzles` already established for being
+its own table. Attempt tracking is a pair of counters on the row itself
+for this first cut, not the shared spaced-repetition tables (those FK
+specifically to `puzzles.id`) — a real, documented scope limit, not an
+oversight.
+
+Also fixed a bug caught only by testing the "second run over an
+already-analyzed batch" path live: `run_multipv_pass`'s cached-data
+branch selected columns that didn't include `is_drift_candidate`, which
+the fresh-computation branch never exercises — the exact kind of gap
+unit tests using constructed data can't catch, only a real second
+request against real stored data.
+
 ## v36 — Coaching Report: bulk-batch pattern mining for quiet strategic drift
 
 A new feature built around a specific diagnosed problem, not a generic

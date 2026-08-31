@@ -459,6 +459,16 @@ def verify_can_access_coaching_report(report_id: int, user: dict | None) -> None
     )
 
 
+def verify_can_access_drift_puzzle(puzzle_id: int, user: dict | None) -> None:
+    """Ownership inherited two hops: drift_puzzles -> coaching_reports -> profiles."""
+    _owned_row(
+        "SELECT p.user_id AS owner_user_id FROM drift_puzzles dp "
+        "JOIN coaching_reports cr ON cr.id = dp.coaching_report_id "
+        "JOIN profiles p ON p.id = cr.profile_id WHERE dp.id = ?",
+        (puzzle_id,), "Drift puzzle not found", user,
+    )
+
+
 def verify_can_access_goal(goal_id: int, user: dict | None) -> None:
     """Goals have no owner column either, and aren't required to have a
     profile_id at all (progress.create_goal). No profile, or a profile

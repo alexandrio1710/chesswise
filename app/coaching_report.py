@@ -236,8 +236,8 @@ def run_multipv_pass(game_id: int, pgn_text: str, own_color: str,
     conn = get_connection()
     try:
         move_rows = conn.execute(
-            "SELECT ply, color_moved, eval_before_cp, eval_drop, tier, multipv_lines FROM game_moves "
-            "WHERE game_id = ? ORDER BY ply",
+            "SELECT ply, color_moved, eval_before_cp, eval_drop, tier, multipv_lines, is_drift_candidate "
+            "FROM game_moves WHERE game_id = ? ORDER BY ply",
             (game_id,),
         ).fetchall()
     finally:
@@ -649,6 +649,18 @@ def generate_report(profile_id: int, game_ids: list[int] | None = None, since: s
     report_id, created_at = _persist_report(profile_id, [g["id"] for g in games], report)
     report["id"] = report_id
     report["created_at"] = created_at
+
+    # Puzzles need the report's own id as their FK, so this can only run
+    # after the first persist above — then the stored full_report blob is
+    # updated in place so a LATER view of this same report (via
+    # get_report/history, not just the response right after generating
+    # it) still has drift_puzzle_id on each highlighted position, not just
+    # this in-memory copy.
+    puzzle_ids = create_drift_puzzles(report_id, highlighted_detail)
+    for detail, puzzle_id in zip(highlighted_detail, puzzle_ids):
+        detail["drift_puzzle_id"] = puzzle_id
+    _update_persisted_report(report_id, report)
+
     return report
 
 
@@ -667,6 +679,15 @@ def _persist_report(profile_id: int, game_ids: list[int], report: dict) -> tuple
         )
         conn.commit()
         return cur.lastrowid, created_at
+    finally:
+        conn.close()
+
+
+def _update_persisted_report(report_id: int, report: dict) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE coaching_reports SET full_report = ? WHERE id = ?", (json.dumps(report), report_id))
+        conn.commit()
     finally:
         conn.close()
 
@@ -696,3 +717,91 @@ def list_reports(profile_id: int) -> list[dict]:
         {"id": r["id"], "created_at": r["created_at"], "headline": r["headline"], "game_count": len(json.loads(r["game_ids"]))}
         for r in rows
     ]
+
+
+# --- Drift-position puzzles ----------------------------------------------
+# Turns a report's highlighted positions into puzzles a solver can attempt
+# right there in the report — a coaching report that just describes a
+# pattern is a step short of actually coaching; assigning practice for it
+# is the concrete part. See migration 23's own docstring for why these
+# live in their own table rather than the existing mistake_id-linked
+# `puzzles` table.
+
+def create_drift_puzzles(coaching_report_id: int, highlighted_positions: list[dict]) -> list[int]:
+    """One drift_puzzles row per highlighted position, in the same order
+    as `highlighted_positions` — always returns exactly one id per input
+    position (an already-existing row from an earlier report that
+    highlighted the same game_id/ply is looked up, not skipped), so
+    callers can zip() the result against their own list safely.
+    """
+    conn = get_connection()
+    try:
+        ids = []
+        for p in highlighted_positions:
+            side_to_move = "white" if chess.Board(p["fen_before"]).turn == chess.WHITE else "black"
+            best = p["close_alternatives"][0]
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO drift_puzzles
+                    (coaching_report_id, game_id, ply, fen_before, side_to_move,
+                     played_move_san, played_move_explanation, best_move_uci, best_move_san,
+                     best_move_explanation, top_lines, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                (
+                    coaching_report_id, p["game_id"], p["ply"], p["fen_before"], side_to_move,
+                    p["played_move_san"], p["played_move_explanation"], best["move_uci"], p["best_move_san"],
+                    p["best_move_explanation"], json.dumps(p["close_alternatives"]),
+                ),
+            )
+            if cur.rowcount:
+                ids.append(cur.lastrowid)
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM drift_puzzles WHERE game_id = ? AND ply = ?", (p["game_id"], p["ply"]),
+                ).fetchone()
+                ids.append(existing["id"])
+        conn.commit()
+        return ids
+    finally:
+        conn.close()
+
+
+def get_drift_puzzle(puzzle_id: int) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM drift_puzzles WHERE id = ?", (puzzle_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    d = dict(row)
+    d["top_lines"] = json.loads(d["top_lines"])
+    return d
+
+
+def record_drift_puzzle_attempt(puzzle_id: int, from_square: str, to_square: str) -> dict:
+    """Grades an attempt with the exact same tolerance every other puzzle
+    in this app already uses (puzzles.check_attempt: correct if it's the
+    top choice, or within 20cp / same mate distance as one of the other
+    top-4 lines) — reused directly rather than re-implemented, since it's
+    pure logic over a puzzle-shaped dict, not tied to the `puzzles` table.
+    """
+    from puzzles import check_attempt
+
+    puzzle = get_drift_puzzle(puzzle_id)
+    if puzzle is None:
+        raise ValueError(f"Drift puzzle {puzzle_id} not found")
+
+    result = check_attempt(puzzle, from_square, to_square)
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE drift_puzzles SET attempts = attempts + 1, correct = correct + ? WHERE id = ?",
+            (1 if result["correct"] else 0, puzzle_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return result
