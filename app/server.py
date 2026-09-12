@@ -77,7 +77,10 @@ _LOCAL_KEY = "local"
 
 
 def _empty_refresh_status() -> dict:
-    return {"running": False, "started_at": None, "finished_at": None, "error": None, "result": None}
+    return {
+        "running": False, "started_at": None, "finished_at": None, "error": None, "result": None,
+        "phase": None, "phase_total": None, "phase_done": None,
+    }
 
 
 _refresh_status: dict[object, dict] = {_LOCAL_KEY: _empty_refresh_status()}
@@ -171,19 +174,62 @@ def api_save_settings(settings: SettingsUpdate, user: dict | None = Depends(auth
     return _save_settings_for(user, settings.lichess_user, settings.chesscom_user, settings.lichess_api_token)
 
 
+def _track_progress(key: object, stop: threading.Event, count_remaining) -> None:
+    """Runs in its own thread alongside a long analyze/puzzle-generation
+    phase (both single-threaded and blocking) so /api/refresh/status has
+    something better to report than "running: true" for however long that
+    phase takes — SQLite's WAL mode (see db.py) already lets this poll the
+    DB concurrently with the phase's own writes.
+    """
+    while not stop.is_set():
+        try:
+            _refresh_status[key]["phase_done"] = _refresh_status[key]["phase_total"] - count_remaining()
+        except Exception:
+            pass
+        stop.wait(2)
+
+
+def _run_phase_with_progress(key: object, phase: str, total: int, count_remaining, work) -> None:
+    _refresh_status[key]["phase"] = phase
+    _refresh_status[key]["phase_total"] = total
+    _refresh_status[key]["phase_done"] = 0
+    if total == 0:
+        return work()
+    stop = threading.Event()
+    ticker = threading.Thread(target=_track_progress, args=(key, stop, count_remaining), daemon=True)
+    ticker.start()
+    try:
+        return work()
+    finally:
+        stop.set()
+        ticker.join(timeout=5)
+        _refresh_status[key]["phase_done"] = total
+
+
 def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None) -> None:
-    from batch_analyze import run_batch_analysis
+    from batch_analyze import get_unanalyzed_games, run_batch_analysis
     from db import fetch_and_store
-    from puzzles import generate_all_puzzles
+    from puzzles import generate_all_puzzles, get_mistakes_without_puzzles
 
     try:
+        _refresh_status[key]["phase"] = "fetching"
         result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
+
         # Forced sequential: this thread isn't a `__main__`-guarded
         # script, so spawning a multiprocessing pool from inside a
         # running web server is exactly the kind of thing that works on
         # your machine and breaks on someone else's.
-        newly_analyzed = run_batch_analysis(workers=1)
-        generate_all_puzzles()
+        newly_analyzed = _run_phase_with_progress(
+            key, "analyzing", len(get_unanalyzed_games()),
+            lambda: len(get_unanalyzed_games()),
+            lambda: run_batch_analysis(workers=1),
+        )
+        # Forced sequential for the same reason as run_batch_analysis above.
+        _run_phase_with_progress(
+            key, "generating_puzzles", len(get_mistakes_without_puzzles()),
+            lambda: len(get_mistakes_without_puzzles()),
+            lambda: generate_all_puzzles(workers=1),
+        )
         alerts.send_alerts_for_games(newly_analyzed)
         _refresh_status[key]["result"] = result
         _refresh_status[key]["error"] = None
@@ -192,6 +238,7 @@ def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | Non
         _refresh_status[key]["error"] = str(e)
     finally:
         _refresh_status[key]["running"] = False
+        _refresh_status[key]["phase"] = None
         _refresh_status[key]["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
@@ -222,6 +269,7 @@ def api_trigger_refresh(
     _refresh_status[key] = {
         "running": True, "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None, "error": None, "result": None,
+        "phase": "fetching", "phase_total": None, "phase_done": None,
     }
     threading.Thread(target=_run_refresh, args=(key, lichess_user, chesscom_user), daemon=True).start()
     return {"status": "started"}

@@ -84,7 +84,7 @@ def cmd_refresh(args) -> None:
 def cmd_puzzles(args) -> None:
     from puzzles import generate_all_puzzles
 
-    generate_all_puzzles()
+    generate_all_puzzles(workers=args.workers)
 
 
 def cmd_digest(args) -> None:
@@ -147,6 +147,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_refresh.set_defaults(func=cmd_refresh)
 
     p_puzzles = subparsers.add_parser("puzzles", help="Generate tactics puzzles from flagged mistakes/blunders.")
+    p_puzzles.add_argument("--workers", type=int, default=config.ANALYSIS_WORKERS,
+                            help="parallel Stockfish processes (default: %(default)s)")
     p_puzzles.set_defaults(func=cmd_puzzles)
 
     p_digest = subparsers.add_parser("digest", help="refresh + analyze + post a summary to a Discord webhook.")

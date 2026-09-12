@@ -1,5 +1,48 @@
 # Changelog
 
+## v39 — Fixed a silent multi-hour hang in "Refresh"
+
+A refresh on a large backlog (a bulk historical import, or a long gap
+since the last sync) looked hung: the status text just said "Refreshing…
+this can take a few minutes" no matter how long it actually took, with no
+way to tell it apart from a crash. Reported after a real refresh ran over
+20 minutes with zero feedback and got closed.
+
+Diagnosed by checking on the running background thread directly rather
+than guessing: it hadn't hung at all — fetch and analysis had finished
+in minutes, but it was still grinding, one at a time, through generating
+puzzles for a 998-mistake backlog. Puzzle generation
+(`generate_puzzle_for_mistake`/`get_top_lines`) spawns a whole new
+Stockfish process per puzzle and had never been parallelized, unlike
+`batch_analyze.py`'s per-game analysis, which already uses a
+`ProcessPoolExecutor` for exactly this kind of independent, CPU-bound,
+one-item-at-a-time work. At the observed ~22s/puzzle that projected to
+nearly 6 hours for the full backlog.
+
+Two fixes, not one, since progress reporting alone wouldn't have made a
+6-hour wait acceptable, and parallelizing alone wouldn't have fixed the
+next backlog that's still too big to finish while someone's watching:
+
+- `generate_all_puzzles()` now takes a `workers` argument and parallelizes
+  the same way `run_batch_analysis()` already does (a picklable top-level
+  worker function that re-opens its own DB connection, since neither a
+  `sqlite3.Connection` nor a `sqlite3.Row` crosses a process boundary).
+  `cli.py puzzles` now defaults to `ANALYSIS_WORKERS` parallel workers —
+  verified end-to-end on the real 771-puzzle backlog left over from this
+  bug: 4m49s with 4 workers and zero failures, versus a projected several
+  hours single-threaded. The web-triggered refresh path (and the
+  per-game Celery task in `tasks.py`) still force `workers=1`, same
+  reasoning `run_batch_analysis`'s web call already documented: spawning
+  a process pool from a thread that isn't `__main__`-guarded is asking
+  for Windows-specific trouble.
+- `/api/refresh/status` now reports which phase it's in (fetching /
+  analyzing / generating puzzles) and a live done/total count for
+  whichever phase is running, polled from a lightweight side thread
+  rather than threaded through `batch_analyze.py`/`puzzles.py`'s own
+  signatures. The Settings panel shows the real phase and count instead
+  of a static time estimate that was already wrong for anything beyond a
+  small day-to-day sync.
+
 ## v38 — A free, local chat coach for the Coaching Report
 
 The Coaching Report was still a one-way document — you could read its

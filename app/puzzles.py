@@ -12,13 +12,15 @@ don't have one yet.
 import io
 import json
 import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
 import chess
 import chess.engine
 import chess.pgn
 
 from analysis import get_engine
-from config import PUZZLE_DEPTH, PUZZLE_TOP_LINES, STOCKFISH_MAX_SECONDS_PER_POSITION
+from config import ANALYSIS_WORKERS, PUZZLE_DEPTH, PUZZLE_TOP_LINES, STOCKFISH_MAX_SECONDS_PER_POSITION
 from db import get_connection, get_pgn
 
 logger = logging.getLogger(__name__)
@@ -200,7 +202,43 @@ def get_mistakes_without_puzzles() -> list:
         conn.close()
 
 
-def generate_all_puzzles() -> None:
+def _generate_one(mistake_id: int) -> tuple[int, str, str | None]:
+    """Worker-process entry point, mirroring batch_analyze._analyze_one:
+    a plain top-level function (picklable on every platform, including
+    Windows) that re-fetches its own row/PGN and opens its own DB
+    connection rather than receiving them from the parent, since none of
+    those cross a process boundary.
+
+    Returns (mistake_id, status, error) where status is "ok" or "failed"
+    (error holds the message; None on success).
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM mistakes WHERE id = ?", (mistake_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return (mistake_id, "failed", "mistake row no longer exists")
+
+    try:
+        puzzle = generate_puzzle_for_mistake(row, get_pgn(row["game_id"]))
+        store_puzzle(puzzle)
+    except Exception as e:
+        return (mistake_id, "failed", str(e))
+    return (mistake_id, "ok", None)
+
+
+def generate_all_puzzles(workers: int = ANALYSIS_WORKERS) -> None:
+    """Generates a puzzle for every mistake/blunder that doesn't have one
+    yet. Each puzzle needs its own full Stockfish process (spawned and
+    torn down per call, see get_top_lines/get_engine) plus a real
+    depth-`PUZZLE_DEPTH` multi-line search — independent, CPU-bound work
+    per mistake, same shape as batch_analyze.run_batch_analysis's
+    per-game analysis, so it parallelizes the same way for the same
+    reason: a large one-time backlog (e.g. after importing years of
+    history) at one puzzle per several seconds otherwise projects to
+    hours single-threaded.
+    """
     todo = get_mistakes_without_puzzles()
     total = len(todo)
 
@@ -209,34 +247,67 @@ def generate_all_puzzles() -> None:
                      "or run batch_analyze.py first if mistakes are missing `ply` data).")
         return
 
-    logger.info(f"Generating {total} puzzle(s) at depth {PUZZLE_DEPTH}...")
+    # Parallelism only pays for itself once there's more than a couple of
+    # mistakes — process startup overhead would dominate a batch of 1-2
+    # (tasks.py's per-game call after a single game's analysis is
+    # typically this small).
+    workers = max(1, workers)
+    if total <= 1:
+        workers = 1
 
-    pgn_cache: dict[int, str] = {}
+    logger.info(f"Generating {total} puzzle(s) at depth {PUZZLE_DEPTH} with {workers} worker(s)...")
+
     generated = 0
     failed = 0
 
-    for i, row in enumerate(todo, start=1):
-        game_id = row["game_id"]
-        try:
-            if game_id not in pgn_cache:
-                pgn_cache[game_id] = get_pgn(game_id)
-            puzzle = generate_puzzle_for_mistake(row, pgn_cache[game_id])
-            store_puzzle(puzzle)
-            generated += 1
-        except Exception as e:
-            # get_pgn() used to run outside this try block — a failure
-            # fetching ANY one game's PGN (a deleted row, a DB hiccup)
-            # aborted this whole function for every OTHER mistake/game
-            # still queued behind it, not just the one that failed. Since
-            # tasks.py calls this after every single game's analysis
-            # (regardless of which game), that misattributed an unrelated
-            # failure onto whichever game happened to trigger this run.
-            failed += 1
-            logger.warning(f"Puzzle generation failed for mistake_id={row['id']} (game_id={game_id}): {e}")
-            continue
+    if workers == 1:
+        pgn_cache: dict[int, str] = {}
+        for i, row in enumerate(todo, start=1):
+            game_id = row["game_id"]
+            try:
+                if game_id not in pgn_cache:
+                    pgn_cache[game_id] = get_pgn(game_id)
+                puzzle = generate_puzzle_for_mistake(row, pgn_cache[game_id])
+                store_puzzle(puzzle)
+                generated += 1
+            except Exception as e:
+                # get_pgn() used to run outside this try block — a failure
+                # fetching ANY one game's PGN (a deleted row, a DB hiccup)
+                # aborted this whole function for every OTHER mistake/game
+                # still queued behind it, not just the one that failed. Since
+                # tasks.py calls this after every single game's analysis
+                # (regardless of which game), that misattributed an unrelated
+                # failure onto whichever game happened to trigger this run.
+                failed += 1
+                logger.warning(f"Puzzle generation failed for mistake_id={row['id']} (game_id={game_id}): {e}")
+                continue
 
-        if i % 10 == 0 or i == total:
-            logger.info(f"{i}/{total} processed ({generated} generated, {failed} failed)")
+            if i % 10 == 0 or i == total:
+                logger.info(f"{i}/{total} processed ({generated} generated, {failed} failed)")
+        return
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_generate_one, row["id"]): row for row in todo}
+        for i, future in enumerate(as_completed(futures), start=1):
+            row = futures[future]
+            try:
+                _, status, error = future.result()
+            except BrokenProcessPool as e:
+                # Same tradeoff as run_batch_analysis: a worker died at the
+                # OS level rather than raising a normal exception. Leave
+                # this one for the next run rather than crashing the batch.
+                logger.warning(
+                    f"Worker process died generating a puzzle for mistake_id={row['id']}: {e}. "
+                    "Leaving it for the next run."
+                )
+                status, error = "failed", str(e)
+            if status == "failed":
+                failed += 1
+                logger.warning(f"Puzzle generation failed for mistake_id={row['id']} (game_id={row['game_id']}): {error}")
+            else:
+                generated += 1
+            if i % 10 == 0 or i == total:
+                logger.info(f"{i}/{total} processed ({generated} generated, {failed} failed)")
 
     logger.info(f"Done. {generated} puzzles generated, {failed} failed.")
 

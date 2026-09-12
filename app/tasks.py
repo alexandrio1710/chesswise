@@ -53,7 +53,12 @@ def analyze_game_task(self, game_id: int, user_id: int, depth: int = STOCKFISH_D
         pgn_text = get_pgn(game_id)
         flagged = analyze_and_store_game(game_id, pgn_text, depth=depth)
         if flagged:
-            generate_all_puzzles()
+            # Sequential: this already runs inside a Celery worker process,
+            # so a nested ProcessPoolExecutor here would be spawning a pool
+            # of processes from within a pool of processes — untested
+            # combination, and a single game's mistakes aren't enough
+            # mistakes for parallelism to pay for itself anyway.
+            generate_all_puzzles(workers=1)
         _set_status(game_id, "completed")
         return {"game_id": game_id, "mistakes_flagged": len(flagged) if flagged else 0}
     except Exception as e:

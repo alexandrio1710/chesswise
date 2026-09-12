@@ -1060,7 +1060,16 @@
     const status = await res.json();
 
     if (status.running) {
-      statusEl.textContent = "Refreshing… this can take a few minutes.";
+      const PHASE_LABEL = {
+        fetching: "Fetching games…",
+        analyzing: "Analyzing games with Stockfish…",
+        generating_puzzles: "Generating puzzles from flagged mistakes…",
+      };
+      let text = PHASE_LABEL[status.phase] || "Refreshing…";
+      if (status.phase_total) {
+        text += ` (${status.phase_done ?? 0}/${status.phase_total})`;
+      }
+      statusEl.textContent = text + " This can take a while on a large first-time sync — safe to leave this tab open in the background.";
       setTimeout(() => pollRefreshStatus(onDone), 3000);
     } else if (status.error) {
       statusEl.textContent = `Refresh failed: ${status.error}`;
