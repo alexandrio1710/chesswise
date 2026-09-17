@@ -1,5 +1,52 @@
 # Changelog
 
+## v40 — Replaced the inflated "estimated rating" with a self-calibrated one
+
+Reported as grossly inflated. Root cause wasn't a bug in the arithmetic —
+it was the whole approach: ACPL_RATING_ANCHORS was a fixed table
+"calibrated by eye against commonly-cited ballpark ACPL ranges," a known
+failure mode of naive ACPL-to-rating tables in general. In an ordinary
+game between two similarly-matched humans, low ACPL is easy to rack up in
+quiet positions regardless of either player's real rating — the engine
+agrees with almost any reasonable developing move there. What actually
+separates a 1400 from a 2200 concentrates in rare sharp/critical moments,
+not evenly across every move the way a flat curve assumes. (Real academic
+work on this — Kenneth Regan's Intrinsic Performance Ratings — models
+skill that way properly, but its fitted parameters were never published,
+so there was nothing to port the way USCF's real conversion formula
+already was.)
+
+Replaced it with per-profile self-calibration instead of a universal
+guess: `game_report.estimate_performance_rating()` now fits a real linear
+regression of this profile's own historical rating (`games.player_rating`
+— real numbers from Lichess/chess.com's own rating systems) against
+their own time-control-adjusted ACPL in their other analyzed+rated games,
+then reads this game's rating off that line. Verified against the real
+database: previously-cached reports that would have shown ~2000+ for
+ordinary club-level ACPL now land within roughly 100 points of the
+player's actual rating at the time (e.g. 1429 estimated vs. 1521 real).
+Below `MIN_CALIBRATION_GAMES` (8) real data points, or with no real ACPL
+variance to fit a line against, this returns `None` rather than a guess —
+a profile without enough history yet simply won't show a number, same
+principle `stats.compute_game_accuracy` already follows below its own
+minimum sample size. A new migration (24) recomputes every already-cached
+report from data already on disk, no Stockfish re-run needed.
+
+Also ran an independent sanity check on the underlying engine numbers
+themselves, not just the formula: pulled a handful of real positions from
+one of the tracked player's own analyzed Lichess games and queried
+Lichess's public cloud-eval API (community-contributed, often far deeper
+than this app's local depth-15 pass) for the same exact FENs. Every
+position that had a cached community evaluation agreed with this app's
+own local Stockfish eval in both sign and rough magnitude (e.g. +9cp vs.
++18cp, +35cp vs. +15cp, 0cp vs. +3cp) — consistent with ordinary
+depth-vs-depth engine variance in near-equal positions, not a systematic
+discrepancy. Combined with the accuracy formula already being a verified,
+direct port of Lichess's own published source, this is real evidence
+(not just a code-level argument) that this app's game analysis is
+consistent with what Lichess's own analysis would produce for the same
+game.
+
 ## v39 — Fixed a silent multi-hour hang in "Refresh"
 
 A refresh on a large backlog (a bulk historical import, or a long gap

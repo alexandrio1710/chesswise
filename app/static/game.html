@@ -671,7 +671,7 @@
     body.innerHTML = `
       <div class="report-grid">
         ${data.estimated_rating != null ? `
-          <div class="report-stat">
+          <div class="report-stat" title="Fit from your own rating history (real Lichess/chess.com ratings vs. your ACPL in other analyzed games) — not a universal ACPL-to-rating guess, and not shown until you have enough analyzed games to fit against.">
             <div class="value">${data.estimated_rating}</div>
             <div class="label">Estimated rating</div>
             ${data.estimated_rating_uscf != null ? `<div class="sublabel">~${data.estimated_rating_uscf} USCF</div>` : ""}

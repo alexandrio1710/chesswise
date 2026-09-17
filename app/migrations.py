@@ -1196,6 +1196,159 @@ def _migration_023_drift_puzzles(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_024_self_calibrated_rating(conn: sqlite3.Connection) -> None:
+    """Fix — game_report.estimate_performance_rating() previously fed ACPL
+    through a fixed anchor table "calibrated by eye against commonly-cited
+    ballpark ACPL ranges," confirmed grossly inflated in practice. Replaced
+    with a linear fit of each profile's own real rating history
+    (games.player_rating) against their own time-control-adjusted ACPL in
+    their other analyzed+rated games — see game_report.py's own comment
+    above estimate_performance_rating for why a universal table is the
+    wrong shape for this in the first place. Below MIN_CALIBRATION_GAMES
+    real data points this now returns None (no number) rather than a
+    guess, so a profile without enough history yet simply won't show one.
+
+    Self-contained rather than importing game_report.py, same reasoning
+    migrations 17/18 already document: a migration should encode a fixed,
+    point-in-time transformation, not a live dependency on application
+    code that could change under it later.
+
+    Recomputes estimated_rating (and the summary sentence that quotes it)
+    for every already-cached game_reports row from data already on disk —
+    game_moves.eval_drop for each game's ACPL, games.player_rating/
+    time_control/profile_id for the calibration — without re-running
+    Stockfish, same as migration 18.
+    """
+    ACPL_TIME_CONTROL_DIVISOR = {
+        "bullet": 1.5, "blitz": 1.25, "rapid": 1.1, "classical": 1.0, "daily": 1.0,
+    }
+    MIN_CALIBRATION_GAMES = 8
+    USCF_CONVERSION_BREAKPOINT = 2000
+    USCF_CONVERSION_LOW = (932, 0.564)
+    USCF_CONVERSION_HIGH = (20, 1.02)
+
+    def adjusted_acpl(acpl, time_control):
+        return acpl / ACPL_TIME_CONTROL_DIVISOR.get(time_control, 1.0)
+
+    def fit_linear(pairs):
+        n = len(pairs)
+        mean_x = sum(x for x, _ in pairs) / n
+        mean_y = sum(y for _, y in pairs) / n
+        var_x = sum((x - mean_x) ** 2 for x, _ in pairs)
+        if var_x == 0:
+            return None
+        cov_xy = sum((x - mean_x) * (y - mean_y) for x, y in pairs)
+        slope = cov_xy / var_x
+        return slope, mean_y - slope * mean_x
+
+    def estimate_rating(acpl, calibration):
+        if calibration is None:
+            return None
+        pairs, mean_y = calibration
+        fit = fit_linear(pairs)
+        if fit is None or fit[0] > 0:
+            return round(mean_y)
+        slope, intercept = fit
+        return max(0, round(intercept + slope * acpl))
+
+    def uscf_from_estimated_rating(estimated_rating):
+        if estimated_rating is None:
+            return None
+        base, slope = (
+            USCF_CONVERSION_LOW if estimated_rating <= USCF_CONVERSION_BREAKPOINT else USCF_CONVERSION_HIGH
+        )
+        return max(0, round(base + slope * estimated_rating))
+
+    def build_summary(accuracy, rating, rating_uscf, tier_counts, phase_accuracy):
+        if accuracy is None:
+            return "Not enough analyzed moves to summarize this game."
+        parts = [f"You played this game at {accuracy}% accuracy"]
+        parts[0] += (
+            f", in line with a rating of about {rating} based on your own game history (~{rating_uscf} USCF)."
+            if rating else "."
+        )
+        brilliant = tier_counts.get("brilliant", 0)
+        if brilliant:
+            parts.append(f"You found {brilliant} brilliant move{'s' if brilliant != 1 else ''}.")
+        great = tier_counts.get("great", 0)
+        if great:
+            parts.append(f"{great} great move{'s' if great != 1 else ''} held the position together in a sharp moment.")
+        miss = tier_counts.get("miss", 0)
+        if miss:
+            parts.append(f"You missed {miss} winning tactic{'s' if miss != 1 else ''} — worth reviewing in Puzzles.")
+        present = {p: a for p, a in phase_accuracy.items() if a is not None}
+        if len(present) > 1:
+            weakest = min(present, key=present.get)
+            parts.append(f"Your {weakest} was the weakest phase this game ({present[weakest]}% accuracy).")
+        return " ".join(parts)
+
+    # One (adjusted ACPL, real rating) point per rated+analyzed game,
+    # grouped by profile — the calibration data, gathered once up front
+    # rather than re-queried per report below.
+    calibration_rows = conn.execute("""
+        SELECT g.profile_id, g.time_control, g.player_rating, AVG(gm.eval_drop) AS acpl,
+               COUNT(gm.eval_drop) AS n
+        FROM games g
+        JOIN game_moves gm ON gm.game_id = g.id AND gm.color_moved = g.color
+        WHERE g.analyzed = 1 AND g.player_rating IS NOT NULL AND gm.eval_drop IS NOT NULL
+        GROUP BY g.id
+        HAVING n >= 2
+    """).fetchall()
+
+    pairs_by_profile: dict = {}
+    for r in calibration_rows:
+        pairs_by_profile.setdefault(r["profile_id"], []).append(
+            (adjusted_acpl(r["acpl"], r["time_control"]), r["player_rating"])
+        )
+    calibration_by_profile = {
+        profile_id: (pairs, sum(y for _, y in pairs) / len(pairs))
+        for profile_id, pairs in pairs_by_profile.items()
+        if len(pairs) >= MIN_CALIBRATION_GAMES
+    }
+
+    rows = conn.execute(
+        """
+        SELECT gr.game_id, gr.estimated_rating, gr.accuracy_overall, gr.accuracy_opening,
+               gr.accuracy_middlegame, gr.accuracy_endgame, gr.tier_counts,
+               g.time_control, g.color, g.profile_id
+        FROM game_reports gr JOIN games g ON g.id = gr.game_id
+        """
+    ).fetchall()
+
+    for row in rows:
+        move_rows = conn.execute(
+            "SELECT eval_drop FROM game_moves WHERE game_id = ? AND color_moved = ? AND eval_drop IS NOT NULL",
+            (row["game_id"], row["color"]),
+        ).fetchall()
+        drops = [m["eval_drop"] for m in move_rows]
+        acpl = sum(drops) / len(drops) if len(drops) >= 2 else None
+
+        if acpl is None:
+            new_rating = None
+        else:
+            new_rating = estimate_rating(
+                adjusted_acpl(acpl, row["time_control"]), calibration_by_profile.get(row["profile_id"]),
+            )
+
+        if new_rating == row["estimated_rating"]:
+            continue
+
+        new_rating_uscf = uscf_from_estimated_rating(new_rating)
+        phase_accuracy = {
+            "opening": row["accuracy_opening"],
+            "middlegame": row["accuracy_middlegame"],
+            "endgame": row["accuracy_endgame"],
+        }
+        summary = build_summary(
+            row["accuracy_overall"], new_rating, new_rating_uscf,
+            json.loads(row["tier_counts"]), phase_accuracy,
+        )
+        conn.execute(
+            "UPDATE game_reports SET estimated_rating = ?, summary = ? WHERE game_id = ?",
+            (new_rating, summary, row["game_id"]),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1220,6 +1373,8 @@ MIGRATIONS = [
     (21, "Recompute cached USCF figures with US Chess's real 2024 conversion formula", _migration_021_real_uscf_conversion_formula),
     (22, "Add coaching-report schema: game_moves MultiPV/drift columns, games.repertoire_structure, coaching_reports table", _migration_022_coaching_report),
     (23, "Add drift_puzzles table for practicing coaching-report highlights", _migration_023_drift_puzzles),
+    (24, "Replace the inflated ACPL-anchor rating estimate with a per-profile self-calibrated fit",
+     _migration_024_self_calibrated_rating),
 ]
 
 

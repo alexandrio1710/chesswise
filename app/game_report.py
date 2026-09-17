@@ -67,34 +67,97 @@ MISS_MIN_PRIOR_ADVANTAGE_CP = 150
 
 
 # --- Estimated performance rating -------------------------------------------
-# Piecewise-linear interpolation between (ACPL, rating) anchor points. This
-# is NOT a statistically fitted model — it's a rough, documented
-# approximation following the well-known *direction* of the relationship
-# between average centipawn loss and playing strength (stronger players
-# lose fewer centipawns per move on average), calibrated by eye against
-# commonly-cited ballpark ACPL ranges per rating band, not against a real
-# dataset. Treat the output as "roughly what strength this one game's move
-# quality resembles", not a measurement of the player's actual rating —
-# a single game's small sample size and the engine's own move-to-move
-# noise make it noisy by nature, same caveat stats.compute_game_accuracy
-# already carries for the accuracy score this rating is derived alongside.
-ACPL_RATING_ANCHORS = [
-    (10, 2700), (20, 2400), (35, 2200), (50, 2000), (70, 1800),
-    (100, 1600), (140, 1400), (190, 1200), (250, 1000), (350, 800), (500, 600),
-]
+# Previously a piecewise-linear ACPL-to-rating anchor table, "calibrated by
+# eye against commonly-cited ballpark ACPL ranges" rather than any real
+# dataset — and confirmed grossly inflated in practice. That's not a coding
+# bug so much as a known failure mode of naive ACPL-to-rating tables in
+# general: in an ordinary game between two similarly-matched humans, low
+# ACPL is easy to rack up in quiet positions regardless of either player's
+# real rating, because the engine agrees with almost any reasonable
+# developing move there. What actually separates a 1400 from a 2200 is
+# concentrated in the rare sharp/critical moments, not spread evenly across
+# every move the way a flat ACPL curve assumes — real work on this
+# (Kenneth Regan's Intrinsic Performance Ratings) models skill that way
+# properly, but its fitted parameters were never published, so there's no
+# real formula to port here the way USCF's conversion formula above is.
+#
+# Replaced with per-player self-calibration instead of a universal table:
+# fit a simple linear regression of this player's own real historical
+# rating (games.player_rating, straight from Lichess/chess.com's own
+# rating system) against their own time-control-adjusted ACPL in every
+# OTHER analyzed+rated game on this profile, then read this game's rating
+# off that line. This can't run away to a generic table's inflated range —
+# it's anchored to what this exact player's ACPL has actually corresponded
+# to for them — and it answers a fundamentally easier, better-posed
+# question than "guess an absolute rating from one game's ACPL with no
+# other context." Needs real variance to fit against: below
+# MIN_CALIBRATION_GAMES this returns None (no number) rather than falling
+# back to a guess, same as stats.compute_game_accuracy already does below
+# its own minimum sample size.
+MIN_CALIBRATION_GAMES = 8
 
 
-def estimate_performance_rating(acpl: float) -> int:
-    anchors = ACPL_RATING_ANCHORS
-    if acpl <= anchors[0][0]:
-        return anchors[0][1]
-    if acpl >= anchors[-1][0]:
-        return anchors[-1][1]
-    for (acpl_lo, rating_lo), (acpl_hi, rating_hi) in zip(anchors, anchors[1:]):
-        if acpl_lo <= acpl <= acpl_hi:
-            frac = (acpl - acpl_lo) / (acpl_hi - acpl_lo)
-            return round(rating_lo + frac * (rating_hi - rating_lo))
-    return anchors[-1][1]  # unreachable given the bounds checks above
+def _rating_calibration_pairs(profile_id: int | None) -> list[tuple[float, int]]:
+    """(time-control-adjusted ACPL, real rating) for every analyzed game
+    on this profile with both a real games.player_rating and at least 2
+    own moves with a computed eval_drop — the data estimate_performance_
+    rating fits against instead of a universal table. Scoped to one
+    profile: different profiles are different real people (or the same
+    person's separate accounts), and one person's ACPL-to-rating
+    relationship says nothing about another's.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT g.time_control, g.player_rating, AVG(gm.eval_drop) AS acpl,
+                   COUNT(gm.eval_drop) AS n
+            FROM games g
+            JOIN game_moves gm ON gm.game_id = g.id AND gm.color_moved = g.color
+            WHERE g.analyzed = 1 AND g.player_rating IS NOT NULL AND gm.eval_drop IS NOT NULL
+                AND g.profile_id IS ?
+            GROUP BY g.id
+            HAVING n >= 2
+            """,
+            (profile_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [(_time_control_adjusted_acpl(r["acpl"], r["time_control"]), r["player_rating"]) for r in rows]
+
+
+def _fit_linear(pairs: list[tuple[float, int]]) -> tuple[float, float] | None:
+    """Least-squares slope/intercept for rating = slope*acpl + intercept.
+    None if there's no real ACPL variance to fit a line against (e.g.
+    every calibration game landed at nearly the same ACPL) — the caller
+    falls back to this player's plain average rating instead.
+    """
+    n = len(pairs)
+    mean_x = sum(x for x, _ in pairs) / n
+    mean_y = sum(y for _, y in pairs) / n
+    var_x = sum((x - mean_x) ** 2 for x, _ in pairs)
+    if var_x == 0:
+        return None
+    cov_xy = sum((x - mean_x) * (y - mean_y) for x, y in pairs)
+    slope = cov_xy / var_x
+    return slope, mean_y - slope * mean_x
+
+
+def estimate_performance_rating(acpl: float, profile_id: int | None) -> int | None:
+    pairs = _rating_calibration_pairs(profile_id)
+    if len(pairs) < MIN_CALIBRATION_GAMES:
+        return None
+
+    mean_rating = sum(y for _, y in pairs) / len(pairs)
+    fit = _fit_linear(pairs)
+    # A positive slope (worse ACPL correlating with a HIGHER rating) is
+    # backwards — a noisy fit off too few/too uniform points, not a real
+    # relationship. This player's own plain average rating is still real
+    # signal in that case, just not a curve worth trusting.
+    if fit is None or fit[0] > 0:
+        return round(mean_rating)
+    slope, intercept = fit
+    return max(0, round(intercept + slope * acpl))
 
 
 # ACPL_RATING_ANCHORS' ballpark ACPL-to-rating folklore implicitly assumes
@@ -132,10 +195,11 @@ def _time_control_adjusted_acpl(acpl: float, time_control: str | None) -> float:
 # US Chess's own stated purpose for this formula is converting a *real*
 # FIDE tournament rating into an equivalent US Chess one (e.g. assigning
 # an initial rating to a new US Chess player who already has FIDE
-# results) — this project's estimated_rating is instead an ACPL-derived
-# guess already calibrated to "feel like" that same kind of Elo-ish
-# figure (see ACPL_RATING_ANCHORS above), not a rating from real games,
-# so treat the USCF figure this produces with that same grain of salt.
+# results) — this project's estimated_rating is instead this game's ACPL
+# read off a line fit to THIS player's own real rating history (see
+# estimate_performance_rating below), which is a real-data-grounded
+# estimate but still a single game's noisy sample, so treat the USCF
+# figure this produces with that same grain of salt.
 USCF_CONVERSION_BREAKPOINT = 2000
 USCF_CONVERSION_LOW = (932, 0.564)   # FIDE <= 2000: 932 + 0.564*FIDE
 USCF_CONVERSION_HIGH = (20, 1.02)    # FIDE > 2000:  20 + 1.02*FIDE
@@ -400,7 +464,10 @@ def _build_summary(accuracy: float | None, rating: int | None, rating_uscf: int 
         return "Not enough analyzed moves to summarize this game."
 
     parts = [f"You played this game at {accuracy}% accuracy"]
-    parts[0] += f", roughly the move quality of a {rating}-rated player (about {rating_uscf} USCF)." if rating else "."
+    parts[0] += (
+        f", in line with a rating of about {rating} based on your own game history (~{rating_uscf} USCF)."
+        if rating else "."
+    )
 
     brilliant = tier_counts.get("brilliant", 0)
     if brilliant:
@@ -488,7 +555,9 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     # filtered to one color the way overall_acpl/estimated_rating are.
     accuracy_overall = stats.compute_game_accuracy(all_moves, game["color"])
     estimated_rating = (
-        estimate_performance_rating(_time_control_adjusted_acpl(overall_acpl, game["time_control"]))
+        estimate_performance_rating(
+            _time_control_adjusted_acpl(overall_acpl, game["time_control"]), game["profile_id"],
+        )
         if overall_acpl is not None else None
     )
     estimated_rating_uscf = _uscf_from_estimated_rating(estimated_rating)

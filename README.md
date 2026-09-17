@@ -31,7 +31,7 @@ trend tracking.
   opposite-side-castling detection) plus a real-engine integration test,
   running on every push via CI.
 - A numbered schema-migration system with automatic pre-migration
-  backups — 23 migrations shipped over the project's life without losing
+  backups — 24 migrations shipped over the project's life without losing
   data.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full, detailed history of *why*
