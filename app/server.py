@@ -38,7 +38,7 @@ import srs
 import srs_sm2
 import stats
 import tablebase
-from config import SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
+from config import ANALYSIS_WORKERS, SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
 from db import get_connection
 
 # Celery/Redis (Web platform, Section 4) are optional infrastructure — only
@@ -176,10 +176,11 @@ def api_save_settings(settings: SettingsUpdate, user: dict | None = Depends(auth
 
 def _track_progress(key: object, stop: threading.Event, count_remaining) -> None:
     """Runs in its own thread alongside a long analyze/puzzle-generation
-    phase (both single-threaded and blocking) so /api/refresh/status has
-    something better to report than "running: true" for however long that
-    phase takes — SQLite's WAL mode (see db.py) already lets this poll the
-    DB concurrently with the phase's own writes.
+    phase (itself a blocking call out to a ProcessPoolExecutor) so
+    /api/refresh/status has something better to report than "running:
+    true" for however long that phase takes — SQLite's WAL mode (see
+    db.py) already lets this poll the DB concurrently with the worker
+    processes' own writes.
     """
     while not stop.is_set():
         try:
@@ -207,6 +208,22 @@ def _run_phase_with_progress(key: object, phase: str, total: int, count_remainin
 
 
 def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None) -> None:
+    """Runs the analyze/puzzle-generation phases at full ANALYSIS_WORKERS
+    parallelism, spawned from this background thread — not forced
+    sequential the way an earlier version of this function was. The
+    concern that used to justify workers=1 here (a ProcessPoolExecutor
+    started from a thread in a process that isn't a `__main__`-guarded
+    script "works on your machine, breaks on someone else's" on Windows)
+    turned out to not apply to this app's actual launch shape: the
+    picklable worker functions (batch_analyze._analyze_one,
+    puzzles._generate_one) live in their own real modules, not inline in
+    `__main__`/server.py, so a spawned child never needs to re-execute
+    anything from this module to find them. Verified directly on a real
+    291-puzzle backlog through this exact code path (Windows, launched via
+    `-m uvicorn` like this app's own launch config): no errors, no
+    duplicate processes, correct final state, ~2 minutes instead of the
+    hour-plus workers=1 would have taken.
+    """
     from batch_analyze import get_unanalyzed_games, run_batch_analysis
     from db import fetch_and_store
     from puzzles import generate_all_puzzles, get_mistakes_without_puzzles
@@ -215,20 +232,15 @@ def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | Non
         _refresh_status[key]["phase"] = "fetching"
         result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
 
-        # Forced sequential: this thread isn't a `__main__`-guarded
-        # script, so spawning a multiprocessing pool from inside a
-        # running web server is exactly the kind of thing that works on
-        # your machine and breaks on someone else's.
         newly_analyzed = _run_phase_with_progress(
             key, "analyzing", len(get_unanalyzed_games()),
             lambda: len(get_unanalyzed_games()),
-            lambda: run_batch_analysis(workers=1),
+            lambda: run_batch_analysis(workers=ANALYSIS_WORKERS),
         )
-        # Forced sequential for the same reason as run_batch_analysis above.
         _run_phase_with_progress(
             key, "generating_puzzles", len(get_mistakes_without_puzzles()),
             lambda: len(get_mistakes_without_puzzles()),
-            lambda: generate_all_puzzles(workers=1),
+            lambda: generate_all_puzzles(workers=ANALYSIS_WORKERS),
         )
         alerts.send_alerts_for_games(newly_analyzed)
         _refresh_status[key]["result"] = result
@@ -562,11 +574,14 @@ class CoachingImportRequest(BaseModel):
 
 
 def _run_coaching_import(profile_id: int, pgn_text: str, default_color: str | None) -> None:
+    """Runs at full ANALYSIS_WORKERS parallelism from this background
+    thread — see _run_refresh's own docstring for why that's safe here.
+    """
     from batch_analyze import run_batch_analysis
 
     try:
         result = coaching_report.bulk_import_pgn(pgn_text, profile_id, default_color)
-        run_batch_analysis(workers=1)  # forced sequential — see _run_refresh's own comment
+        run_batch_analysis(workers=ANALYSIS_WORKERS)
         _coaching_import_jobs[profile_id]["result"] = result
         _coaching_import_jobs[profile_id]["error"] = None
     except Exception as e:

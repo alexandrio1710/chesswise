@@ -1,5 +1,31 @@
 # Changelog
 
+## v43 — Refresh now actually uses its available CPU cores
+
+Reported as still stupidly slow even after v39's progress-reporting fix.
+That fix made the wait visible; it didn't make it shorter — the web
+refresh's analyze and puzzle-generation phases were still forced to
+`workers=1`, on the theory that spawning a `ProcessPoolExecutor` from a
+background thread inside a process that isn't a `__main__`-guarded
+script is exactly the kind of thing that "works on your machine, breaks
+on someone else's" on Windows (the standard warning about Windows'
+`spawn` start method needing to re-import `__main__` in each worker).
+
+Tested it directly instead of leaving the caution in place indefinitely:
+switched both phases to real `ANALYSIS_WORKERS` parallelism and ran an
+actual refresh through this exact code path — Windows, launched via
+`-m uvicorn` the same way this app's own launch config does — against a
+real 291-puzzle backlog. No errors, no duplicate processes, correct final
+state (verified: zero duplicate puzzle rows), ~2 minutes instead of the
+hour-plus `workers=1` was projecting. The theoretical concern turned out
+not to apply to this app's actual shape: the picklable worker functions
+(`batch_analyze._analyze_one`, `puzzles._generate_one`) live in their own
+real modules, not inline in `server.py`/`__main__`, so a spawned worker
+never needs to re-execute anything from the web server module to find
+them. Also fixed the same forced-`workers=1` pattern in the Coaching
+Report's bulk-PGN-import path, which hits the identical bottleneck on a
+larger scale (importing many games at once).
+
 ## v42 — Removed the per-game "estimated rating" entirely
 
 Reported as still implausible immediately after v41: a 1425 estimate on a
