@@ -1,18 +1,24 @@
 """
-Game Report — full ten-tier move classification, an estimated per-game
-performance rating, phase-by-phase accuracy, and a short coach-style
-summary. This is this project's version of what other chess sites call a
-post-game "Game Review"/"Game Report": Full Game Review (migration 4)
-already grades every move Best/Excellent/Good/Inaccuracy/Mistake/Blunder;
-this module adds four more move labels those six can't express on their
-own — Brilliant, Great, Book, Miss — plus a rating estimate and a summary
-that ties the whole game together.
+Game Report — full ten-tier move classification, phase-by-phase accuracy,
+and a short coach-style summary. This is this project's version of what
+other chess sites call a post-game "Game Review"/"Game Report": Full Game
+Review (migration 4) already grades every move Best/Excellent/Good/
+Inaccuracy/Mistake/Blunder; this module adds four more move labels those
+six can't express on their own — Brilliant, Great, Book, Miss — plus a
+summary that ties the whole game together.
+
+Deliberately does NOT include a per-game "estimated rating" from move
+quality — tried twice (see CHANGELOG), and the underlying signal turned
+out not to exist: this player's own real rating history shows essentially
+zero correlation between one game's accuracy and their actual rating at
+any time control. No calibration scheme fixes a relationship that isn't
+there in the data.
 
 None of this is a clone of any commercial site's proprietary algorithm
-(none of them publish one) or its wording — the classification rules and
-the rating curve below are this project's own documented heuristics,
-described plainly so their limits are visible rather than implied to be
-more precise than they are.
+(none of them publish one) or its wording — the classification rules
+below are this project's own documented heuristics, described plainly so
+their limits are visible rather than implied to be more precise than
+they are.
 
 Deliberately separate from the routine analysis pipeline
 (mistakes.analyze_and_store_game, used by batch_analyze.py and the Celery
@@ -66,139 +72,17 @@ GREAT_GAP_THRESHOLD_CP = 150
 MISS_MIN_PRIOR_ADVANTAGE_CP = 150
 
 
-# --- Estimated performance rating -------------------------------------------
-# Previously a piecewise-linear ACPL-to-rating anchor table, "calibrated by
-# eye against commonly-cited ballpark ACPL ranges" rather than any real
-# dataset — and confirmed grossly inflated in practice. That's not a coding
-# bug so much as a known failure mode of naive ACPL-to-rating tables in
-# general: in an ordinary game between two similarly-matched humans, low
-# ACPL is easy to rack up in quiet positions regardless of either player's
-# real rating, because the engine agrees with almost any reasonable
-# developing move there. What actually separates a 1400 from a 2200 is
-# concentrated in the rare sharp/critical moments, not spread evenly across
-# every move the way a flat ACPL curve assumes — real work on this
-# (Kenneth Regan's Intrinsic Performance Ratings) models skill that way
-# properly, but its fitted parameters were never published, so there's no
-# real formula to port here the way USCF's conversion formula above is.
-#
-# Replaced with per-player self-calibration instead of a universal table:
-# fit a simple linear regression of this player's own real historical
-# rating (games.player_rating, straight from Lichess/chess.com's own
-# rating system) against their own time-control-adjusted ACPL in every
-# OTHER analyzed+rated game on this profile, then read this game's rating
-# off that line. This can't run away to a generic table's inflated range —
-# it's anchored to what this exact player's ACPL has actually corresponded
-# to for them — and it answers a fundamentally easier, better-posed
-# question than "guess an absolute rating from one game's ACPL with no
-# other context." Needs real variance to fit against: below
-# MIN_CALIBRATION_GAMES this returns None (no number) rather than falling
-# back to a guess, same as stats.compute_game_accuracy already does below
-# its own minimum sample size.
-MIN_CALIBRATION_GAMES = 8
-
-
-def _rating_calibration_pairs(profile_id: int | None) -> list[tuple[float, int]]:
-    """(time-control-adjusted ACPL, real rating) for every analyzed game
-    on this profile with both a real games.player_rating and at least 2
-    own moves with a computed eval_drop — the data estimate_performance_
-    rating fits against instead of a universal table. Scoped to one
-    profile: different profiles are different real people (or the same
-    person's separate accounts), and one person's ACPL-to-rating
-    relationship says nothing about another's.
-    """
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT g.time_control, g.player_rating, AVG(gm.eval_drop) AS acpl,
-                   COUNT(gm.eval_drop) AS n
-            FROM games g
-            JOIN game_moves gm ON gm.game_id = g.id AND gm.color_moved = g.color
-            WHERE g.analyzed = 1 AND g.player_rating IS NOT NULL AND gm.eval_drop IS NOT NULL
-                AND g.profile_id IS ?
-            GROUP BY g.id
-            HAVING n >= 2
-            """,
-            (profile_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    return [(_time_control_adjusted_acpl(r["acpl"], r["time_control"]), r["player_rating"]) for r in rows]
-
-
-def _fit_linear(pairs: list[tuple[float, int]]) -> tuple[float, float] | None:
-    """Least-squares slope/intercept for rating = slope*acpl + intercept.
-    None if there's no real ACPL variance to fit a line against (e.g.
-    every calibration game landed at nearly the same ACPL) — the caller
-    falls back to this player's plain average rating instead.
-    """
-    n = len(pairs)
-    mean_x = sum(x for x, _ in pairs) / n
-    mean_y = sum(y for _, y in pairs) / n
-    var_x = sum((x - mean_x) ** 2 for x, _ in pairs)
-    if var_x == 0:
-        return None
-    cov_xy = sum((x - mean_x) * (y - mean_y) for x, y in pairs)
-    slope = cov_xy / var_x
-    return slope, mean_y - slope * mean_x
-
-
-def estimate_performance_rating(acpl: float, profile_id: int | None) -> int | None:
-    pairs = _rating_calibration_pairs(profile_id)
-    if len(pairs) < MIN_CALIBRATION_GAMES:
-        return None
-
-    mean_rating = sum(y for _, y in pairs) / len(pairs)
-    fit = _fit_linear(pairs)
-    # A positive slope (worse ACPL correlating with a HIGHER rating) is
-    # backwards — a noisy fit off too few/too uniform points, not a real
-    # relationship. This player's own plain average rating is still real
-    # signal in that case, just not a curve worth trusting.
-    if fit is None or fit[0] > 0:
-        return round(mean_rating)
-    slope, intercept = fit
-    return max(0, round(intercept + slope * acpl))
-
-
-# ACPL_RATING_ANCHORS' ballpark ACPL-to-rating folklore implicitly assumes
-# ample thinking time — the same player's ACPL rises measurably at faster
-# time controls purely from time pressure, not weaker play, so feeding a
-# bullet game's raw ACPL through those anchors unadjusted understates that
-# player's actual strength (confirmed as a real gap in this app: the
-# rating estimate previously ignored time control entirely). Dividing ACPL
-# by a per-time-control factor before the anchor lookup gives faster games
-# credit for the noise time pressure adds — "classical"/"daily" (ample
-# time either way) are the unadjusted baseline. Like the anchors
-# themselves, these factors are a rough, by-eye approximation of commonly-
-# cited relative ACPL inflation by speed, not fit against a real dataset;
-# an unrecognized time_control (None/"unknown") falls back to no
-# adjustment rather than guessing.
-ACPL_TIME_CONTROL_DIVISOR = {
-    "bullet": 1.5,
-    "blitz": 1.25,
-    "rapid": 1.1,
-    "classical": 1.0,
-    "daily": 1.0,
-}
-
-
-def _time_control_adjusted_acpl(acpl: float, time_control: str | None) -> float:
-    return acpl / ACPL_TIME_CONTROL_DIVISOR.get(time_control, 1.0)
-
-
-# No USCF-equivalent figure here anymore. US Chess's real conversion
-# formula (932 + 0.564*FIDE below 2000, 20 + 1.02*FIDE above — still a
-# genuine, correctly-ported formula, just not applicable here) converts a
-# *real FIDE* (classical, over-the-board) rating into a US Chess one —
-# both are the same kind of serious, slow-time-control tournament rating.
-# estimate_performance_rating below is calibrated against a player's real
-# ONLINE rating (Lichess/chess.com blitz/bullet/rapid), which is not on
-# the same scale as a FIDE classical rating and isn't related to it by
-# any published formula. Running an online-calibrated number through a
-# FIDE-to-USCF formula anyway doesn't "convert" it to anything real — it
-# just adds a misleading +200-400ish bump from a formula meant for a
-# different kind of number entirely, which is exactly what this project
-# briefly did before catching it (see CHANGELOG).
+# Per-game "estimated rating" was removed entirely (see CHANGELOG for the
+# two prior attempts at fixing it, and why they weren't enough). The final
+# check: correlation between a game's own Lichess-formula accuracy% and
+# this player's actual rating across their own real analyzed games came
+# out at -0.08 (bullet), 0.09 (blitz), -0.22 (rapid) — statistical noise,
+# not a relationship. A single game's move quality genuinely doesn't
+# predict a real rating for this player at any of their time controls, so
+# no calibration scheme fixes it; the honest fix is not showing a number
+# that isn't there. For a rating figure with real predictive grounding,
+# see stats.py's FIDE Tournament Performance Rating below — that's built
+# from actual game RESULTS against real opponents, not move quality.
 
 
 # --- Move classification enrichment -----------------------------------------
@@ -428,30 +312,11 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
 
 # --- Game Report -------------------------------------------------------------
 
-def _acpl(moves: list[dict]) -> float | None:
-    """Plain average of each move's eval_drop (already magnitude-capped at
-    the source — see stats.capped_eval_drop), for one already color-
-    filtered slice of moves. Feeds estimated_rating below, which is
-    calibrated against plain-ACPL folklore (ACPL_RATING_ANCHORS) — NOT the
-    same figure accuracy_overall/phase_accuracy use (stats.
-    compute_game_accuracy, a direct port of Lichess's own algorithm, needs
-    the *unfiltered*, both-colors move list instead — see its docstring).
-
-    One move (e.g. a game the opponent abandoned right after the opening)
-    isn't a real sample, and gave a nonsensical 0 ACPL / ~perfect estimated
-    rating from a single book move.
-    """
-    drops = [m["eval_drop"] for m in moves if m["eval_drop"] is not None]
-    return sum(drops) / len(drops) if len(drops) >= 2 else None
-
-
-def _build_summary(accuracy: float | None, rating: int | None,
-                    tier_counts: dict, phase_accuracy: dict) -> str:
+def _build_summary(accuracy: float | None, tier_counts: dict, phase_accuracy: dict) -> str:
     if accuracy is None:
         return "Not enough analyzed moves to summarize this game."
 
-    parts = [f"You played this game at {accuracy}% accuracy"]
-    parts[0] += f", in line with a rating of about {rating} based on your own game history." if rating else "."
+    parts = [f"You played this game at {accuracy}% accuracy."]
 
     brilliant = tier_counts.get("brilliant", 0)
     if brilliant:
@@ -480,7 +345,6 @@ def _report_row_to_dict(row) -> dict:
         "accuracy_opening": row["accuracy_opening"],
         "accuracy_middlegame": row["accuracy_middlegame"],
         "accuracy_endgame": row["accuracy_endgame"],
-        "estimated_rating": row["estimated_rating"],
         "tier_counts": json.loads(row["tier_counts"]),
         "summary": row["summary"],
         "computed_at": row["computed_at"],
@@ -531,18 +395,11 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     all_moves = [dict(m) for m in rows]
     own_moves = [m for m in all_moves if m["color_moved"] == game["color"]]
 
-    overall_acpl = _acpl(own_moves)
     # compute_game_accuracy (a direct port of Lichess's own algorithm) needs
     # the unfiltered, both-colors move list — its volatility weighting looks
     # at a sliding window across the whole game, which breaks if pre-
-    # filtered to one color the way overall_acpl/estimated_rating are.
+    # filtered to one color.
     accuracy_overall = stats.compute_game_accuracy(all_moves, game["color"])
-    estimated_rating = (
-        estimate_performance_rating(
-            _time_control_adjusted_acpl(overall_acpl, game["time_control"]), game["profile_id"],
-        )
-        if overall_acpl is not None else None
-    )
 
     phase_accuracy = {
         phase: stats.compute_game_accuracy(
@@ -552,7 +409,7 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     }
 
     tier_counts = dict(Counter(m["classification"] for m in own_moves if m["classification"]))
-    summary = _build_summary(accuracy_overall, estimated_rating, tier_counts, phase_accuracy)
+    summary = _build_summary(accuracy_overall, tier_counts, phase_accuracy)
 
     report = {
         "game_id": game_id,
@@ -560,7 +417,6 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
         "accuracy_opening": phase_accuracy["opening"],
         "accuracy_middlegame": phase_accuracy["middlegame"],
         "accuracy_endgame": phase_accuracy["endgame"],
-        "estimated_rating": estimated_rating,
         "tier_counts": tier_counts,
         "summary": summary,
     }
@@ -577,21 +433,20 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
             """
             INSERT INTO game_reports
                 (game_id, accuracy_overall, accuracy_opening, accuracy_middlegame, accuracy_endgame,
-                 estimated_rating, tier_counts, summary, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tier_counts, summary, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(game_id) DO UPDATE SET
                 accuracy_overall = excluded.accuracy_overall,
                 accuracy_opening = excluded.accuracy_opening,
                 accuracy_middlegame = excluded.accuracy_middlegame,
                 accuracy_endgame = excluded.accuracy_endgame,
-                estimated_rating = excluded.estimated_rating,
                 tier_counts = excluded.tier_counts,
                 summary = excluded.summary,
                 computed_at = excluded.computed_at
             """,
             (
                 game_id, accuracy_overall, phase_accuracy["opening"], phase_accuracy["middlegame"],
-                phase_accuracy["endgame"], estimated_rating, json.dumps(tier_counts), summary, computed_at,
+                phase_accuracy["endgame"], json.dumps(tier_counts), summary, computed_at,
             ),
         )
         conn.commit()

@@ -780,10 +780,9 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
 
 
 # --- FIDE Tournament Performance Rating --------------------------------------
-# A genuinely different measurement from compute_game_accuracy/
-# estimate_performance_rating above: those are about move QUALITY (what
-# rating's move quality does this resemble); this is about RESULTS against
-# real opponents — the actual FIDE formula
+# A genuinely different measurement from compute_game_accuracy above: that's
+# about move QUALITY; this is about RESULTS against real opponents — the
+# actual FIDE formula
 # (https://handbook.fide.com/chapter/B022022, Rating Regulations 8.1-8.2),
 # not an approximation of it: average opponent rating, plus a score-based
 # adjustment read from FIDE's own official table.

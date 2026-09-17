@@ -18,14 +18,23 @@ trend tracking.
 
 - **Real published algorithms, not approximations** — Lichess's own
   accuracy-scoring and move-judgment formulas, Stockfish's own win-rate
-  model, US Chess's actual 2024 rating-conversion formula, and Static
-  Exchange Evaluation for tactical detection, each verified against its
-  original source and against real game data, not implemented from memory.
+  model, and Static Exchange Evaluation for tactical detection, each
+  verified against its original source and against real game data, not
+  implemented from memory.
 - **Caught and reverted my own regression** — shipped a puzzle-quality
   filter, then tested it against the app's own puzzle history and found
   it rejected 95% of puzzles that were already good. Diagnosed why,
   reverted it, and wrote up the postmortem in the changelog rather than
   quietly patching over it.
+- **Removed a feature rather than keep patching it** — a per-game
+  "estimated rating" from move quality went through two calibration
+  fixes (a real per-player regression, then removing a misapplied FIDE-
+  to-USCF conversion on top of it) and was still wrong. Before trying a
+  third fix, computed the actual correlation between a game's accuracy
+  and its player's real historical rating from real analyzed games:
+  -0.08 to 0.09 depending on time control — statistical noise. Removed
+  the feature outright rather than keep calibrating something the data
+  said wasn't there; see [CHANGELOG.md](CHANGELOG.md) v40-v42.
 - **300+ automated tests** — hand-verified unit tests for chess-specific
   edge cases (multi-piece tactical exchanges, mate-distance handling,
   opposite-side-castling detection) plus a real-engine integration test,
@@ -48,8 +57,9 @@ each design decision was made, not just what changed.
   phase (opening/middlegame/endgame), using Lichess's own real move-
   judgment and phase-detection algorithms rather than ad hoc thresholds
 - A Game Report per game: accuracy (Lichess's own real accuracy formula),
-  an estimated rating (fit against your own real rating history, not a
-  universal guess), and a short written summary
+  full ten-tier move classification, and a short written summary — a real
+  FIDE-formula Tournament Performance Rating is on the dashboard instead
+  of a per-game guess (see Engineering highlights below for why)
 - A dashboard: mistakes by phase, worst games, monthly trend, an openings
   view (win rate and mistake rate by opening family), a real FIDE
   Tournament Performance Rating by time control, and a time-management

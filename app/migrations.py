@@ -1415,6 +1415,64 @@ def _migration_025_drop_uscf_from_rating_estimate(conn: sqlite3.Connection) -> N
         )
 
 
+def _migration_026_remove_estimated_rating(conn: sqlite3.Connection) -> None:
+    """Fix — removed the per-game "estimated rating" feature entirely
+    after two calibration attempts (migrations 24, 25) still produced
+    numbers confirmed implausible on real data. The actual check that
+    settled it: correlation between a game's own Lichess-formula accuracy%
+    and this player's real historical rating, computed from their own
+    analyzed games — -0.08 (bullet), 0.09 (blitz), -0.22 (rapid). That's
+    statistical noise, not a relationship a per-game estimate could ever
+    be calibrated to fit reliably, no matter the scheme. See
+    game_report.py's module docstring for the fuller reasoning, and
+    stats.py's FIDE Tournament Performance Rating for this app's actual
+    rating figure — built from real game results, not move quality.
+
+    Nulls out game_reports.estimated_rating (kept as a column rather than
+    dropped — SQLite column drops are less battle-tested than additive
+    changes, and nothing reads a NULL column) and rebuilds every cached
+    summary without the rating clause, same targeted-recompute shape as
+    migrations 21/24/25.
+    """
+    def build_summary(accuracy, tier_counts, phase_accuracy):
+        if accuracy is None:
+            return "Not enough analyzed moves to summarize this game."
+        parts = [f"You played this game at {accuracy}% accuracy."]
+        brilliant = tier_counts.get("brilliant", 0)
+        if brilliant:
+            parts.append(f"You found {brilliant} brilliant move{'s' if brilliant != 1 else ''}.")
+        great = tier_counts.get("great", 0)
+        if great:
+            parts.append(f"{great} great move{'s' if great != 1 else ''} held the position together in a sharp moment.")
+        miss = tier_counts.get("miss", 0)
+        if miss:
+            parts.append(f"You missed {miss} winning tactic{'s' if miss != 1 else ''} — worth reviewing in Puzzles.")
+        present = {p: a for p, a in phase_accuracy.items() if a is not None}
+        if len(present) > 1:
+            weakest = min(present, key=present.get)
+            parts.append(f"Your {weakest} was the weakest phase this game ({present[weakest]}% accuracy).")
+        return " ".join(parts)
+
+    rows = conn.execute(
+        """
+        SELECT game_id, accuracy_overall, accuracy_opening, accuracy_middlegame, accuracy_endgame, tier_counts
+        FROM game_reports
+        """
+    ).fetchall()
+
+    for row in rows:
+        phase_accuracy = {
+            "opening": row["accuracy_opening"],
+            "middlegame": row["accuracy_middlegame"],
+            "endgame": row["accuracy_endgame"],
+        }
+        summary = build_summary(row["accuracy_overall"], json.loads(row["tier_counts"]), phase_accuracy)
+        conn.execute(
+            "UPDATE game_reports SET estimated_rating = NULL, summary = ? WHERE game_id = ?",
+            (summary, row["game_id"]),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1443,6 +1501,8 @@ MIGRATIONS = [
      _migration_024_self_calibrated_rating),
     (25, "Drop the misapplied FIDE-to-USCF conversion from the self-calibrated rating estimate",
      _migration_025_drop_uscf_from_rating_estimate),
+    (26, "Remove the per-game estimated-rating feature entirely (no real ACPL-vs-rating correlation)",
+     _migration_026_remove_estimated_rating),
 ]
 
 

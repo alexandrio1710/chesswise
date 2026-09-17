@@ -1,5 +1,41 @@
 # Changelog
 
+## v42 — Removed the per-game "estimated rating" entirely
+
+Reported as still implausible immediately after v41: a 1425 estimate on a
+56.6%-accuracy game, when no player anywhere near 1400 real strength
+plays a whole game at 55-56% accuracy as a matter of course. That's a
+sharper objection than "the number feels off" — it's pointing at whether
+a SINGLE GAME's accuracy should predict a rating at all.
+
+Checked it properly instead of attempting a third calibration: computed
+the actual correlation between per-game accuracy and real historical
+rating (`games.player_rating`) across this player's own real analyzed
+games, split by time control (the same data v40's regression was already
+fit against). The result: -0.08 (bullet, n=61), 0.09 (blitz, n=277),
+-0.22 (rapid, n=76). That's not "weak" correlation — it's noise, and in
+two of three time controls it even runs the wrong direction. Confirmed
+concretely: this exact player's lowest-accuracy bullet games (49-56%)
+and highest-accuracy ones (89-99.7%) span almost the *same* real rating
+range (roughly 1560-1820 either way). Whatever this player's rating
+reflects game-to-game, it isn't tracking their own measured move quality
+in any way a regression could pick up — a real result about how online
+ratings work (dominated by results/opponent strength/variance far more
+than any single game's ACPL), not a bug in the fitting code.
+
+No calibration scheme — universal table, per-player regression, per-
+time-control regression — fixes a relationship that isn't in the data.
+Removed `estimate_performance_rating` and every function that fed it
+(`_rating_calibration_pairs`, `_fit_linear`, `_acpl`,
+`ACPL_TIME_CONTROL_DIVISOR`) entirely, along with the "Estimated rating"
+stat and its clause in the Game Report summary. `game_reports.
+estimated_rating` stays as an unused, always-NULL column rather than a
+destructive schema drop; migration 26 nulls out already-cached rows and
+rebuilds their summaries. This app still has a real, trustworthy rating
+figure — stats.py's FIDE Tournament Performance Rating, built from actual
+game results against real opponents, not move quality — that one wasn't
+touched and was never the problem.
+
 ## v41 — Removed a second, self-inflicted source of rating inflation
 
 Reported as still inflated right after v40 shipped. v40 correctly fixed
