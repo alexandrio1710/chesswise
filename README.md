@@ -31,7 +31,7 @@ trend tracking.
   opposite-side-castling detection) plus a real-engine integration test,
   running on every push via CI.
 - A numbered schema-migration system with automatic pre-migration
-  backups — 24 migrations shipped over the project's life without losing
+  backups — 25 migrations shipped over the project's life without losing
   data.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full, detailed history of *why*
@@ -48,8 +48,8 @@ each design decision was made, not just what changed.
   phase (opening/middlegame/endgame), using Lichess's own real move-
   judgment and phase-detection algorithms rather than ad hoc thresholds
 - A Game Report per game: accuracy (Lichess's own real accuracy formula),
-  an estimated rating (with a USCF-equivalent figure via US Chess's actual
-  published conversion formula), and a short written summary
+  an estimated rating (fit against your own real rating history, not a
+  universal guess), and a short written summary
 - A dashboard: mistakes by phase, worst games, monthly trend, an openings
   view (win rate and mistake rate by opening family), a real FIDE
   Tournament Performance Rating by time control, and a time-management

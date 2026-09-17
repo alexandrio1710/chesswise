@@ -186,32 +186,19 @@ def _time_control_adjusted_acpl(acpl: float, time_control: str | None) -> float:
     return acpl / ACPL_TIME_CONTROL_DIVISOR.get(time_control, 1.0)
 
 
-# US Chess's own real, published FIDE-to-US-Chess conversion formula —
-# not this project's own approximation. Effective 2024-01-01 (alongside a
-# matching overhaul of FIDE's own rating system), replacing US Chess's
-# previous flat "+100" rule of thumb with this two-piece linear fit
-# (continuous at the seam: both pieces give exactly 2060 at FIDE 2000):
-# https://new.uschess.org/civicrm/mailing/view?id=4405
-# US Chess's own stated purpose for this formula is converting a *real*
-# FIDE tournament rating into an equivalent US Chess one (e.g. assigning
-# an initial rating to a new US Chess player who already has FIDE
-# results) — this project's estimated_rating is instead this game's ACPL
-# read off a line fit to THIS player's own real rating history (see
-# estimate_performance_rating below), which is a real-data-grounded
-# estimate but still a single game's noisy sample, so treat the USCF
-# figure this produces with that same grain of salt.
-USCF_CONVERSION_BREAKPOINT = 2000
-USCF_CONVERSION_LOW = (932, 0.564)   # FIDE <= 2000: 932 + 0.564*FIDE
-USCF_CONVERSION_HIGH = (20, 1.02)    # FIDE > 2000:  20 + 1.02*FIDE
-
-
-def _uscf_from_estimated_rating(estimated_rating: int | None) -> int | None:
-    if estimated_rating is None:
-        return None
-    base, slope = (
-        USCF_CONVERSION_LOW if estimated_rating <= USCF_CONVERSION_BREAKPOINT else USCF_CONVERSION_HIGH
-    )
-    return max(0, round(base + slope * estimated_rating))
+# No USCF-equivalent figure here anymore. US Chess's real conversion
+# formula (932 + 0.564*FIDE below 2000, 20 + 1.02*FIDE above — still a
+# genuine, correctly-ported formula, just not applicable here) converts a
+# *real FIDE* (classical, over-the-board) rating into a US Chess one —
+# both are the same kind of serious, slow-time-control tournament rating.
+# estimate_performance_rating below is calibrated against a player's real
+# ONLINE rating (Lichess/chess.com blitz/bullet/rapid), which is not on
+# the same scale as a FIDE classical rating and isn't related to it by
+# any published formula. Running an online-calibrated number through a
+# FIDE-to-USCF formula anyway doesn't "convert" it to anything real — it
+# just adds a misleading +200-400ish bump from a formula meant for a
+# different kind of number entirely, which is exactly what this project
+# briefly did before catching it (see CHANGELOG).
 
 
 # --- Move classification enrichment -----------------------------------------
@@ -458,16 +445,13 @@ def _acpl(moves: list[dict]) -> float | None:
     return sum(drops) / len(drops) if len(drops) >= 2 else None
 
 
-def _build_summary(accuracy: float | None, rating: int | None, rating_uscf: int | None,
+def _build_summary(accuracy: float | None, rating: int | None,
                     tier_counts: dict, phase_accuracy: dict) -> str:
     if accuracy is None:
         return "Not enough analyzed moves to summarize this game."
 
     parts = [f"You played this game at {accuracy}% accuracy"]
-    parts[0] += (
-        f", in line with a rating of about {rating} based on your own game history (~{rating_uscf} USCF)."
-        if rating else "."
-    )
+    parts[0] += f", in line with a rating of about {rating} based on your own game history." if rating else "."
 
     brilliant = tier_counts.get("brilliant", 0)
     if brilliant:
@@ -497,7 +481,6 @@ def _report_row_to_dict(row) -> dict:
         "accuracy_middlegame": row["accuracy_middlegame"],
         "accuracy_endgame": row["accuracy_endgame"],
         "estimated_rating": row["estimated_rating"],
-        "estimated_rating_uscf": _uscf_from_estimated_rating(row["estimated_rating"]),
         "tier_counts": json.loads(row["tier_counts"]),
         "summary": row["summary"],
         "computed_at": row["computed_at"],
@@ -560,7 +543,6 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
         )
         if overall_acpl is not None else None
     )
-    estimated_rating_uscf = _uscf_from_estimated_rating(estimated_rating)
 
     phase_accuracy = {
         phase: stats.compute_game_accuracy(
@@ -570,7 +552,7 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
     }
 
     tier_counts = dict(Counter(m["classification"] for m in own_moves if m["classification"]))
-    summary = _build_summary(accuracy_overall, estimated_rating, estimated_rating_uscf, tier_counts, phase_accuracy)
+    summary = _build_summary(accuracy_overall, estimated_rating, tier_counts, phase_accuracy)
 
     report = {
         "game_id": game_id,
@@ -579,7 +561,6 @@ def generate_game_report(game_id: int, force: bool = False) -> dict:
         "accuracy_middlegame": phase_accuracy["middlegame"],
         "accuracy_endgame": phase_accuracy["endgame"],
         "estimated_rating": estimated_rating,
-        "estimated_rating_uscf": estimated_rating_uscf,
         "tier_counts": tier_counts,
         "summary": summary,
     }

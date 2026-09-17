@@ -1,5 +1,25 @@
 # Changelog
 
+## v41 — Removed a second, self-inflicted source of rating inflation
+
+Reported as still inflated right after v40 shipped. v40 correctly fixed
+`estimated_rating` itself (calibrated against a player's own real online
+rating instead of a universal guess) but left it running through US
+Chess's real FIDE-to-USCF conversion formula in the summary sentence —
+e.g. a legitimately-calibrated 1425 became "~1736 USCF". That formula
+converts a real FIDE (classical, over-the-board) rating into a US Chess
+one; both are the same *kind* of rating. An online blitz/bullet rating
+isn't on that scale and isn't related to it by any published formula, so
+running one through the formula anyway doesn't convert it to anything
+real — it just adds a misleading +200-400ish bump. The formula itself
+was a correct, verified port; it was simply the wrong formula to apply
+here once estimated_rating's meaning changed in v40. Removed the USCF
+figure from the estimate entirely rather than look for a "correct"
+online-to-USCF formula — no such published conversion exists to port,
+same reasoning that already ruled out reproducing Kenneth Regan's
+unpublished intrinsic-rating parameters in v40. Migration 25 strips the
+"(~X USCF)" clause from every already-cached summary.
+
 ## v40 — Replaced the inflated "estimated rating" with a self-calibrated one
 
 Reported as grossly inflated. Root cause wasn't a bug in the arithmetic —

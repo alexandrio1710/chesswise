@@ -1349,6 +1349,72 @@ def _migration_024_self_calibrated_rating(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_025_drop_uscf_from_rating_estimate(conn: sqlite3.Connection) -> None:
+    """Fix — migration 24 replaced the inflated ACPL-anchor rating guess
+    with a fit against each profile's own real ONLINE rating history
+    (Lichess/chess.com blitz/bullet/rapid), but kept running that new
+    number through US Chess's real FIDE-to-USCF conversion formula in the
+    summary sentence anyway. That formula converts a real FIDE (classical,
+    over-the-board) rating into a US Chess one — both the SAME kind of
+    serious, slow-time-control tournament rating. An online blitz/bullet
+    rating isn't on that scale and isn't related to it by any published
+    formula, so feeding one through the FIDE-to-USCF formula doesn't
+    convert it to anything real; it just adds a misleading +200-400ish
+    bump (e.g. 1425 -> "~1736 USCF"), confirmed as still grossly inflated
+    immediately after migration 24 shipped. See game_report.py's own
+    comment above estimate_performance_rating for the fuller explanation.
+
+    estimated_rating itself is untouched (it was never the problem here —
+    the USCF figure derived from it was) and was never stored anyway
+    (computed at read time, same note migration 21 already made) — the
+    only stale data is the "(~X USCF)" clause already baked into each
+    cached game_reports.summary sentence. Rebuilds just that sentence
+    from data already in the row, same targeted-recompute shape as
+    migrations 21/24.
+    """
+    def build_summary(accuracy, rating, tier_counts, phase_accuracy):
+        if accuracy is None:
+            return "Not enough analyzed moves to summarize this game."
+        parts = [f"You played this game at {accuracy}% accuracy"]
+        parts[0] += f", in line with a rating of about {rating} based on your own game history." if rating else "."
+        brilliant = tier_counts.get("brilliant", 0)
+        if brilliant:
+            parts.append(f"You found {brilliant} brilliant move{'s' if brilliant != 1 else ''}.")
+        great = tier_counts.get("great", 0)
+        if great:
+            parts.append(f"{great} great move{'s' if great != 1 else ''} held the position together in a sharp moment.")
+        miss = tier_counts.get("miss", 0)
+        if miss:
+            parts.append(f"You missed {miss} winning tactic{'s' if miss != 1 else ''} — worth reviewing in Puzzles.")
+        present = {p: a for p, a in phase_accuracy.items() if a is not None}
+        if len(present) > 1:
+            weakest = min(present, key=present.get)
+            parts.append(f"Your {weakest} was the weakest phase this game ({present[weakest]}% accuracy).")
+        return " ".join(parts)
+
+    rows = conn.execute(
+        """
+        SELECT game_id, estimated_rating, accuracy_overall, accuracy_opening,
+               accuracy_middlegame, accuracy_endgame, tier_counts
+        FROM game_reports
+        """
+    ).fetchall()
+
+    for row in rows:
+        phase_accuracy = {
+            "opening": row["accuracy_opening"],
+            "middlegame": row["accuracy_middlegame"],
+            "endgame": row["accuracy_endgame"],
+        }
+        summary = build_summary(
+            row["accuracy_overall"], row["estimated_rating"], json.loads(row["tier_counts"]), phase_accuracy,
+        )
+        conn.execute(
+            "UPDATE game_reports SET summary = ? WHERE game_id = ?",
+            (summary, row["game_id"]),
+        )
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1375,6 +1441,8 @@ MIGRATIONS = [
     (23, "Add drift_puzzles table for practicing coaching-report highlights", _migration_023_drift_puzzles),
     (24, "Replace the inflated ACPL-anchor rating estimate with a per-profile self-calibrated fit",
      _migration_024_self_calibrated_rating),
+    (25, "Drop the misapplied FIDE-to-USCF conversion from the self-calibrated rating estimate",
+     _migration_025_drop_uscf_from_rating_estimate),
 ]
 
 

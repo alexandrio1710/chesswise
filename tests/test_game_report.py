@@ -237,31 +237,6 @@ class TestSelfCalibratedRating:
         assert game_report.estimate_performance_rating(10, None) is None
 
 
-class TestUscfRating:
-    # US Chess's own real 2024 conversion formula runs the *opposite*
-    # direction from this project's old flat guess: US Chess ratings come
-    # out higher than the FIDE-ish input across the whole range, not lower
-    # (matches both this formula and every pre-2024 rule of thumb US Chess
-    # has published — "USCF = FIDE + 100" and similar — all add, none
-    # subtract).
-    def test_low_range_formula(self):
-        assert game_report._uscf_from_estimated_rating(1600) == 1834  # 932 + 0.564*1600
-
-    def test_high_range_formula(self):
-        assert game_report._uscf_from_estimated_rating(2500) == 2570  # 20 + 1.02*2500
-
-    def test_continuous_at_the_breakpoint(self):
-        assert game_report._uscf_from_estimated_rating(2000) == 2060
-        just_below = game_report._uscf_from_estimated_rating(1999)
-        just_above = game_report._uscf_from_estimated_rating(2001)
-        assert abs(just_above - just_below) <= 2  # a tiny step, not a jump across the seam
-
-    def test_floors_at_zero_rather_than_going_negative(self):
-        assert game_report._uscf_from_estimated_rating(-5000) == 0
-
-    def test_none_in_none_out(self):
-        assert game_report._uscf_from_estimated_rating(None) is None
-
 
 class TestSee:
     def test_no_attacker_returns_zero(self):
