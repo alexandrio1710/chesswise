@@ -28,6 +28,7 @@ import clock_analysis
 import coaching_chat
 import coaching_report
 import export
+import game_meta
 import game_report
 import insights
 import manual_analysis
@@ -36,6 +37,7 @@ import opening_puzzles
 import profiles
 import progress
 import puzzles
+import review
 import srs
 import srs_sm2
 import stats
@@ -249,6 +251,14 @@ def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | Non
             key, "analyzing", len(get_unanalyzed_games()),
             lambda: len(get_unanalyzed_games()),
             lambda: run_batch_analysis(workers=ANALYSIS_WORKERS),
+        )
+        # Only the games this refresh just analyzed: the historical backlog is
+        # built on demand (opening a game) or from Insights, not on every sync.
+        fresh = list(newly_analyzed)
+        _run_phase_with_progress(
+            key, "reviewing", len(review.games_needing_review(fresh)),
+            lambda: len(review.games_needing_review(fresh)),
+            lambda: review.backfill_reviews(fresh),
         )
         _run_phase_with_progress(
             key, "generating_puzzles", len(get_mistakes_without_puzzles()),
@@ -566,6 +576,91 @@ def api_game_report(game_id: int, force: bool = Query(default=False), _access: d
     _report_jobs[game_id] = {"running": True, "error": None}
     threading.Thread(target=_run_game_report, args=(game_id,), daemon=True).start()
     return {"status": "computing"}
+
+
+# Game Review (review.py): the chess.com-style per-move review for both
+# players. Same background-thread + poll shape as the Game Report above — the
+# engine pass over every position is what takes the time (a few seconds on a
+# multi-core machine thanks to engine_pool, far longer sequentially).
+_review_jobs: dict[int, dict] = {}
+
+
+def _run_game_review(game_id: int) -> None:
+    try:
+        review.ensure_reviewed(game_id)
+        _review_jobs[game_id]["error"] = None
+    except Exception as e:
+        logger.exception(f"Game review failed for game {game_id}")
+        _review_jobs[game_id]["error"] = str(e)
+    finally:
+        _review_jobs[game_id]["running"] = False
+
+
+@app.get("/api/games/{game_id}/review")
+def api_game_review(game_id: int, retry: bool = Query(default=False),
+                    _access: dict | None = Depends(auth.require_game_access)):
+    """The full Game Review payload once ready; {"status": "computing"} while
+    the engine pass runs (poll until "ready"), {"status": "failed"} if the
+    last attempt raised (pass ?retry=true to try again)."""
+    game = stats.get_game_detail(game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not game["analyzed"]:
+        raise HTTPException(status_code=409, detail="This game hasn't been analyzed yet")
+    if game["skip_reason"]:
+        raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
+
+    job = _review_jobs.get(game_id)
+    if job and job["running"]:
+        return {"status": "computing"}
+    if review.needs_review(game_id):
+        if job and job["error"] and not retry:
+            return {"status": "failed", "error": job["error"]}
+        _review_jobs[game_id] = {"running": True, "error": None}
+        threading.Thread(target=_run_game_review, args=(game_id,), daemon=True).start()
+        return {"status": "computing"}
+
+    game_meta.ensure_metadata([game_id])
+    return {"status": "ready", **review.game_review_payload(game_id)}
+
+
+class ReviewRetry(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    ply: int
+    from_square: str = Field(alias="from")
+    to_square: str = Field(alias="to")
+    promotion: str | None = None
+
+
+@app.post("/api/games/{game_id}/retry")
+def api_game_retry(game_id: int, attempt: ReviewRetry, _access: dict | None = Depends(auth.require_game_access)):
+    """Grade a "retry this move" attempt from the review against the engine's
+    stored best move for that position."""
+    try:
+        return review.check_retry(game_id, attempt.ply, attempt.from_square, attempt.to_square, attempt.promotion)
+    except review.RetryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/review/status")
+def api_review_status(profile_id: int | None = Depends(auth.require_profile_filter_access)):
+    """How much of the game history has review data — what Insights' tactics,
+    move-quality and shape sections are built from — plus the state of the
+    bulk build job."""
+    conn = get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) n FROM games WHERE analyzed = 1 AND skip_reason IS NULL").fetchone()["n"]
+    finally:
+        conn.close()
+    pending = len(review.games_needing_review())
+    return {"total": total, "reviewed": total - pending, "pending": pending, "job": dict(review.bulk_status)}
+
+
+@app.post("/api/review/start")
+def api_review_start():
+    """Review every analyzed game that doesn't have review data yet, in the
+    background (engine work fans out across cores). Poll /api/review/status."""
+    return {"started": review.start_bulk_review()}
 
 
 # Coaching report (coaching_report.py) — bulk PGN ingestion + cross-game

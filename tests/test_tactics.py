@@ -116,3 +116,26 @@ class TestPuzzleThemes:
     ])
     def test_theme_labels(self, key, label):
         assert tactics.theme_label(key) == label
+
+
+class TestMaterial:
+    def test_balance_counts_pieces_not_kings(self):
+        # White is a rook up.
+        board = chess.Board("4k3/8/8/8/8/8/8/R3K3 w - - 0 1")
+        assert tactics.material_balance(board, chess.WHITE) == 5
+        assert tactics.material_balance(board, chess.BLACK) == -5
+
+    def test_swing_of_a_line_that_wins_a_queen_for_a_knight(self):
+        # Ne6+ Ke8 Nxd8 Kxd8: White wins the queen (9) and loses the knight (3).
+        swing = tactics.pv_material_swing(
+            "3q1k2/8/8/2N5/8/8/8/4K3 w - - 0 1", ["c5e6", "f8e8", "e6d8", "e8d8"], chess.WHITE,
+        )
+        assert swing == 6
+
+    def test_swing_stops_at_an_illegal_move(self):
+        assert tactics.pv_material_swing(chess.STARTING_FEN, ["e2e4", "e2e4"], chess.WHITE) == 0
+
+    def test_swing_is_from_the_movers_point_of_view(self):
+        line = ["c5e6", "f8e8", "e6d8", "e8d8"]
+        fen = "3q1k2/8/8/2N5/8/8/8/4K3 w - - 0 1"
+        assert tactics.pv_material_swing(fen, line, chess.BLACK) == -6

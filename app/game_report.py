@@ -41,6 +41,7 @@ import chess
 import chess.engine
 import chess.pgn
 
+import engine_pool
 import stats
 from analysis import MATE_SCORE_CP, get_engine
 from config import STOCKFISH_DEPTH, STOCKFISH_MAX_SECONDS_PER_POSITION
@@ -217,19 +218,30 @@ def _classify_enriched(*, tier: str, eval_before_cp: float, is_top_choice: bool,
     return tier  # good / inaccuracy pass through unchanged
 
 
-def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) -> list[dict]:
-    """Runs the extra MultiPV=2 pass over an already-analyzed game and
-    writes classification/is_top_choice/phase onto every game_moves row.
-    Idempotent — re-running it just recomputes and overwrites. Raises
-    ValueError if the game hasn't been analyzed yet (no game_moves rows).
+def _line_value(line: dict) -> float:
+    """One comparable number for an engine line (mover's perspective), a
+    forced mate mapped onto the same +-MATE_SCORE_CP scale the analysis
+    pipeline stores."""
+    if line.get("mate") is not None:
+        return float(MATE_SCORE_CP - abs(line["mate"])) * (1 if line["mate"] > 0 else -1)
+    return float(line["cp"] or 0)
 
-    Even at the routine analysis depth (not PUZZLE_DEPTH's deeper search),
-    this still costs roughly one extra engine query per move on top of
-    what analyze_and_store_game() already did (~0.5s/move measured on the
-    dev machine this was built on — a ~40-move game is on the order of
-    20-30s) — callers on a request/response path should run this in the
-    background and poll rather than blocking on it (see server.py's
-    /api/games/{id}/report, which does exactly that).
+
+def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) -> list[dict]:
+    """The full review pass over an already-analyzed game: searches every
+    position (both colors) with MultiPV=2 and writes, onto each game_moves
+    row, the enriched classification (Brilliant/Great/Book/Miss on top of the
+    six routine tiers), is_top_choice, and the engine's best move and line in
+    the position BEFORE that move (best_move_uci / best_pv_uci / best_eval_cp
+    / best_mate_in, mover's perspective) — what "Best was Nf3" and the
+    coach's explanations are built from. Idempotent — re-running it just
+    recomputes and overwrites. Raises ValueError if the game hasn't been
+    analyzed yet (no game_moves rows).
+
+    Independent positions, so the searches run in parallel across the shared
+    engine_pool (a typical 40-move game takes a few seconds instead of the
+    ~30s a single sequential engine needs) — callers on a request/response
+    path should still run this in the background and poll (see server.py).
     """
     conn = get_connection()
     try:
@@ -255,57 +267,49 @@ def compute_enriched_classification(game_id: int, depth: int = STOCKFISH_DEPTH) 
     book_ply_cutoff = eco_match["ply_count"] if eco_match else 0
 
     move_rows_by_ply = {r["ply"]: r for r in move_rows}
-    engine = get_engine()
-    try:
-        board = game.board()
+    board = game.board()
+    todo = []  # (ply, board before the move, move)
+    for ply, node in enumerate(game.mainline(), start=1):
+        if ply in move_rows_by_ply:
+            todo.append((ply, board.copy(), node.move))
+        board.push(node.move)
 
-        updates = []
-        node = game
-        ply = 0
-        while node.variations:
-            next_node = node.variations[0]
-            move = next_node.move
-            ply += 1
-            row = move_rows_by_ply.get(ply)
-            if row is None:
-                # A move without a stored eval trace (shouldn't normally
-                # happen for a fully analyzed game) — skip rather than crash
-                # the whole report over one gap.
-                board.push(move)
-                node = next_node
-                continue
+    all_lines = engine_pool.analyse_many([b.fen() for _, b, _ in todo], depth, multipv=2)
 
-            top = _top_moves_cp(engine, board, depth, n=2)
-            is_top_choice = bool(top) and top[0][0] == move.uci()
-            gap = abs(top[0][1] - top[1][1]) if len(top) >= 2 else None
-            sac = _is_sacrifice(board, move) if is_top_choice else False
+    updates = []
+    for (ply, board_before, move), lines in zip(todo, all_lines):
+        row = move_rows_by_ply[ply]
+        is_top_choice = bool(lines) and lines[0]["uci"] == move.uci()
+        gap = abs(_line_value(lines[0]) - _line_value(lines[1])) if len(lines) >= 2 else None
+        sac = _is_sacrifice(board_before, move) if is_top_choice else False
 
-            classification = _classify_enriched(
-                tier=row["tier"], eval_before_cp=row["eval_before_cp"],
-                is_top_choice=is_top_choice, gap_to_runner_up=gap,
-                is_book=ply <= book_ply_cutoff, is_sacrifice=sac,
-            )
-
-            board.push(move)
-            updates.append((classification, int(is_top_choice), game_id, ply))
-            node = next_node
-    finally:
-        # See analysis.analyze_game_moves's matching comment: explicit
-        # cleanup instead of relying on __del__/refcounting timing.
-        engine.quit()
+        classification = _classify_enriched(
+            tier=row["tier"], eval_before_cp=row["eval_before_cp"],
+            is_top_choice=is_top_choice, gap_to_runner_up=gap,
+            is_book=ply <= book_ply_cutoff, is_sacrifice=sac,
+        )
+        best = lines[0] if lines else None
+        updates.append((
+            classification, int(is_top_choice),
+            best["uci"] if best else None, " ".join(best["pv"]) if best else None,
+            best["cp"] if best else None, best["mate"] if best else None,
+            game_id, ply,
+        ))
 
     conn = get_connection()
     try:
         conn.executemany(
-            "UPDATE game_moves SET classification = ?, is_top_choice = ? WHERE game_id = ? AND ply = ?",
+            "UPDATE game_moves SET classification = ?, is_top_choice = ?, best_move_uci = ?, best_pv_uci = ?, "
+            "best_eval_cp = ?, best_mate_in = ? WHERE game_id = ? AND ply = ?",
             updates,
         )
+        conn.execute("UPDATE games SET reviewed_at = datetime('now') WHERE id = ?", (game_id,))
         conn.commit()
     finally:
         conn.close()
 
     return [
-        {"ply": u[3], "classification": u[0], "is_top_choice": bool(u[1])}
+        {"ply": u[7], "classification": u[0], "is_top_choice": bool(u[1]), "best_move_uci": u[2]}
         for u in updates
     ]
 

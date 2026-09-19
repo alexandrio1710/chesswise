@@ -1490,6 +1490,60 @@ def _migration_027_puzzle_themes(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE puzzles ADD COLUMN themes TEXT")
 
 
+def _migration_028_game_review_data(conn: sqlite3.Connection) -> None:
+    """Feature — chess.com-style Game Review and Insights. Adds what a
+    per-move review needs beyond the eval trace game_moves already has:
+
+    - game_moves.best_move_uci / best_pv_uci / best_eval_cp / best_mate_in:
+      the engine's best move (and line) in the position BEFORE each move,
+      from the mover's perspective — what "Best was Nf3" and the coach's
+      explanations are built from. Filled by the review pass
+      (game_report.compute_enriched_classification), for both colors.
+    - games.reviewed_at: when that pass last completed for the game.
+    - games.termination_method: how it ended (checkmate, resignation,
+      timeout, abandonment, stalemate, repetition, agreement, ...) —
+      parsed from the PGN, no engine needed.
+    - games.game_shape: chess.com-style shape (balanced, sharp, wild,
+      giveaway, smooth, sudden, intense) derived from the eval curve.
+    - games.book_plies: how many plies stayed in known opening theory.
+    - game_tactics: one row per tactical opportunity found in a game
+      (fork, pin, skewer, discovered attack, mate, free piece) with whether
+      the mover found it, plus pieces left hanging — the raw material for
+      Insights' found-vs-missed tactic stats, for both players.
+
+    termination/shape/book_plies are NULL until game_meta.ensure_metadata()
+    fills them (pure python-chess, no engine) — same "NULL = not computed
+    yet" convention as puzzles.themes.
+    """
+    move_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_moves)")}
+    for name, col_type in (("best_move_uci", "TEXT"), ("best_pv_uci", "TEXT"),
+                           ("best_eval_cp", "REAL"), ("best_mate_in", "INTEGER")):
+        if name not in move_cols:
+            conn.execute(f"ALTER TABLE game_moves ADD COLUMN {name} {col_type}")
+
+    game_cols = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
+    for name, col_type in (("reviewed_at", "TEXT"), ("termination_method", "TEXT"),
+                           ("game_shape", "TEXT"), ("book_plies", "INTEGER")):
+        if name not in game_cols:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {name} {col_type}")
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS game_tactics (
+            id INTEGER PRIMARY KEY,
+            game_id INTEGER NOT NULL REFERENCES games(id),
+            ply INTEGER NOT NULL,
+            color TEXT NOT NULL,
+            motif TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            gain REAL,
+            best_uci TEXT,
+            played_uci TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_game_tactics_game ON game_tactics(game_id);
+        CREATE INDEX IF NOT EXISTS idx_game_tactics_motif ON game_tactics(motif, outcome);
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1521,6 +1575,8 @@ MIGRATIONS = [
     (26, "Remove the per-game estimated-rating feature entirely (no real ACPL-vs-rating correlation)",
      _migration_026_remove_estimated_rating),
     (27, "Add puzzles.themes (tactical-motif tags for themed puzzles and hints)", _migration_027_puzzle_themes),
+    (28, "Add game review data: best moves/lines per ply, termination, game shape, tactic events",
+     _migration_028_game_review_data),
 ]
 
 

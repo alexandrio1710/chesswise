@@ -131,12 +131,13 @@ def mate_pattern(board: chess.Board) -> str | None:
     return "mate"
 
 
-def _line_motifs(after: chess.Board, to: chess.Square, mover: chess.Color) -> set[str]:
-    """Pin / skewer along the rays the just-moved slider now stares down."""
+def _line_details(after: chess.Board, to: chess.Square, mover: chess.Color) -> list[tuple[str, chess.Piece, chess.Piece]]:
+    """(kind, front piece, piece behind it) for every pin/skewer the
+    just-moved slider now creates along its rays."""
     piece = after.piece_at(to)
-    motifs: set[str] = set()
+    found: list[tuple[str, chess.Piece, chess.Piece]] = []
     if piece is None or piece.piece_type not in SLIDER_DIRECTIONS:
-        return motifs
+        return found
     for df, dr in SLIDER_DIRECTIONS[piece.piece_type]:
         first_two = list(itertools.islice(_ray(after, to, df, dr), 2))
         if len(first_two) < 2:
@@ -150,10 +151,70 @@ def _line_motifs(after: chess.Board, to: chess.Square, mover: chess.Color) -> se
         # front has to be worth something (or be shielding the king), and
         # so does whatever is behind it in a skewer.
         if behind_value > front_value and (front_value >= MIN_HANGING_VALUE or behind.piece_type == chess.KING):
-            motifs.add("pin")
+            found.append(("pin", front, behind))
         elif front_value > behind_value and behind_value >= MIN_HANGING_VALUE:
-            motifs.add("skewer")
-    return motifs
+            found.append(("skewer", front, behind))
+    return found
+
+
+def _line_motifs(after: chess.Board, to: chess.Square, mover: chess.Color) -> set[str]:
+    """Pin / skewer along the rays the just-moved slider now stares down."""
+    return {kind for kind, _, _ in _line_details(after, to, mover)}
+
+
+def _fork_target_squares(after: chess.Board, to: chess.Square, mover: chess.Color) -> list[chess.Square]:
+    landing = after.piece_at(to)
+    if landing is None or landing.piece_type == chess.KING:
+        return []
+    targets = []
+    for sq in after.attacks(to):
+        target = after.piece_at(sq)
+        if target is None or target.color == mover:
+            continue
+        if target.piece_type == chess.KING:
+            targets.append(sq)
+        elif _value(target) >= MIN_HANGING_VALUE and (
+            _value(target) > _value(landing) or not after.attackers(not mover, sq)
+        ):
+            targets.append(sq)
+    return targets
+
+
+PIECE_NAMES = {
+    chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
+    chess.ROOK: "rook", chess.QUEEN: "queen", chess.KING: "king",
+}
+
+
+def piece_name(piece: chess.Piece) -> str:
+    return PIECE_NAMES[piece.piece_type]
+
+
+def motif_details(board: chess.Board, move: chess.Move) -> dict:
+    """The specifics behind a move's motifs, for explanations: which pieces
+    a fork hits, what a pin/skewer lines up, what a discovered attack
+    uncovers. Keys are only present for motifs the move actually has."""
+    mover = board.turn
+    after = board.copy()
+    after.push(move)
+    details: dict = {}
+    if _see(after, move.to_square) == 0:
+        targets = _fork_target_squares(after, move.to_square, mover)
+        if len(targets) >= 2:
+            details["fork"] = [piece_name(after.piece_at(sq)) for sq in targets]
+        for kind, front, behind in _line_details(after, move.to_square, mover):
+            details.setdefault(kind, []).append((piece_name(front), piece_name(behind)))
+    for sq, piece in board.piece_map().items():
+        if piece.color != mover or piece.piece_type not in SLIDER_DIRECTIONS or sq == move.from_square:
+            continue
+        before_attacks = board.attacks(sq)
+        for target_sq in after.attacks(sq):
+            target = after.piece_at(target_sq)
+            if target is None or target.color == mover or target_sq in before_attacks:
+                continue
+            if target.piece_type == chess.KING or _value(target) >= MIN_HANGING_VALUE:
+                details.setdefault("discovered_attack", []).append(piece_name(target))
+    return details
 
 
 def move_motifs(board: chess.Board, move: chess.Move) -> set[str]:
@@ -191,20 +252,8 @@ def move_motifs(board: chess.Board, move: chess.Move) -> set[str]:
 
     if safe and landing is not None:
         motifs |= _line_motifs(after, move.to_square, mover)
-        if landing.piece_type != chess.KING:
-            targets = 0
-            for sq in after.attacks(move.to_square):
-                target = after.piece_at(sq)
-                if target is None or target.color == mover:
-                    continue
-                if target.piece_type == chess.KING:
-                    targets += 1
-                elif _value(target) >= MIN_HANGING_VALUE and (
-                    _value(target) > _value(landing) or not after.attackers(not mover, sq)
-                ):
-                    targets += 1
-            if targets >= 2:
-                motifs.add("fork")
+        if len(_fork_target_squares(after, move.to_square, mover)) >= 2:
+            motifs.add("fork")
 
     for sq, piece in board.piece_map().items():
         if piece.color != mover or piece.piece_type not in SLIDER_DIRECTIONS or sq == move.from_square:
@@ -250,3 +299,30 @@ def puzzle_themes(fen: str, best_uci: str, mate_in: int | None = None) -> list[s
         if "mate" not in themes:
             themes.insert(1, "mate")
     return themes
+
+
+def material_balance(board: chess.Board, color: chess.Color) -> int:
+    """`color`'s material minus the opponent's, in pawns (kings excluded)."""
+    total = 0
+    for piece in board.piece_map().values():
+        if piece.piece_type == chess.KING:
+            continue
+        total += _value(piece) if piece.color == color else -_value(piece)
+    return total
+
+
+def pv_material_swing(fen: str, pv_uci: list[str], mover: chess.Color, plies: int = 6) -> int:
+    """How much material `mover` gains (pawns) by playing out the first
+    `plies` moves of an engine line — what "wins a knight" means when
+    describing a best move. Stops quietly at the first illegal move."""
+    board = chess.Board(fen)
+    start = material_balance(board, mover)
+    for uci in pv_uci[:plies]:
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            break
+        if move not in board.legal_moves:
+            break
+        board.push(move)
+    return material_balance(board, mover) - start
