@@ -1054,16 +1054,26 @@
     pollRefreshStatus();
   });
 
+  let refreshWasRunning = false;
+
   async function pollRefreshStatus(onDone) {
     const statusEl = document.getElementById("settings-status");
-    const res = await fetch("/api/refresh/status");
-    const status = await res.json();
+    let status;
+    try {
+      const res = await fetch("/api/refresh/status");
+      status = await res.json();
+    } catch (err) {
+      // The server is restarting or briefly unreachable — keep trying rather than freezing on the last message.
+      statusEl.textContent = "Lost contact with the server — retrying…";
+      setTimeout(() => pollRefreshStatus(onDone), 5000);
+      return;
+    }
 
     if (status.running) {
+      refreshWasRunning = true;
       const PHASE_LABEL = {
         fetching: "Fetching games…",
         analyzing: "Analyzing games with Stockfish…",
-        reviewing: "Reviewing new games (best moves, tactics)…",
         generating_puzzles: "Generating puzzles from flagged mistakes…",
       };
       let text = PHASE_LABEL[status.phase] || "Refreshing…";
@@ -1085,9 +1095,19 @@
           `not shown under this profile, but not missing either.`;
       }
       statusEl.textContent = text + " Reloading…";
+      refreshWasRunning = false;
       loadProfileOptions();
       loadOverview(currentSource);
       if (openingsLoaded) loadOpenings(currentSource);
+      if (onDone) onDone();
+    } else if (refreshWasRunning) {
+      // It was running a moment ago and the server now has no record of it: the server restarted mid-refresh.
+      // Without this the page kept showing the last phase forever.
+      refreshWasRunning = false;
+      statusEl.textContent = "The refresh was interrupted (the server restarted while it was running). " +
+        "Games already fetched are kept — click Refresh again to pick up where it left off.";
+      loadProfileOptions();
+      loadOverview(currentSource);
       if (onDone) onDone();
     }
   }

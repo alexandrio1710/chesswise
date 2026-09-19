@@ -254,20 +254,18 @@ def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | Non
             lambda: len(get_unanalyzed_games()),
             lambda: run_batch_analysis(workers=ANALYSIS_WORKERS),
         )
-        # Only the games this refresh just analyzed: the historical backlog is
-        # built on demand (opening a game) or from Insights, not on every sync.
-        fresh = list(newly_analyzed)
-        _run_phase_with_progress(
-            key, "reviewing", len(review.games_needing_review(fresh)),
-            lambda: len(review.games_needing_review(fresh)),
-            lambda: review.backfill_reviews(fresh),
-        )
         _run_phase_with_progress(
             key, "generating_puzzles", len(get_mistakes_without_puzzles()),
             lambda: len(get_mistakes_without_puzzles()),
             lambda: generate_all_puzzles(workers=ANALYSIS_WORKERS),
         )
         alerts.send_alerts_for_games(newly_analyzed)
+        # Review data (best moves, tactics) is only needed for Game Review and
+        # Insights, and takes seconds per game — so it builds in the
+        # background after the refresh has finished (progress on the Insights
+        # page) instead of holding the refresh open. A game opened before
+        # then is reviewed on demand.
+        review.start_bulk_review()
         _refresh_status[key]["result"] = result
         _refresh_status[key]["error"] = None
     except Exception as e:
