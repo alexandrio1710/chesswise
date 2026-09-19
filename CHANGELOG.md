@@ -1,5 +1,77 @@
 # Changelog
 
+## v44 — A free alternative to chess.com Premium: Game Review, Insights, interactive puzzles
+
+Asked for chess.com's Game Review, Insights and puzzle experience,
+re-created with open code instead of a subscription. Researched what
+chess.com's Diamond tier actually offers (ten move classes with accuracy
+for both players, coach explanations, retry/hints, key moments, an
+Insights page of filters + openings/tactics/moves/calendar, themed puzzles
+and Rush) and built each piece on this project's own data, borrowing
+open-source parts where they exist.
+
+**Shared building blocks.** A reusable interactive board
+(`static/js/board.js`): legal moves and check detection from chess.js
+(BSD-2, vendored), everything else — drag and click-to-move, promotion
+picker, arrows, class badges, glide animation — written here. Pieces are the
+cburnett SVG set (see `THIRD_PARTY_NOTICES.md`). The puzzle trainer, the
+review page and Insights' example positions all use it.
+
+**Interactive puzzles.** Positions are fully playable and say whose move it
+is; themes (fork, pin, skewer, mate in N, hanging piece, ...) come from
+`tactics.py`, a python-chess motif detector (SEE-based, with ray scans for
+pins and skewers). Hints, streaks, a Rush mode with strikes, and a live
+engine panel after solving. Moves are graded by the engine, not only against
+the stored best move, so an equally good alternative counts.
+
+**Game Review for both players.** Migration 28 stores the engine's best
+move and line for the position before *every* move, for both colors — the
+raw material for "Best was Nf3", the coach, and Retry. The pass was already
+running MultiPV over every ply of a game; it now keeps what it finds. A
+small daemon-process Stockfish pool (`engine_pool.py`) fans that work out
+over the CPU cores: a game reviews in a couple of seconds instead of
+half a minute. (Not `ProcessPoolExecutor`: python-chess's engine thread is
+non-daemon, so pool workers holding engines never let the interpreter
+exit.) `explain.py` writes the coach text deterministically from the
+engine line plus board facts — no LLM, and it says what the engine
+preferred rather than inventing a reason when it can't establish one. The
+review page (`game.html`) has both accuracies, a class table for each side,
+phase grades, key moments, Retry (graded by the engine), hints, a
+best-move/played-move arrow view, live engine lines, and drag-any-piece
+exploration.
+
+**Insights.** `insights_report.py` builds every section from one filtered
+set of games (site, time class, color, date range, profile): overview,
+openings with book depth, tactics found vs. missed by you and your
+opponents, move quality, calendar in the viewer's own timezone.
+`game_tactics` (migration 28) holds one row per tactical opportunity or
+hanging piece so the counts are queries, not recomputation; example
+positions replay the PGN on demand. Game shape and termination
+(`game_meta.py`) come from the eval curve and the PGN.
+
+**Geography.** Games only store an opponent's username, so countries are
+looked up from public profiles (chess.com and Lichess APIs) by a
+user-started background job, one throttled request per distinct opponent,
+cached in `opponent_countries` (migration 29) including "no country" and
+"account closed" so nothing is asked twice.
+
+**Honest limits.**
+- Accuracy is Lichess's published algorithm, not chess.com's proprietary
+  CAPS2, so numbers won't match chess.com's.
+- Game shapes are this project's own reading of the eval curve (thresholds
+  documented in `game_meta.py`); chess.com's aren't published.
+- Sections that need the review pass (move quality, tactics) count only
+  reviewed games and say how many that is; a banner offers a background
+  "Build review data" job (about 2-5 seconds per game) instead of
+  extrapolating from a subset.
+- No "rated vs. casual" filter: the stored games don't record it, and
+  chess.com's PGN doesn't include it.
+- No peer comparison, lessons, bots or live play.
+
+Also fixed: a game that ended before any move was played (analyzed, zero
+moves) counted as "needs review" forever; it's now excluded, and opening it
+says so instead of failing.
+
 ## v43 — Refresh now actually uses its available CPU cores
 
 Reported as still stupidly slow even after v39's progress-reporting fix.

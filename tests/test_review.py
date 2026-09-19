@@ -143,3 +143,37 @@ class TestExtractAndNeedsReview:
         done = self._insert_game(reviewed_at="2026-06-01 00:00:00")
         todo = review.games_needing_review()
         assert pending in todo and done not in todo
+
+
+class TestGamesWithoutMoves:
+    def test_a_game_that_ended_before_any_move_has_nothing_to_review(self):
+        import review
+        from db import get_connection
+        conn = get_connection()
+        try:
+            gid = conn.execute(
+                "INSERT INTO games (source, source_game_id, date, result, color, analyzed, analyzed_at) "
+                "VALUES ('manual', 'no-moves-1', '2026-01-01T00:00:00+00:00', 'win', 'white', 1, '2026-01-01 00:00:00')").lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+        assert review.needs_review(gid) is False
+        assert gid not in review.games_needing_review()
+
+
+class TestReviewCli:
+    def test_review_command_backfills_and_shuts_the_pool_down(self, monkeypatch, capsys):
+        import argparse
+
+        import cli
+        import engine_pool
+        import review
+
+        calls = []
+        monkeypatch.setattr(review, "games_needing_review", lambda game_ids=None: [1, 2])
+        monkeypatch.setattr(review, "backfill_reviews", lambda game_ids=None, progress=None: (progress(2, 2, 0), {"reviewed": 2, "failed": 0})[1])
+        monkeypatch.setattr(engine_pool, "shutdown", lambda: calls.append("shutdown"))
+        cli.cmd_review(argparse.Namespace())
+        out = capsys.readouterr().out
+        assert "2 game(s) need review data." in out and "Done: 2 reviewed, 0 failed." in out
+        assert calls == ["shutdown"]

@@ -5,594 +5,782 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chesswise — Insights</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<link rel="stylesheet" href="/static/css/app.css">
 <style>
-  /* Dark (Catppuccin Mocha) is the default regardless of OS
-     preference — Mokka's look is a deliberate, chosen theme, not
-     something that should silently flip to light just because the
-     system prefers it. "System" in the theme-toggle cycle below
-     therefore renders identically to "dark"; :root[data-theme="light"]
-     is the only way to opt into the light (Latte) palette. */
-  :root {
-    color-scheme: dark;
-    --surface-1: #1c2e3c;
-    --surface-1-glass: rgba(28,46,60,0.72);
-    --page-plane: #131f29;
-    --text-primary: #dfe8ed;
-    --text-secondary: #a8bcc7;
-    --text-muted: #748994;
-    --gridline: #2c4356;
-    --baseline: #3c5b70;
-    --border: rgba(223,232,237,0.14);
-    --series-1: #7fabc4; /* muted sky blue — bar chart, lichess badge */
-    --series-2: #d3a077; /* muted clay — chesscom badge, deliberate warm counterpoint */
-    --status-critical: #e2707f; /* blunder */
-    --status-critical-text: #2a0011;
-    --status-serious: #e58f95; /* mistake */
-    --status-warning: #e6bf78; /* inaccuracy */
-    --status-good: #7fbd96;
-    --accent: #6b9bb8; /* muted steel-sky accent */
-    --accent-soft: rgba(107,155,184,0.18);
-    --accent-glow: rgba(107,155,184,0.35);
-    --bg-art: linear-gradient(180deg, #0f1922 0%, #16242f 55%, #1e3140 100%);
-  }
-  :root[data-theme="light"] {
-    color-scheme: light;
-    --surface-1: #ffffff;
-    --surface-1-glass: rgba(255,255,255,0.75);
-    --page-plane: #eef2f5;
-    --text-primary: #2b3c46;
-    --text-secondary: #57707d;
-    --text-muted: #869aa5;
-    --gridline: #d7e2e8;
-    --baseline: #b3c5cf;
-    --border: rgba(43,60,70,0.14);
-    --series-1: #5a8aa6;
-    --series-2: #cd8552;
-    --status-critical: #c94d5f;
-    --status-critical-text: #ffffff;
-    --status-serious: #d4737f;
-    --status-warning: #c68c33;
-    --status-good: #4a9268;
-    --accent: #4d84a3;
-    --accent-soft: rgba(77,132,163,0.14);
-    --accent-glow: rgba(77,132,163,0.28);
-    --bg-art: linear-gradient(180deg, #eef2f5 0%, #e3ebef 55%, #d7e2e8 100%);
-  }
+  .filters { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; position: sticky; top: 8px; z-index: 10; }
+  .filters .grow { flex: 1; }
+  .filters .hint { font-size: 12px; color: var(--text-secondary); align-self: center; }
+  .notice { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; border-color: var(--accent); }
+  .notice .txt { flex: 1; min-width: 240px; font-size: 13px; line-height: 1.5; }
+  .progress { height: 8px; border-radius: 99px; background: var(--page-plane); overflow: hidden; min-width: 180px; flex: 1; }
+  .progress > span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
 
-  * { box-sizing: border-box; }
-  html, body { overflow-x: hidden; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    background-image: var(--bg-art);
-    background-size: cover;
-    background-position: bottom center;
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-    background-color: var(--page-plane);
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    padding: 28px 40px 64px;
-  }
-  .page { max-width: 1440px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-  header.top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-  h1 { font-size: 20px; margin: 0; }
-  nav.top-nav a {
-    color: var(--text-secondary);
-    text-decoration: none;
-    font-size: 13px;
-    padding: 7px 14px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    transition: background .15s, color .15s, border-color .15s;
-  }
-  nav.top-nav a:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
-  nav.top-nav a.active { background: var(--accent); color: #fff; border-color: transparent; }
-  .nav-dropdown { position: relative; display: inline-block; }
-  .nav-dropdown-toggle {
-    font: inherit; font-size: 13px; padding: 7px 14px; border: 1px solid var(--border);
-    border-radius: 999px; background: none; color: var(--text-secondary); cursor: pointer;
-    transition: background .15s, color .15s, border-color .15s;
-  }
-  .nav-dropdown-toggle:hover { background: var(--accent-soft); color: var(--text-primary); border-color: transparent; }
-  .nav-dropdown-toggle.active-section { background: var(--accent); color: #fff; border-color: transparent; }
-  .nav-dropdown-menu {
-    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
-    padding: 6px; min-width: 150px; box-shadow: 0 12px 32px rgba(17,17,26,0.25);
-  }
-  .nav-dropdown.open .nav-dropdown-menu { display: block; }
-  .nav-dropdown-menu a {
-    display: block; padding: 8px 12px; border-radius: 8px; font-size: 13px;
-    color: var(--text-secondary); text-decoration: none; white-space: nowrap;
-  }
-  .nav-dropdown-menu a:hover { background: var(--accent-soft); color: var(--text-primary); }
-  .nav-dropdown-menu a.active { background: var(--accent); color: #fff; }
-  .icon-btn {
-    font: inherit; font-size: 15px; width: 34px; height: 34px; border-radius: 999px;
-    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
-  }
-  .icon-btn:hover:not(:disabled) { background: var(--accent-soft); border-color: transparent; }
-  .filter-group { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .filter-group button {
-    font: inherit; font-size: 13px; padding: 7px 14px; background: var(--surface-1);
-    color: var(--text-secondary); border: none; border-right: 1px solid var(--border); cursor: pointer;
-  }
-  .filter-group button:last-child { border-right: none; }
-  .filter-group button.active { background: var(--accent); color: #fff; }
-  .profile-select {
-    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 10px;
-    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
-  }
-  .card {
-    background: var(--surface-1-glass);
-    -webkit-backdrop-filter: blur(20px) saturate(150%);
-    backdrop-filter: blur(20px) saturate(150%);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 20px;
-    min-width: 0;
-    box-shadow: 0 1px 2px rgba(17, 17, 26, 0.06), 0 24px 48px -24px var(--accent-glow);
-  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
+  .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+  .card h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .card h2 .sub { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+  .note { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; line-height: 1.5; }
 
-  .insight-list { display: flex; flex-direction: column; gap: 10px; }
-  .insight-item {
-    display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
-    background: var(--page-plane); border-radius: 10px; font-size: 15px;
-  }
-  .insight-rank {
-    flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--series-1); color: #fff;
-    display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
-  }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .stat { padding: 14px 16px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); }
+  .stat .v { font-size: 28px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-top: 3px; }
+  .stat .s { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
-  .bar-list { display: flex; flex-direction: column; gap: 8px; }
-  .bar-list-item { font-size: 13px; }
-  .bar-list-label { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text-secondary); }
-  .bar-track { height: 8px; background: var(--gridline); border-radius: 4px; overflow: hidden; }
-  .bar-fill { height: 100%; background: var(--series-1); }
+  .wdl { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: var(--page-plane); min-width: 90px; }
+  .wdl .w { background: var(--status-good); } .wdl .d { background: #8798a3; } .wdl .l { background: var(--status-critical); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 
-  #rating-chart-wrap { position: relative; }
-  #rating-chart { width: 100%; height: 180px; display: block; }
-  .chart-caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
-  .rating-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
-  .rating-legend-item { display: flex; align-items: center; gap: 6px; }
-  .rating-legend-swatch { width: 20px; height: 0; border-top-width: 2px; border-top-style: solid; flex-shrink: 0; }
+  .rows { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(90px, 2fr) auto; gap: 12px; align-items: center; font-size: 13px; }
+  .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; min-width: 70px; }
+  .bar { height: 10px; border-radius: 99px; background: var(--page-plane); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .bar.good > span { background: var(--status-good); } .bar.bad > span { background: var(--status-critical); } .bar.warn > span { background: var(--status-warning); }
+  .cols3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+  .cols3 h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+  .empty { color: var(--text-secondary); font-size: 13px; padding: 6px 0; }
 
-  .empty-note { color: var(--text-secondary); font-size: 13px; }
-  .loading-text { color: var(--text-secondary); font-size: 14px; }
-  .spinner {
-    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
-    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
-    vertical-align: -3px; margin-right: 8px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tbl th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 6px 8px; white-space: nowrap; }
+  table.tbl td { padding: 8px; border-top: 1px solid var(--border); vertical-align: middle; }
+  table.tbl td.num, table.tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.tbl tr.var td { padding-top: 4px; padding-bottom: 4px; font-size: 12px; color: var(--text-secondary); border-top: none; }
+  table.tbl tr.open-row { cursor: pointer; }
+  table.tbl tr.open-row:hover td { background: var(--accent-soft); }
+  .caret { display: inline-block; width: 14px; color: var(--text-muted); transition: transform .15s; }
+  tr.expanded .caret { transform: rotate(90deg); }
+  .cls-dot { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; font: 800 10px/1 system-ui, sans-serif; margin-right: 8px; vertical-align: -4px; }
+  .link-cell { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .link-cell:hover { color: var(--accent); }
+  .pill-good { color: var(--status-good); font-weight: 700; } .pill-bad { color: var(--status-critical); font-weight: 700; }
+
+  .chart { width: 100%; }
+  .chart svg { display: block; overflow: visible; }
+  .chart text { fill: var(--text-muted); font: 11px system-ui, sans-serif; }
+
+  .heat { display: grid; gap: 3px; }
+  .heat .c { aspect-ratio: 1; border-radius: 3px; background: var(--page-plane); min-width: 0; }
+  .cal-wrap { overflow-x: auto; padding-bottom: 6px; }
+  .cal { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 13px); grid-auto-columns: 13px; gap: 3px; width: max-content; }
+  .cal .c { width: 13px; height: 13px; border-radius: 3px; background: var(--page-plane); }
+  .cal-months { display: flex; gap: 0; font-size: 10px; color: var(--text-muted); margin-bottom: 4px; position: relative; height: 12px; width: max-content; }
+  .cal-months span { position: absolute; }
+  .hm-x { max-width: 980px; display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)); gap: 3px; font-size: 10px; color: var(--text-muted); align-items: center; }
+  .hm-x .c { aspect-ratio: 1.2; border-radius: 3px; background: var(--page-plane); }
+  .hm-x .lab { text-align: right; padding-right: 4px; }
+
+  .examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-top: 14px; }
+  .ex { display: flex; flex-direction: column; gap: 8px; }
+  .ex .cap { font-size: 12px; color: var(--text-secondary); line-height: 1.45; }
+  .ex .cap strong { color: var(--text-primary); }
+  .ex-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+  .ex-head h3 { margin: 0; }
+
+  .insight { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .insight:first-child { border-top: none; }
+  .insight .rank { color: var(--accent); font-weight: 800; min-width: 18px; }
+  .rating-legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin-top: 8px; }
+  .rating-legend i { display: inline-block; width: 22px; border-top: 3px solid; margin-right: 8px; vertical-align: 3px; }
+  /* Wide tables scroll inside their card instead of being clipped on a phone. */
+  #op-white, #op-black, #ov-shapes, #ov-phases, #mv-quality, #mv-pieces, #mv-castle, #geo-table, #freq-table, #tac-free, #tac-hang { overflow-x: auto; }
+  #tac-table { display: block; overflow-x: auto; }
+  @media (max-width: 720px) { .grid, .grid.two { grid-template-columns: 1fr; } .filters { position: static; } table.tbl { min-width: 480px; } }
 </style>
 </head>
 <body>
 <div class="page">
-  <header class="top">
-    <h1>Insights</h1>
-    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-      <nav class="top-nav">
-        <a href="/">Dashboard</a>
-        <a href="/puzzles">Puzzles</a>
-        <div class="nav-dropdown">
-          <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">Train ▾</button>
-          <div class="nav-dropdown-menu">
-            <a href="/explorer">Explorer</a>
-            <a href="/endgame">Endgame</a>
-            <a href="/analyze">Analyze</a>
-          </div>
-        </div>
-        <div class="nav-dropdown">
-          <button type="button" class="nav-dropdown-toggle active-section" aria-haspopup="true" aria-expanded="false">Insights ▾</button>
-          <div class="nav-dropdown-menu">
-            <a href="/insights" class="active">Insights</a>
-            <a href="/clock">Clock</a>
-            <a href="/progress">Progress</a>
-            <a href="/coaching-report">Coaching Report</a>
-          </div>
-        </div>
-        <a href="/search">Search</a>
-      </nav>
-      <select class="profile-select" id="profile-select" title="Profile"><option value="">All profiles</option></select>
-      <div class="filter-group" id="filter-group">
-        <button data-source="all" class="active">All</button>
-        <button data-source="lichess">Lichess</button>
-        <button data-source="chesscom">Chess.com</button>
-      </div>
-      <a class="icon-btn" href="/profiles" title="Manage profiles" aria-label="Manage profiles" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">👤</a>
-      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
-    </div>
-  </header>
+  <header id="site-header"></header>
 
-  <section class="card">
-    <h2>Most notable right now</h2>
-    <p class="empty-note" style="margin-top:-6px;">Ranked by how much each finding deviates from a 50% baseline, weighted by how many games back it up — not a fixed list.</p>
-    <div class="insight-list" id="insight-list"><p class="loading-text"><span class="spinner"></span>Loading…</p></div>
+  <section class="card flat filters" id="filters">
+    <label class="field">Profile<select id="f-profile"><option value="">All profiles</option></select></label>
+    <label class="field">Site<select id="f-source"><option value="all">All</option><option value="lichess">Lichess</option><option value="chesscom">Chess.com</option></select></label>
+    <label class="field">Time class<select id="f-tc"><option value="">All</option><option value="bullet">Bullet</option><option value="blitz">Blitz</option><option value="rapid">Rapid</option><option value="classical">Classical</option><option value="daily">Daily</option></select></label>
+    <label class="field">Color<select id="f-color"><option value="">Both</option><option value="white">White</option><option value="black">Black</option></select></label>
+    <label class="field">Date range<select id="f-range"><option value="all">All time</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="180d">Last 6 months</option><option value="1y">Last year</option><option value="custom">Custom…</option></select></label>
+    <label class="field hidden" id="f-custom-from">From<input type="date" id="f-from"></label>
+    <label class="field hidden" id="f-custom-to">To<input type="date" id="f-to"></label>
+    <span class="grow"></span>
+    <span class="hint" id="f-summary"></span>
   </section>
 
-  <section class="card">
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
-      <h2 style="margin:0;">Rating over time</h2>
-      <select class="profile-select" id="rating-series-select"></select>
-    </div>
-    <div id="rating-chart-wrap">
-      <svg id="rating-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
-    </div>
-    <div class="rating-legend" id="rating-legend"></div>
-    <p class="chart-caption" id="rating-caption"></p>
-  </section>
+  <section class="card flat notice hidden" id="coverage"></section>
 
-  <div class="stats-grid">
-    <div class="card">
-      <h2>Win rate by color</h2>
-      <div class="bar-list" id="by-color"></div>
+  <div class="tabs" id="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="openings">Openings</button>
+    <button data-tab="tactics">Tactics</button>
+    <button data-tab="moves">Moves</button>
+    <button data-tab="opponents">Opponents</button>
+    <button data-tab="time">Calendar</button>
+    <button data-tab="more">Ratings &amp; more</button>
+  </div>
+
+  <div id="loading" class="card"><p class="empty"><span class="spinner"></span>Crunching your games…</p></div>
+
+  <!-- Overview -->
+  <div id="tab-overview" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <section class="card"><h2>Most notable right now <span class="sub">ranked by how far each finding is from 50%, weighted by sample size</span></h2><div id="ov-insights"></div></section>
+    <div class="stats" id="ov-stats"></div>
+    <section class="card"><h2>Games &amp; accuracy over time <span class="sub" id="ov-time-sub"></span></h2><div class="chart" id="ov-time"></div>
+      <div class="legend"><span><i style="background:var(--status-good)"></i>Won</span><span><i style="background:#8798a3"></i>Drawn</span><span><i style="background:var(--status-critical)"></i>Lost</span><span><i style="background:var(--series-2);height:3px;vertical-align:3px"></i>Your average accuracy</span></div></section>
+    <div class="grid two">
+      <section class="card"><h2>Accuracy by move number</h2><p class="note">Average accuracy of each move, by how deep into the game it was played (needs 3+ games at that move number).</p><div class="chart" id="ov-bymove"></div>
+        <div class="legend"><span><i style="background:var(--series-1)"></i>You</span><span><i style="background:var(--text-muted)"></i>Your opponents</span></div></section>
+      <section class="card"><h2>Results by opponent rating</h2><p class="note">Rating difference at the time of the game (opponent − you).</p><div class="rows" id="ov-bands"></div></section>
     </div>
-    <div class="card">
-      <h2>Win rate by time control</h2>
-      <div class="bar-list" id="by-time-control"></div>
+    <section class="card"><h2>How your games end</h2><div class="cols3" id="ov-results"></div></section>
+    <section class="card"><h2>Game shapes <span class="sub">this app's own reading of each game's evaluation curve</span></h2><div id="ov-shapes"></div></section>
+    <section class="card"><h2>Game phases</h2><div id="ov-phases"></div></section>
+  </div>
+
+  <!-- Openings -->
+  <div id="tab-openings" class="hidden grid two">
+    <section class="card"><h2>As White <span class="sub">top 10 by games</span></h2><div id="op-white"></div></section>
+    <section class="card"><h2>As Black <span class="sub">top 10 by games</span></h2><div id="op-black"></div></section>
+    <p class="note" style="grid-column:1/-1;margin:0">"Book moves" counts how many of your own moves followed known opening theory before the game left it — a rough measure of how well you know the line. Click an opening to see its variations.</p>
+  </div>
+
+  <!-- Tactics -->
+  <div id="tab-tactics" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <section class="card"><h2>Tactics <span class="sub" id="tac-cover"></span></h2>
+      <p class="note">A tactic counts as an opportunity when the engine's best move was that tactic and it wins material. "Found" means the move played was that tactic (or an equally good alternative); "missed" means it wasn't and the position got worse. Click any count to see example positions.</p>
+      <table class="tbl" id="tac-table"></table></section>
+    <div class="grid two">
+      <section class="card"><h2>Free pieces</h2><p class="note">A free piece is an undefended piece that could be captured for nothing. Did you (and they) take the chance?</p><div id="tac-free"></div></section>
+      <section class="card"><h2>Pieces left hanging</h2><p class="note">Pieces moved into (or left in) danger with no defence, and whether the other side took them right away.</p><div id="tac-hang"></div></section>
     </div>
-    <div class="card">
-      <h2>Accuracy by time control</h2>
-      <div class="bar-list" id="accuracy-by-time-control"></div>
+    <section class="card hidden" id="tac-examples-card"><div class="ex-head"><h3 id="tac-ex-title"></h3><span class="note" id="tac-ex-sub"></span></div><div class="examples" id="tac-examples"></div></section>
+  </div>
+
+  <!-- Moves -->
+  <div id="tab-moves" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <div class="grid two">
+      <section class="card"><h2>Move quality <span class="sub" id="mv-cover"></span></h2><div id="mv-quality"></div></section>
+      <section class="card"><h2>Your move quality over time</h2><div class="chart" id="mv-time"></div><div class="legend" id="mv-time-legend"></div></section>
     </div>
-    <div class="card">
-      <h2>Average centipawn loss by time control</h2>
-      <div class="bar-list" id="acpl-by-time-control"></div>
+    <div class="grid two">
+      <section class="card"><h2>By piece <span class="sub">your moves</span></h2><div id="mv-pieces"></div></section>
+      <section class="card"><h2>Castling</h2><div id="mv-castle"></div></section>
     </div>
-    <div class="card">
-      <h2>Performance rating by time control</h2>
-      <p class="chart-caption" style="margin-top:0;">FIDE's own formula (average opponent rating + your score against them) — about results, not move quality.</p>
-      <div class="bar-list" id="performance-rating-by-time-control"></div>
+  </div>
+
+  <!-- Opponents -->
+  <div id="tab-opponents" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <section class="card"><h2>Where your opponents are from <span class="sub" id="geo-sub"></span></h2>
+      <div id="geo-notice"></div><div id="geo-table"></div>
+      <p class="note" style="margin-top:10px">A country is whatever the opponent chose to show on their public profile — many don't set one, and it isn't a verified location.</p></section>
+    <section class="card"><h2>Most frequent opponents</h2><div id="freq-table"></div></section>
+  </div>
+
+  <!-- Calendar -->
+  <div id="tab-time" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <section class="card"><h2>Games per day <span class="sub" id="tz-note"></span></h2><div class="cal-wrap"><div id="cal-months" class="cal-months"></div><div class="cal" id="cal"></div></div>
+      <div class="legend"><span>Less</span><span id="cal-legend"></span><span>More</span></div></section>
+    <div class="grid two">
+      <section class="card"><h2>By day of the week</h2><div id="cal-week"></div></section>
+      <section class="card"><h2>By hour of the day</h2><div class="chart" id="cal-hours"></div></section>
     </div>
-    <div class="card">
-      <h2>Win rate by day of week (UTC)</h2>
-      <div class="bar-list" id="by-day"></div>
-    </div>
-    <div class="card">
-      <h2>Win rate by time of day (UTC)</h2>
-      <div class="bar-list" id="by-hour"></div>
-    </div>
-    <div class="card">
-      <h2>Performance vs. opponent rating</h2>
-      <div class="bar-list" id="by-rating-band"></div>
-    </div>
-    <div class="card">
-      <h2>Game length &amp; comebacks</h2>
-      <div id="length-comeback"></div>
+    <section class="card"><h2>When you play <span class="sub">games by weekday and hour</span></h2><div id="cal-heat"></div></section>
+  </div>
+
+  <!-- Ratings & more -->
+  <div id="tab-more" class="hidden" style="display:flex;flex-direction:column;gap:20px">
+    <section class="card">
+      <h2>Rating over time <select id="rating-series"></select></h2>
+      <div class="chart" id="rating-chart"></div><div class="rating-legend" id="rating-legend"></div><p class="note" id="rating-caption"></p>
+    </section>
+    <div class="grid">
+      <section class="card"><h2>Win rate by color</h2><div class="rows" id="mo-color"></div></section>
+      <section class="card"><h2>Win rate by time control</h2><div class="rows" id="mo-tc"></div></section>
+      <section class="card"><h2>Accuracy by time control</h2><div class="rows" id="mo-acc"></div></section>
+      <section class="card"><h2>Average centipawn loss</h2><p class="note">Lower is better.</p><div class="rows" id="mo-acpl"></div></section>
+      <section class="card"><h2>Performance rating</h2><p class="note">FIDE's own formula (average opponent rating + your score) — about results, not move quality.</p><div class="rows" id="mo-perf"></div></section>
+      <section class="card"><h2>Game length &amp; comebacks</h2><div class="rows" id="mo-length"></div></section>
     </div>
   </div>
 </div>
 
-<script>
-  let currentSource = "all";
-  let currentProfileId = localStorage.getItem("profileId") || "";
+<script type="module">
+  import { Board } from '/static/js/board.js';
+  import { escapeHtml, CLASS_ORDER, CLASS_STYLE } from '/static/js/ui.js';
+  import { mountChrome } from '/static/js/chrome.js';
 
-  function qs(source, profileId) {
-    const params = new URLSearchParams();
-    if (source && source !== "all") params.set("source", source);
-    if (profileId) params.set("profile_id", profileId);
-    const s = params.toString();
-    return s ? `?${s}` : "";
+  mountChrome({ title: 'Insights', active: 'insights' });
+
+  const $ = (id) => document.getElementById(id);
+  const TZ_OFFSET = new Date().getTimezoneOffset();
+  const TC_LABEL = { bullet: 'Bullet', blitz: 'Blitz', rapid: 'Rapid', classical: 'Classical', daily: 'Daily' };
+  const SOURCE_LABEL = { lichess: 'Lichess', chesscom: 'Chess.com' };
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const pct = (v, d = 1) => (v == null ? '—' : `${(+v).toFixed(d).replace(/\.0$/, '')}%`);
+  const num = (v) => (v == null ? '—' : v);
+  const style = (k) => CLASS_STYLE[k] || CLASS_STYLE.good;
+
+  function safeGet(k, fb) { try { return localStorage.getItem(k) ?? fb; } catch (e) { return fb; } }
+  function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* preference just won't persist */ } }
+
+  // --- state ---------------------------------------------------------------------------
+  const F = Object.assign({ profile: safeGet('profileId', ''), source: 'all', tc: '', color: '', range: 'all', from: '', to: '' },
+    (() => { try { return JSON.parse(safeGet('insightsFilters', '{}')); } catch (e) { return {}; } })());
+  let R = null;
+  let tab = safeGet('insightsTab', 'overview');
+  let charts = [];
+  let reloadToken = 0;
+
+  function query(extra = {}) {
+    const p = new URLSearchParams();
+    if (F.profile) p.set('profile_id', F.profile);
+    if (F.source && F.source !== 'all') p.set('source', F.source);
+    if (F.tc) p.set('time_class', F.tc);
+    if (F.color) p.set('color', F.color);
+    if (F.range === 'custom') {
+      if (F.from) p.set('date_from', F.from);
+      if (F.to) p.set('date_to', F.to);
+    } else if (F.range && F.range !== 'all') p.set('range', F.range);
+    for (const [k, v] of Object.entries(extra)) p.set(k, v);
+    return p.toString();
   }
 
-  async function loadProfileOptions() {
-    const select = document.getElementById("profile-select");
+  async function getJson(url, opts) {
     try {
-      const profiles = await fetch("/api/profiles").then(r => r.json());
-      select.innerHTML = `<option value="">All profiles</option>` +
-        profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
-      if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
-        select.value = currentProfileId;
-      } else {
-        currentProfileId = "";
-        localStorage.removeItem("profileId");
-      }
-    } catch {
-      // Profiles are a nice-to-have filter — a failed fetch here shouldn't
-      // block the rest of the page from loading.
-    }
+      const res = await fetch(url, opts);
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* non-JSON */ }
+      return { ok: res.ok, status: res.status, data };
+    } catch (e) { return { ok: false, status: 0, data: null }; }
   }
 
-  document.getElementById("profile-select").addEventListener("change", () => {
-    currentProfileId = document.getElementById("profile-select").value;
-    if (currentProfileId) localStorage.setItem("profileId", currentProfileId);
-    else localStorage.removeItem("profileId");
-    loadInsights(currentSource);
-  });
-
-  async function loadInsights(source) {
-    currentSource = source;
-    const res = await fetch(`/api/insights${qs(source, currentProfileId)}`);
-    const data = await res.json();
-    renderTopInsights(data.top_insights);
-    renderRatingChart(data.rating_progress);
-    renderBarList("by-color", data.win_rate_by_color);
-    renderBarList("by-time-control", data.win_rate_by_time_control);
-    renderAccuracyByTimeControl(data.accuracy_by_time_control);
-    renderAcplByTimeControl(data.acpl_by_time_control);
-    renderPerformanceRatingByTimeControl(data.performance_rating_by_time_control);
-    renderBarList("by-day", data.win_rate_by_day_of_week, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]);
-    renderBarList("by-hour", data.win_rate_by_time_of_day);
-    renderRatingBands(data.performance_vs_rating_band);
-    renderLengthComeback(data.avg_game_length, data.comeback_rate);
+  // --- filter bar ------------------------------------------------------------------------
+  async function loadProfiles() {
+    const r = await getJson('/api/profiles');
+    if (!r.ok) return;
+    $('f-profile').innerHTML = '<option value="">All profiles</option>' + r.data.map((p) => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join('');
+    if (F.profile && !r.data.some((p) => String(p.id) === String(F.profile))) F.profile = '';
+    $('f-profile').value = F.profile;
   }
 
-  function renderTopInsights(items) {
-    const list = document.getElementById("insight-list");
-    if (!items.length) {
-      list.innerHTML = `<p class="empty-note">Not enough games yet for a reliable insight (each one needs at least 3 games of supporting data).</p>`;
+  function syncFilterControls() {
+    $('f-profile').value = F.profile;
+    $('f-source').value = F.source;
+    $('f-tc').value = F.tc;
+    $('f-color').value = F.color;
+    $('f-range').value = F.range;
+    $('f-from').value = F.from;
+    $('f-to').value = F.to;
+    $('f-custom-from').classList.toggle('hidden', F.range !== 'custom');
+    $('f-custom-to').classList.toggle('hidden', F.range !== 'custom');
+  }
+
+  function onFilter() {
+    F.profile = $('f-profile').value;
+    F.source = $('f-source').value;
+    F.tc = $('f-tc').value;
+    F.color = $('f-color').value;
+    F.range = $('f-range').value;
+    F.from = $('f-from').value;
+    F.to = $('f-to').value;
+    if (F.profile) safeSet('profileId', F.profile); else { try { localStorage.removeItem('profileId'); } catch (e) { /* ignore */ } }
+    safeSet('insightsFilters', JSON.stringify({ ...F, profile: undefined }));
+    syncFilterControls();
+    load();
+  }
+  ['f-profile', 'f-source', 'f-tc', 'f-color', 'f-range', 'f-from', 'f-to'].forEach((id) => $(id).addEventListener('change', onFilter));
+
+  // --- tabs --------------------------------------------------------------------------------
+  const TABS = ['overview', 'openings', 'tactics', 'moves', 'opponents', 'time', 'more'];
+  function setTab(t) {
+    tab = TABS.includes(t) ? t : 'overview';
+    safeSet('insightsTab', tab);
+    for (const name of TABS) $(`tab-${name}`).classList.toggle('hidden', !(name === tab && R));
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    renderCharts();
+    if (tab === 'opponents' && R) loadGeography();
+  }
+  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  // --- load ---------------------------------------------------------------------------------
+  async function load() {
+    const token = ++reloadToken;
+    $('loading').classList.remove('hidden');
+    const r = await getJson(`/api/insights/report?${query({ tz_offset: TZ_OFFSET })}`);
+    if (token !== reloadToken) return;
+    $('loading').classList.add('hidden');
+    if (!r.ok) {
+      R = null;
+      $('loading').classList.remove('hidden');
+      $('loading').innerHTML = `<p class="empty">${escapeHtml((r.data && r.data.detail) || "Couldn't load insights — is the server running?")}</p>`;
       return;
     }
-    list.innerHTML = items.map((it, i) => `
-      <div class="insight-item"><span class="insight-rank">${i + 1}</span><span>${escapeHtml(it.text)}</span></div>
-    `).join("");
+    R = r.data;
+    $('loading').innerHTML = '<p class="empty"><span class="spinner"></span>Crunching your games…</p>';
+    const g = R.coverage.games;
+    $('f-summary').textContent = g ? `${g} game${g === 1 ? '' : 's'} match` : 'No games match these filters';
+    renderCoverage();
+    charts = [];
+    renderOverview();
+    renderOpenings();
+    renderTactics();
+    renderMoves();
+    renderCalendar();
+    renderMore();
+    setTab(tab);
+    $('tac-examples-card').classList.add('hidden');
   }
 
-  function renderBarList(elId, dict, order) {
-    const el = document.getElementById(elId);
-    const keys = order ? order.filter(k => dict[k]) : Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
-    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
-    el.innerHTML = keys.map(k => {
-      const d = dict[k];
-      return `
-        <div class="bar-list-item">
-          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${d.win_rate_pct}% (${d.games})</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${d.win_rate_pct}%"></div></div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  function renderAccuracyByTimeControl(dict) {
-    const el = document.getElementById("accuracy-by-time-control");
-    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
-    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
-    el.innerHTML = keys.map(k => {
-      const d = dict[k];
-      const acc = d.avg_accuracy;
-      return `
-        <div class="bar-list-item">
-          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acc !== null ? acc + "%" : "—"} (${d.games})</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${acc !== null ? acc : 0}%"></div></div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  // ACPL has no natural 0-100 ceiling the way a percentage does, so the bar
-  // width is scaled against this cap instead — chosen from this project's
-  // own data (typical values land well under it; a fully blunder-ridden
-  // time control would still visibly fill most of the bar rather than
-  // overflowing it). Unlike every other bar on this page, lower is better.
-  const ACPL_BAR_SCALE_CP = 150;
-
-  function renderAcplByTimeControl(dict) {
-    const el = document.getElementById("acpl-by-time-control");
-    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
-    if (!keys.length) { el.innerHTML = `<p class="empty-note">No data yet.</p>`; return; }
-    el.innerHTML = keys.map(k => {
-      const d = dict[k];
-      const acpl = d.avg_acpl;
-      const pct = acpl !== null ? Math.max(0, Math.min(100, (acpl / ACPL_BAR_SCALE_CP) * 100)) : 0;
-      return `
-        <div class="bar-list-item">
-          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${acpl !== null ? acpl + " cp" : "—"} (${d.games})</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  function renderPerformanceRatingByTimeControl(dict) {
-    const el = document.getElementById("performance-rating-by-time-control");
-    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
-    if (!keys.length) { el.innerHTML = `<p class="empty-note">No games with a known opponent rating yet.</p>`; return; }
-    el.innerHTML = keys.map(k => {
-      const d = dict[k];
-      return `
-        <div class="bar-list-item">
-          <div class="bar-list-label"><span>${escapeHtml(k)}</span><span>${d.performance_rating}</span></div>
-          <p class="chart-caption" style="margin:2px 0 0;">vs avg opponent ${d.avg_opponent_rating} · scored ${d.score}/${d.games} (${(d.score_fraction * 100).toFixed(1)}%)</p>
-        </div>
-      `;
-    }).join("");
-  }
-
-  function renderRatingBands(bands) {
-    const el = document.getElementById("by-rating-band");
-    if (!bands.length) { el.innerHTML = `<p class="empty-note">No rating data yet.</p>`; return; }
-    el.innerHTML = bands.map(b => `
-      <div class="bar-list-item">
-        <div class="bar-list-label"><span>${escapeHtml(b.label)}</span><span>${b.win_rate_pct}% (${b.games})</span></div>
-        <div class="bar-track"><div class="bar-fill" style="width:${b.win_rate_pct}%"></div></div>
-      </div>
-    `).join("");
-  }
-
-  function renderLengthComeback(length, comeback) {
-    const el = document.getElementById("length-comeback");
-    const rows = [];
-    if (length.win) rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Avg moves in wins</span><span>${length.win.avg_moves}</span></div></div>`);
-    if (length.loss) rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Avg moves in losses</span><span>${length.loss.avg_moves}</span></div></div>`);
-    if (comeback.games_significantly_behind) {
-      rows.push(`<div class="bar-list-item"><div class="bar-list-label"><span>Comeback rate when significantly behind</span><span>${comeback.comeback_rate_pct}% (${comeback.comebacks_won}/${comeback.games_significantly_behind})</span></div></div>`);
+  // --- review coverage / build button ----------------------------------------------------------
+  let buildTimer = null;
+  function renderCoverage(job) {
+    const el = $('coverage');
+    const c = R.coverage;
+    job = job || {};
+    if (job.running) {
+      const done = job.done || 0, total = job.total || 1;
+      el.classList.remove('hidden');
+      el.innerHTML = `<div class="txt"><span class="spinner"></span><strong>Reviewing your games…</strong> ${done} of ${total} done. Move quality and tactics fill in as this runs; the page refreshes when it finishes. You can keep using the app meanwhile.</div>
+        <div class="progress"><span style="width:${Math.round(done / total * 100)}%"></span></div>`;
+      return;
     }
-    el.innerHTML = rows.length ? `<div class="bar-list">${rows.join("")}</div>` : `<p class="empty-note">Not enough data yet.</p>`;
+    if (!c.pending) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.innerHTML = `<div class="txt"><strong>${c.reviewed} of ${c.games} games have review data.</strong> Move quality, tactics and coach explanations are built from a per-game review pass (the engine finds the best move for both sides in every position). Sections that need it only count reviewed games. It runs in the background and takes roughly 2–5 seconds per game.</div>
+      <button class="btn primary" id="build-review">Build review data</button>`;
+    $('build-review').addEventListener('click', startBuild);
   }
 
-  const SOURCE_LABELS = { lichess: "Lichess", chesscom: "Chess.com" };
-  // Solid vs. dashed distinguishes the source; color distinguishes the time
-  // control (below) — two independent visual channels so (source, time
-  // control) combos stay legible without needing a unique color per pair.
-  const SOURCE_DASH = { chesscom: "0", lichess: "5,4" };
-  const TIME_CONTROL_COLORS = {
-    bullet: "var(--status-critical)", blitz: "var(--series-2)", rapid: "var(--series-1)",
-    classical: "var(--accent)", daily: "var(--status-good)",
+  async function startBuild() {
+    await getJson('/api/review/start', { method: 'POST' });
+    pollBuild();
+  }
+  async function pollBuild() {
+    clearTimeout(buildTimer);
+    const r = await getJson('/api/review/status');
+    if (!r.ok || !R) return;
+    const job = r.data.job;
+    renderCoverage(job);
+    if (job.running) buildTimer = setTimeout(pollBuild, 2500);
+    else if (job.total) load();
+  }
+
+  // --- shared widgets --------------------------------------------------------------------------
+  const wdl = (r) => {
+    const n = r.games || 0;
+    if (!n) return '<div class="wdl"></div>';
+    return `<div class="wdl" title="${r.wins} won · ${r.draws} drawn · ${r.losses} lost"><span class="w" style="width:${r.wins / n * 100}%"></span><span class="d" style="width:${r.draws / n * 100}%"></span><span class="l" style="width:${r.losses / n * 100}%"></span></div>`;
   };
-  const TIME_CONTROL_LABELS = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", daily: "Daily" };
-  const FALLBACK_COLOR = "var(--text-muted)";
+  const stat = (label, value, sub = '') => `<div class="stat"><div class="v">${value}</div><div class="l">${label}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  const barRow = (name, valuePct, valueText, cls = '') => `<div class="row"><span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span><div class="bar ${cls}"><span style="width:${Math.max(0, Math.min(100, valuePct || 0))}%"></span></div><span class="val">${valueText}</span></div>`;
+  const dot = (k) => `<span class="cls-dot" style="background:${style(k).color}">${style(k).label}</span>`;
+  const empty = (msg = 'No data for these filters yet.') => `<p class="empty">${msg}</p>`;
 
-  let ratingProgressData = [];
-  // Empty means "no preference recorded yet" — defaults to the most-played
-  // (source, time control) below once the data is in, rather than "all"
-  // (showing every line at once is what a dropdown here is meant to avoid).
-  let ratingSeriesSelection = localStorage.getItem("ratingSeriesSelection") || "";
+  function fmtPeriod(p, gran) {
+    const d = new Date(p + 'T00:00:00');
+    return gran === 'month' ? d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
 
-  function groupKey(p) { return `${p.source}::${p.time_control || "unknown"}`; }
+  function svgChart(el, height, draw) {
+    const render = () => {
+      const w = Math.max(280, el.clientWidth || 600);
+      el.innerHTML = `<svg viewBox="0 0 ${w} ${height}" width="${w}" height="${height}">${draw(w, height)}</svg>`;
+    };
+    charts.push(render);
+    return render;
+  }
+  function renderCharts() { for (const r of charts) { try { r(); } catch (e) { console.error(e); } } }
+  let resizeTimer = null;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderCharts, 150); });
 
-  function renderRatingChart(progress) {
-    ratingProgressData = progress;
-    const svg = document.getElementById("rating-chart");
-    svg.innerHTML = "";
-    const caption = document.getElementById("rating-caption");
-    const legend = document.getElementById("rating-legend");
-    const select = document.getElementById("rating-series-select");
-    legend.innerHTML = "";
-    if (!progress.length) { caption.textContent = "No rating data yet."; select.innerHTML = ""; return; }
-
-    // Chess.com and Lichess each keep a SEPARATE rating pool per time
-    // control (a bullet rating and a rapid rating on the same site aren't
-    // the same number line, any more than Lichess and Chess.com ratings
-    // are) — plotting them all at once produced a cluttered chart with a
-    // fake "swing" every time the line crossed pools. A dropdown now shows
-    // one (source, time control) at a time by default — "All" is still
-    // available for an at-a-glance overview.
-    const allGroups = [...new Set(progress.map(groupKey))]
-      .sort((a, b) => progress.filter(p => groupKey(p) === b).length - progress.filter(p => groupKey(p) === a).length);
-
-    if (ratingSeriesSelection !== "all" && !allGroups.includes(ratingSeriesSelection)) {
-      ratingSeriesSelection = allGroups[0] || "all";
+  function axisTicks(w, h, pad, ymin, ymax, count = 4, fmt = (v) => Math.round(v)) {
+    let out = '';
+    for (let i = 0; i <= count; i++) {
+      const v = ymin + ((ymax - ymin) * i) / count;
+      const y = h - pad.b - ((v - ymin) / (ymax - ymin || 1)) * (h - pad.t - pad.b);
+      out += `<line x1="${pad.l}" x2="${w - pad.r}" y1="${y}" y2="${y}" stroke="var(--gridline)"/><text x="${pad.l - 6}" y="${y + 3}" text-anchor="end">${fmt(v)}</text>`;
     }
-    select.innerHTML = `<option value="all">All time controls</option>` + allGroups.map(key => {
-      const [source, timeControl] = key.split("::");
-      const label = `${SOURCE_LABELS[source] || source} ${TIME_CONTROL_LABELS[timeControl] || (timeControl === "unknown" ? "Unknown" : timeControl)}`;
-      return `<option value="${key}">${escapeHtml(label)}</option>`;
-    }).join("");
-    select.value = ratingSeriesSelection;
+    return out;
+  }
 
-    const groups = ratingSeriesSelection === "all" ? allGroups : [ratingSeriesSelection];
-    const width = 800, height = 180, pad = 16;
-    const ns = "http://www.w3.org/2000/svg";
-    const makeEl = (tag, attrs) => { const el = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
-    // "All" keeps every line on the shared chronological index so their
-    // relative timing stays comparable; a single selected series instead
-    // gets its own index so its games spread across the full chart width
-    // rather than being squeezed into wherever they fell among every game.
-    const useSharedIndex = groups.length > 1;
-    const xScale = (i, total) => pad + (i / Math.max(1, total - 1)) * (width - 2 * pad);
-    const legendRows = [];
+  // --- overview ----------------------------------------------------------------------------------
+  function renderOverview() {
+    const o = R.overview;
+    $('ov-insights').innerHTML = R.top_insights.length
+      ? R.top_insights.map((it, i) => `<div class="insight"><span class="rank">${i + 1}</span><span>${escapeHtml(it.text)}</span></div>`).join('')
+      : empty('Not enough games for a reliable insight yet (each needs at least 3 games behind it).');
+    if (!o.games) { $('ov-stats').innerHTML = `<div class="card">${empty('No games match these filters.')}</div>`; }
+    else {
+      $('ov-stats').innerHTML =
+        stat('Games', o.games, `${o.wins} won · ${o.draws} drawn · ${o.losses} lost`) +
+        `<div class="stat"><div class="v">${pct(o.win_rate_pct)}</div><div class="l">Win rate</div><div style="margin-top:8px">${wdl(o)}</div></div>` +
+        stat('Your accuracy', pct(o.accuracy), o.opponent_accuracy != null ? `opponents: ${pct(o.opponent_accuracy)}` : '') +
+        stat('Reviewed', `${R.coverage.reviewed}/${R.coverage.games}`, 'games with move-quality data');
+    }
 
-    groups.forEach(key => {
-      const [source, timeControl] = key.split("::");
-      const rows = progress.map((p, i) => ({ ...p, i })).filter(r => groupKey(r) === key);
-      const vals = rows.map(r => r.player_rating);
-      const minR = Math.min(...vals), maxR = Math.max(...vals);
-      const range = Math.max(1, maxR - minR);
-      const yScale = r => height - pad - ((r - minR) / range) * (height - 2 * pad);
-
-      const total = useSharedIndex ? progress.length : rows.length;
-      const points = rows.map((r, localI) => [xScale(useSharedIndex ? r.i : localI, total), yScale(r.player_rating)]);
-      const color = TIME_CONTROL_COLORS[timeControl] || FALLBACK_COLOR;
-      const dash = groups.length > 1 ? (SOURCE_DASH[source] || "0") : "0";
-      svg.appendChild(makeEl("polyline", {
-        points: points.map(p => p.join(",")).join(" "), fill: "none",
-        stroke: color, "stroke-width": 2, "stroke-linejoin": "round",
-        "stroke-linecap": "round", "stroke-dasharray": dash,
-      }));
-
-      const first = rows[0].player_rating, last = rows[rows.length - 1].player_rating;
-      const change = last - first;
-      const sourceLabel = SOURCE_LABELS[source] || source;
-      const tcLabel = TIME_CONTROL_LABELS[timeControl] || (timeControl === "unknown" ? "Unknown" : timeControl);
-      legendRows.push({
-        color, dash,
-        text: `${sourceLabel} ${tcLabel}: ${rows.length} game${rows.length === 1 ? "" : "s"}, ${first} → ${last} (${change >= 0 ? "+" : ""}${change})`,
+    $('ov-time-sub').textContent = o.over_time.length ? `per ${o.granularity}` : '';
+    if (o.over_time.length) {
+      const gran = o.granularity;
+      svgChart($('ov-time'), 240, (w, h) => {
+        const pad = { l: 34, r: 34, t: 10, b: 24 };
+        const maxG = Math.max(1, ...o.over_time.map((p) => p.games));
+        const n = o.over_time.length, slot = (w - pad.l - pad.r) / n, bw = Math.max(3, Math.min(34, slot * 0.7));
+        const yG = (v) => h - pad.b - (v / maxG) * (h - pad.t - pad.b);
+        const accs = o.over_time.map((p) => p.accuracy).filter((v) => v != null);
+        const aMin = accs.length ? Math.max(0, Math.floor((Math.min(...accs) - 5) / 5) * 5) : 0, aMax = 100;
+        const yA = (v) => h - pad.b - ((v - aMin) / (aMax - aMin)) * (h - pad.t - pad.b);
+        let s = axisTicks(w, h, pad, 0, maxG, 4);
+        for (let i = 0; i <= 4; i++) { const v = aMin + ((aMax - aMin) * i) / 4; s += `<text x="${w - pad.r + 6}" y="${yA(v) + 3}">${Math.round(v)}</text>`; }
+        let line = '';
+        o.over_time.forEach((p, i) => {
+          const x = pad.l + slot * i + slot / 2;
+          let y = h - pad.b;
+          for (const [k, c] of [['wins', 'var(--status-good)'], ['draws', '#8798a3'], ['losses', 'var(--status-critical)']]) {
+            const bh = (p[k] / maxG) * (h - pad.t - pad.b);
+            if (bh > 0) { y -= bh; s += `<rect x="${x - bw / 2}" y="${y}" width="${bw}" height="${bh}" fill="${c}" opacity="0.85"><title>${fmtPeriod(p.period, gran)}: ${p.games} game${p.games === 1 ? '' : 's'} (${p.wins}W ${p.draws}D ${p.losses}L)${p.accuracy != null ? ` · accuracy ${p.accuracy}%` : ''}</title></rect>`; }
+          }
+          if (p.accuracy != null) line += `${line ? ' L' : 'M'}${x},${yA(p.accuracy)}`;
+          if (i % Math.ceil(n / 8) === 0) s += `<text x="${x}" y="${h - 6}" text-anchor="middle">${fmtPeriod(p.period, gran)}</text>`;
+        });
+        if (line) s += `<path d="${line}" fill="none" stroke="var(--series-2)" stroke-width="2.5" stroke-linejoin="round"/>`;
+        return s;
       });
-    });
+    } else $('ov-time').innerHTML = empty();
 
-    legend.innerHTML = legendRows.map(r => `
-      <div class="rating-legend-item">
-        <span class="rating-legend-swatch" style="border-top-color:${r.color};border-top-style:${r.dash === "0" ? "solid" : "dashed"}"></span>
-        <span>${escapeHtml(r.text)}</span>
-      </div>
-    `).join("");
-
-    caption.textContent = groups.length > 1
-      ? "Each line is its own scale — different time controls (and different sites) don't share a rating pool, so the numbers aren't comparable across lines."
-      : "";
-  }
-
-  function escapeHtml(s) {
-    const div = document.createElement("div");
-    div.textContent = s ?? "";
-    return div.innerHTML;
-  }
-
-  document.getElementById("rating-series-select").addEventListener("change", (e) => {
-    ratingSeriesSelection = e.target.value;
-    localStorage.setItem("ratingSeriesSelection", ratingSeriesSelection);
-    renderRatingChart(ratingProgressData);
-  });
-
-  document.querySelectorAll("#filter-group button").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll("#filter-group button").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      loadInsights(btn.dataset.source);
-    });
-  });
-
-  function applyTheme(theme) {
-    if (theme === "system") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.setAttribute("data-theme", theme);
-  }
-  applyTheme(localStorage.getItem("theme") || "system");
-  document.getElementById("theme-toggle").addEventListener("click", () => {
-    const current = localStorage.getItem("theme") || "system";
-    const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
-    localStorage.setItem("theme", next);
-    applyTheme(next);
-  });
-
-  // Nav dropdowns (Train / Insights groups) — one open at a time, closes
-  // on an outside click or Escape. Duplicated identically across every
-  // page (no shared JS include in this app), same as the theme toggle above.
-  document.querySelectorAll(".nav-dropdown-toggle").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const dropdown = btn.closest(".nav-dropdown");
-      const wasOpen = dropdown.classList.contains("open");
-      document.querySelectorAll(".nav-dropdown.open").forEach(d => {
-        d.classList.remove("open");
-        d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
+    const mv = o.accuracy_by_move;
+    if (mv.length > 1) {
+      svgChart($('ov-bymove'), 220, (w, h) => {
+        const pad = { l: 34, r: 12, t: 10, b: 24 };
+        const vals = mv.flatMap((r) => [r.you, r.opp]).filter((v) => v != null);
+        const lo = Math.max(0, Math.floor((Math.min(...vals) - 3) / 5) * 5), hi = 100;
+        const x = (m) => pad.l + ((m - mv[0].move) / Math.max(1, mv[mv.length - 1].move - mv[0].move)) * (w - pad.l - pad.r);
+        const y = (v) => h - pad.b - ((v - lo) / (hi - lo)) * (h - pad.t - pad.b);
+        let s = axisTicks(w, h, pad, lo, hi, 4);
+        for (const [key, color] of [['opp', 'var(--text-muted)'], ['you', 'var(--series-1)']]) {
+          const pts = mv.filter((r) => r[key] != null).map((r) => `${x(r.move)},${y(r[key])}`);
+          if (pts.length) s += `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"/>`;
+        }
+        for (const r of mv) if (r.move % 5 === 0 || r.move === 1) s += `<text x="${x(r.move)}" y="${h - 6}" text-anchor="middle">${r.move}</text><circle cx="${x(r.move)}" cy="${y(r.you)}" r="2.5" fill="var(--series-1)"><title>Move ${r.move}: you ${r.you}% · opponents ${r.opp}% (${r.samples} games)</title></circle>`;
+        return s;
       });
-      if (!wasOpen) {
-        dropdown.classList.add("open");
-        btn.setAttribute("aria-expanded", "true");
+    } else $('ov-bymove').innerHTML = empty();
+
+    const bands = R.legacy.performance_vs_rating_band;
+    $('ov-bands').innerHTML = bands.length ? bands.map((b) => `<div class="row" style="grid-template-columns:minmax(150px,1.4fr) minmax(90px,2fr) auto"><span class="name">${escapeHtml(b.label)}</span>${wdl(b)}<span class="val">${pct(b.win_rate_pct, 0)} · ${b.games}</span></div>`).join('') : empty('No rating data for these games.');
+
+    const groups = [['win', 'Your wins'], ['loss', 'Your losses'], ['draw', 'Draws']];
+    $('ov-results').innerHTML = groups.map(([k, title]) => {
+      const rows = R.results[k];
+      const max = Math.max(1, ...rows.map((r) => r.count));
+      return `<div><h3>${title} · ${rows.reduce((a, r) => a + r.count, 0)}</h3><div class="rows">${rows.length ? rows.map((r) => barRow(r.label, r.count / max * 100, r.count, k === 'win' ? 'good' : k === 'loss' ? 'bad' : '')).join('') : empty('None')}</div></div>`;
+    }).join('');
+
+    $('ov-shapes').innerHTML = R.shapes.length ? `<table class="tbl"><thead><tr><th>Shape</th><th>What it means</th><th>Results</th><th class="num">Games</th><th class="num">Win rate</th></tr></thead><tbody>${
+      R.shapes.map((s) => `<tr><td><strong>${cap(s.shape)}</strong></td><td style="color:var(--text-secondary)">${escapeHtml(s.blurb)}</td><td style="min-width:120px">${wdl(s)}</td><td class="num">${s.games}</td><td class="num">${pct(s.win_rate_pct, 0)}</td></tr>`).join('')}</tbody></table>` : empty();
+
+    const ph = R.phases;
+    $('ov-phases').innerHTML = `<table class="tbl"><thead><tr><th>Phase</th><th class="num">Your accuracy</th><th class="num">Opponents'</th><th class="num">Your errors / 100 moves</th><th class="num">Opponents'</th><th>Games ending here</th></tr></thead><tbody>${
+      ph.phases.map((p, i) => { const e = ph.ended_in[i]; return `<tr><td><strong>${cap(p.phase)}</strong></td><td class="num">${pct(p.you.accuracy)}</td><td class="num">${pct(p.opp.accuracy)}</td><td class="num">${num(p.you.errors_per_100)}</td><td class="num">${num(p.opp.errors_per_100)}</td><td style="min-width:150px">${e.games ? `${wdl(e)}<div class="note" style="margin:3px 0 0">${e.games} game${e.games === 1 ? '' : 's'} · ${pct(e.win_rate_pct, 0)} won</div>` : '—'}</td></tr>`; }).join('')}</tbody></table>
+      <p class="note" style="margin-top:10px">An error is a move the engine rated a mistake or a blunder.</p>`;
+  }
+
+  // --- openings -----------------------------------------------------------------------------------
+  function renderOpenings() {
+    for (const color of ['white', 'black']) {
+      const rows = R.openings[color];
+      $(`op-${color}`).innerHTML = rows.length ? `<table class="tbl"><thead><tr><th>Opening</th><th class="num">Games</th><th>Results</th><th class="num">Accuracy</th><th class="num" title="Average number of your own moves that followed opening theory">Book moves</th></tr></thead><tbody>${
+        rows.map((r, i) => `<tr class="open-row" data-c="${color}" data-i="${i}"><td><span class="caret">▸</span><strong>${escapeHtml(r.opening)}</strong>${r.eco ? ` <span class="chip">${escapeHtml(r.eco)}</span>` : ''}</td><td class="num">${r.games}</td><td style="min-width:110px">${wdl(r)}<div class="note" style="margin:3px 0 0">${pct(r.win_rate_pct, 0)} won</div></td><td class="num">${pct(r.accuracy)}</td><td class="num">${r.avg_book_moves ?? '—'}${r.max_book_moves != null ? `<div class="note" style="margin:0">max ${r.max_book_moves}</div>` : ''}</td></tr>`).join('')}</tbody></table>` : empty(`No games as ${cap(color)} match these filters.`);
+    }
+    document.querySelectorAll('#tab-openings tr.open-row').forEach((tr) => tr.addEventListener('click', () => {
+      const o = R.openings[tr.dataset.c][+tr.dataset.i];
+      const next = tr.nextElementSibling;
+      if (next && next.classList.contains('var')) {
+        while (tr.nextElementSibling && tr.nextElementSibling.classList.contains('var')) tr.nextElementSibling.remove();
+        tr.classList.remove('expanded');
+        return;
       }
-    });
-  });
-  document.addEventListener("click", () => {
-    document.querySelectorAll(".nav-dropdown.open").forEach(d => {
-      d.classList.remove("open");
-      d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
-    });
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      document.querySelectorAll(".nav-dropdown.open").forEach(d => {
-        d.classList.remove("open");
-        d.querySelector(".nav-dropdown-toggle").setAttribute("aria-expanded", "false");
-      });
-    }
-  });
+      tr.classList.add('expanded');
+      let anchor = tr;
+      for (const v of o.variations) {
+        const row = document.createElement('tr');
+        row.className = 'var';
+        row.innerHTML = `<td style="padding-left:28px">${escapeHtml(v.name)}</td><td class="num">${v.games}</td><td>${wdl(v)}</td><td colspan="2" class="num">${pct(v.win_rate_pct, 0)} won</td>`;
+        anchor.after(row);
+        anchor = row;
+      }
+    }));
+  }
 
-  loadProfileOptions();
-  loadInsights("all");
+  // --- tactics -------------------------------------------------------------------------------------
+  const TACTIC_TEXT = {
+    fork: 'forks', pin: 'pins', skewer: 'skewers', discovered_attack: 'discovered attacks', mate: 'forced mates',
+    free_piece: 'free pieces', left_hanging: 'pieces left hanging',
+  };
+
+  // `o` = { good, bad, goodLabel, badLabel, goodCls, badCls, barCls } — which outcome is which and how it reads
+  // for that side (an opponent taking one of YOUR pieces is not a "good" outcome for you).
+  function pairCell(motif, side, pair, o) {
+    const total = pair[o.good] + pair[o.bad];
+    if (!total) return '<span class="muted">—</span>';
+    const cell = (kind, n, label, cls) => (n ? `<span class="link-cell ${cls}" data-motif="${motif}" data-side="${side}" data-outcome="${kind}" title="Show examples">${n} ${label}</span>` : `<span class="muted">0 ${label}</span>`);
+    const share = pair.rate_pct;
+    return `<div>${cell(o.good, pair[o.good], o.goodLabel, o.goodCls)} · ${cell(o.bad, pair[o.bad], o.badLabel, o.badCls)}</div><div class="bar ${o.barCls(share)}" style="margin-top:5px"><span style="width:${share}%"></span></div>`;
+  }
+  const FOUND = { good: 'found', bad: 'missed', goodLabel: 'found', badLabel: 'missed', goodCls: 'pill-good', badCls: 'pill-bad', barCls: (r) => (r >= 50 ? 'good' : 'bad') };
+
+  function renderTactics() {
+    const t = R.tactics;
+    $('tac-cover').textContent = `based on ${t.reviewed_games} of ${R.coverage.games} games`;
+    $('tac-table').innerHTML = `<thead><tr><th>Tactic</th><th>You</th><th>Your opponents</th></tr></thead><tbody>${
+      t.found_missed.map((r) => `<tr><td><strong>${r.label}</strong></td><td>${pairCell(r.motif, 'you', r.you, FOUND)}</td><td>${pairCell(r.motif, 'opp', r.opp, FOUND)}</td></tr>`).join('')}</tbody>`;
+    const row = (label, motif, side, pair, o) => `<tr><td>${label}</td><td>${pairCell(motif, side, pair, o)}</td></tr>`;
+    const take = { good: 'taken', bad: 'ignored', goodLabel: 'taken', badLabel: 'ignored', goodCls: 'pill-good', badCls: 'pill-bad', barCls: (r) => (r >= 50 ? 'good' : 'bad') };
+    const takeOpp = { ...take, goodCls: 'pill-bad', badCls: 'pill-good', barCls: (r) => (r >= 50 ? 'bad' : 'good') };
+    $('tac-free').innerHTML = `<table class="tbl"><tbody>${
+      row('Free pieces <strong>you</strong> could take', 'free_piece', 'you', t.free_pieces.you, take)}${
+      row('Free pieces <strong>your opponents</strong> could take', 'free_piece', 'opp', t.free_pieces.opp, takeOpp)}</tbody></table>`;
+    const mine = { good: 'escaped', bad: 'punished', goodLabel: 'escaped', badLabel: 'taken by your opponent', goodCls: 'pill-good', badCls: 'pill-bad', barCls: (r) => (r >= 50 ? 'good' : 'bad') };
+    const theirs = { good: 'punished', bad: 'escaped', goodLabel: 'taken by you', badLabel: 'escaped', goodCls: 'pill-good', badCls: 'pill-bad', barCls: (r) => (r >= 50 ? 'good' : 'bad') };
+    const shareOf = (p, good, bad) => ({ ...p, rate_pct: p[good] + p[bad] ? Math.round((p[good] / (p[good] + p[bad])) * 1000) / 10 : null });
+    $('tac-hang').innerHTML = `<table class="tbl"><tbody>${
+      row('<strong>Your</strong> pieces left hanging', 'left_hanging', 'you', shareOf(t.left_hanging.you, 'escaped', 'punished'), mine)}${
+      row("<strong>Opponents'</strong> pieces left hanging", 'left_hanging', 'opp', t.left_hanging.opp, theirs)}</tbody></table>`;
+    document.querySelectorAll('#tab-tactics .link-cell').forEach((el) => el.addEventListener('click', () => showExamples(el.dataset.motif, el.dataset.side, el.dataset.outcome)));
+  }
+
+  async function showExamples(motif, side, outcome) {
+    const card = $('tac-examples-card');
+    card.classList.remove('hidden');
+    const who = side === 'you' ? 'you' : 'your opponents';
+    $('tac-ex-title').textContent = `${cap(TACTIC_TEXT[motif] || motif)} ${outcome} by ${who}`;
+    $('tac-ex-sub').textContent = 'Biggest material swings first. Green arrow: what the engine wanted. Red: what was played.';
+    $('tac-examples').innerHTML = '<p class="empty"><span class="spinner"></span>Loading positions…</p>';
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const r = await getJson(`/api/insights/tactic-examples?${query({ motif, side, outcome, limit: 6 })}`);
+    const list = (r.ok && r.data.examples) || [];
+    if (!list.length) { $('tac-examples').innerHTML = empty('No example positions available.'); return; }
+    $('tac-examples').innerHTML = list.map((e, i) => `<div class="ex"><div id="ex-board-${i}"></div><div class="cap"><strong>${e.turn === 'white' ? 'White' : 'Black'} to move</strong> · move ${Math.ceil(e.ply / 2)} vs ${escapeHtml(e.opponent || '?')}<br>
+      ${e.best_san ? `Best: <strong>${escapeHtml(e.best_san)}</strong> · ` : ''}played <strong>${escapeHtml(e.played_san || '?')}</strong><br><a href="/game?id=${e.game_id}&ply=${e.ply}">Open in review →</a></div></div>`).join('');
+    list.forEach((e, i) => {
+      const b = new Board($(`ex-board-${i}`), { fen: e.fen, orientation: e.turn, interactive: false, showCoords: false, userShapes: false, animate: false });
+      const arrows = [];
+      if (e.best_uci) arrows.push({ from: e.best_uci.slice(0, 2), to: e.best_uci.slice(2, 4), color: '#81b64c', width: 0.17 });
+      if (e.played_uci && e.played_uci !== e.best_uci) arrows.push({ from: e.played_uci.slice(0, 2), to: e.played_uci.slice(2, 4), color: '#ca3431', width: 0.12, opacity: 0.65, dashed: true });
+      b.setArrows(arrows);
+    });
+  }
+
+  // --- moves ----------------------------------------------------------------------------------------
+  function renderMoves() {
+    const m = R.moves;
+    $('mv-cover').textContent = `based on ${m.reviewed_games} of ${R.coverage.games} games`;
+    const q = m.quality;
+    if (!q.you.total) { $('mv-quality').innerHTML = empty('Build review data to see your move-quality breakdown.'); }
+    else {
+      const maxPct = Math.max(1, ...CLASS_ORDER.flatMap((k) => [q.you.pct[k] || 0, q.opp.pct[k] || 0]));
+      $('mv-quality').innerHTML = `<table class="tbl"><thead><tr><th>Move</th><th>You</th><th>Opponents</th></tr></thead><tbody>${CLASS_ORDER.map((k) => `<tr><td>${dot(k)}${style(k).name}</td>
+        <td><div class="row" style="grid-template-columns:1fr auto"><div class="bar"><span style="width:${(q.you.pct[k] || 0) / maxPct * 100}%;background:${style(k).color}"></span></div><span class="val">${pct(q.you.pct[k])} <span class="muted">(${q.you.counts[k]})</span></span></div></td>
+        <td><div class="row" style="grid-template-columns:1fr auto"><div class="bar"><span style="width:${(q.opp.pct[k] || 0) / maxPct * 100}%;background:${style(k).color};opacity:.6"></span></div><span class="val">${pct(q.opp.pct[k])} <span class="muted">(${q.opp.counts[k]})</span></span></div></td></tr>`).join('')}</tbody></table>`;
+    }
+
+    const groups = [['best', 'Best', style('best').color], ['excellent', 'Excellent', style('excellent').color], ['good', 'Good', style('good').color],
+      ['inaccuracy', 'Inaccuracy', style('inaccuracy').color], ['mistake', 'Mistake', style('mistake').color], ['miss', 'Miss', style('miss').color], ['blunder', 'Blunder', style('blunder').color]];
+    $('mv-time-legend').innerHTML = groups.map(([, l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('');
+    if (m.over_time.length) {
+      const gran = R.overview.granularity;
+      svgChart($('mv-time'), 220, (w, h) => {
+        const pad = { l: 34, r: 8, t: 8, b: 24 };
+        const n = m.over_time.length, slot = (w - pad.l - pad.r) / n, bw = Math.max(3, Math.min(36, slot * 0.75));
+        let s = axisTicks(w, h, pad, 0, 100, 4, (v) => `${Math.round(v)}%`);
+        m.over_time.forEach((p, i) => {
+          const x = pad.l + slot * i + slot / 2;
+          let y = h - pad.b;
+          for (const [k, l, c] of groups) {
+            const bh = ((p[k] || 0) / 100) * (h - pad.t - pad.b);
+            if (bh > 0.3) { y -= bh; s += `<rect x="${x - bw / 2}" y="${y}" width="${bw}" height="${bh}" fill="${c}"><title>${fmtPeriod(p.period, gran)} · ${l}: ${p[k]}% of ${p.moves} moves</title></rect>`; }
+          }
+          if (i % Math.ceil(n / 8) === 0) s += `<text x="${x}" y="${h - 6}" text-anchor="middle">${fmtPeriod(p.period, gran)}</text>`;
+        });
+        return s;
+      });
+    } else $('mv-time').innerHTML = empty('Build review data to see this over time.');
+
+    $('mv-pieces').innerHTML = `<table class="tbl"><thead><tr><th>Piece</th><th class="num">Share of moves</th><th class="num">Accuracy</th><th class="num">Errors / 100</th></tr></thead><tbody>${
+      m.pieces.filter((p) => p.moves).map((p) => `<tr><td><strong>${p.name}</strong></td><td class="num">${pct(p.share_pct)}</td><td class="num">${pct(p.accuracy)}</td><td class="num">${num(p.errors_per_100)}</td></tr>`).join('')}</tbody></table>
+      <p class="note" style="margin-top:10px">Castling counts as a king move. An error is a move the engine rated a mistake or a blunder.</p>`;
+    $('mv-castle').innerHTML = `<table class="tbl"><thead><tr><th></th><th class="num">Games</th><th>Results</th><th class="num">Avg. move</th></tr></thead><tbody>${
+      m.castling.map((c) => `<tr><td><strong>${c.label}</strong></td><td class="num">${c.games}</td><td style="min-width:120px">${wdl(c)}<div class="note" style="margin:3px 0 0">${pct(c.win_rate_pct, 0)} won</div></td><td class="num">${c.avg_move ?? '—'}</td></tr>`).join('')}</tbody></table>`;
+  }
+
+  // --- opponents / geography ----------------------------------------------------------------------------
+  let geoTimer = null;
+  async function loadGeography() {
+    clearTimeout(geoTimer);
+    const r = await getJson(`/api/insights/geography?${query()}`);
+    if (!r.ok) { $('geo-notice').innerHTML = empty("Couldn't load opponent data."); return; }
+    renderGeography(r.data);
+    if (r.data.job && r.data.job.running && tab === 'opponents') geoTimer = setTimeout(loadGeography, 2500);
+  }
+
+  async function startGeography() {
+    await getJson(`/api/insights/geography/start?${query()}`, { method: 'POST' });
+    loadGeography();
+  }
+
+  function renderGeography(g) {
+    const job = g.job || {};
+    $('geo-sub').textContent = g.opponents ? `${g.located} of ${g.opponents} opponents placed` : '';
+    if (job.running) {
+      const done = job.done || 0, total = job.total || 1;
+      $('geo-notice').innerHTML = `<div class="notice" style="border:none;padding:0;margin-bottom:14px"><div class="txt"><span class="spinner"></span>Looking up opponents' public profiles… ${done} of ${total}</div><div class="progress"><span style="width:${Math.round(done / total * 100)}%"></span></div></div>`;
+    } else if (g.unresolved) {
+      $('geo-notice').innerHTML = `<div class="notice" style="border:none;padding:0;margin-bottom:14px"><div class="txt">${g.unresolved} opponent${g.unresolved === 1 ? '' : 's'} haven't been looked up yet. This asks chess.com / Lichess for each player's public profile (one small request each, about ${Math.max(1, Math.round(g.unresolved * 0.4))} seconds in total), and remembers the answers.</div><button class="btn primary" id="geo-start">Look up countries</button></div>`;
+      $('geo-start').addEventListener('click', startGeography);
+    } else $('geo-notice').innerHTML = '';
+
+    $('geo-table').innerHTML = g.countries.length ? `<table class="tbl"><thead><tr><th>Country</th><th class="num">Games</th><th class="num">Opponents</th><th>Results</th><th class="num">Win rate</th><th class="num">Avg. opp. rating</th></tr></thead><tbody>${
+      g.countries.map((c) => `<tr><td><strong>${escapeHtml(c.name)}</strong> <span class="chip">${escapeHtml(c.code)}</span></td><td class="num">${c.games}</td><td class="num">${c.opponents}</td><td style="min-width:120px">${wdl(c)}</td><td class="num">${pct(c.win_rate_pct, 0)}</td><td class="num">${num(c.avg_opponent_rating)}</td></tr>`).join('')}</tbody></table>`
+      : (g.opponents && !g.unresolved && !job.running ? empty(`None of these ${g.opponents} opponents show a country on their profile.`) : (g.opponents ? '' : empty('No games match these filters.')));
+
+    $('freq-table').innerHTML = g.frequent_opponents.length ? `<table class="tbl"><thead><tr><th>Opponent</th><th>Country</th><th class="num">Games</th><th>Results</th><th class="num">Win rate</th></tr></thead><tbody>${
+      g.frequent_opponents.map((o) => `<tr><td><strong>${escapeHtml(o.opponent)}</strong> <span class="chip">${SOURCE_LABEL[o.source] || o.source}</span></td><td>${o.country_name ? escapeHtml(o.country_name) : '<span class="muted">—</span>'}</td><td class="num">${o.games}</td><td style="min-width:120px">${wdl(o)}</td><td class="num">${pct(o.win_rate_pct, 0)}</td></tr>`).join('')}</tbody></table>`
+      : empty('No opponent played you more than once in these games.');
+  }
+
+  // --- calendar -------------------------------------------------------------------------------------
+  function heatColor(n, max) {
+    if (!n) return 'var(--page-plane)';
+    return `color-mix(in srgb, var(--accent) ${Math.round(25 + 75 * (n / max))}%, var(--page-plane))`;
+  }
+
+  function renderCalendar() {
+    const c = R.calendar;
+    const sign = TZ_OFFSET <= 0 ? '+' : '-', abs = Math.abs(TZ_OFFSET);
+    $('tz-note').textContent = `your local time (UTC${sign}${Math.floor(abs / 60)}${abs % 60 ? ':' + String(abs % 60).padStart(2, '0') : ''})`;
+    const byDay = new Map(c.days.map((d) => [d.date, d]));
+    const end = c.days.length ? new Date(c.days[c.days.length - 1].date + 'T00:00:00') : new Date();
+    const first = c.days.length ? new Date(c.days[0].date + 'T00:00:00') : new Date(end);
+    const yearAgo = new Date(end);
+    yearAgo.setDate(yearAgo.getDate() - 7 * 52);
+    const twentyWeeks = new Date(end);
+    twentyWeeks.setDate(twentyWeeks.getDate() - 7 * 19);
+    // Show the span the games cover (at least ~20 weeks, at most a year), starting on a Monday.
+    const start = new Date(Math.max(yearAgo, Math.min(first, twentyWeeks)));
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    const max = Math.max(1, ...c.days.map((d) => d.games));
+    let html = '', months = '', lastMonth = -1, col = 0;
+    for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const rec = byDay.get(iso);
+      const dow = (d.getDay() + 6) % 7;
+      if (dow === 0) {
+        if (d.getMonth() !== lastMonth) { months += `<span style="left:${col * 16}px">${d.toLocaleDateString(undefined, { month: 'short' })}</span>`; lastMonth = d.getMonth(); }
+        col += 1;
+      }
+      html += `<div class="c" style="background:${heatColor(rec ? rec.games : 0, max)}" title="${iso}: ${rec ? `${rec.games} game${rec.games === 1 ? '' : 's'} (${rec.wins}W ${rec.draws}D ${rec.losses}L)` : 'no games'}"></div>`;
+    }
+    $('cal').innerHTML = html;
+    $('cal-months').innerHTML = months;
+    $('cal-months').style.width = `${col * 16}px`;
+    $('cal-legend').innerHTML = [0, 0.25, 0.5, 0.75, 1].map((f) => `<i style="background:${heatColor(f ? f * max : 0, max)}"></i>`).join('');
+
+    const wmax = Math.max(1, ...c.weekday.map((d) => d.games));
+    $('cal-week').innerHTML = `<div class="rows">${c.weekday.map((d) => `<div class="row" style="grid-template-columns:100px 1fr auto"><span class="name">${d.day}</span>${d.games ? wdl(d) : '<div class="wdl"></div>'}<span class="val">${d.games ? `${pct(d.win_rate_pct, 0)} · ${d.games}` : '—'}</span></div>`).join('')}</div>
+      <p class="note" style="margin-top:10px">Bars show results; the count is games played.${'' }</p>`;
+
+    if (c.hour.some((h) => h.games)) {
+      svgChart($('cal-hours'), 200, (w, h) => {
+        const pad = { l: 28, r: 6, t: 8, b: 22 };
+        const hmax = Math.max(1, ...c.hour.map((x) => x.games));
+        const slot = (w - pad.l - pad.r) / 24;
+        let s = axisTicks(w, h, pad, 0, hmax, 4);
+        c.hour.forEach((x) => {
+          const bh = (x.games / hmax) * (h - pad.t - pad.b);
+          const color = x.games ? `color-mix(in srgb, var(--status-good) ${Math.round(x.win_rate_pct)}%, var(--status-critical))` : 'transparent';
+          s += `<rect x="${pad.l + slot * x.hour + 1}" y="${h - pad.b - bh}" width="${slot - 2}" height="${bh}" rx="2" fill="${color}"><title>${String(x.hour).padStart(2, '0')}:00 · ${x.games} games · ${pct(x.win_rate_pct, 0)} won</title></rect>`;
+          if (x.hour % 3 === 0) s += `<text x="${pad.l + slot * x.hour + slot / 2}" y="${h - 6}" text-anchor="middle">${x.hour}</text>`;
+        });
+        return s;
+      });
+    } else $('cal-hours').innerHTML = empty();
+
+    const hm = c.heatmap, hmax = Math.max(1, ...hm.flat());
+    $('cal-heat').innerHTML = `<div class="hm-x"><span></span>${Array.from({ length: 24 }, (_, h) => `<span style="text-align:center">${h % 3 === 0 ? h : ''}</span>`).join('')}${
+      hm.map((row, d) => `<span class="lab">${c.weekday[d].day.slice(0, 3)}</span>${row.map((n, h) => `<div class="c" style="background:${heatColor(n, hmax)}" title="${c.weekday[d].day} ${String(h).padStart(2, '0')}:00 — ${n} game${n === 1 ? '' : 's'}"></div>`).join('')}`).join('')}</div>`;
+  }
+
+  // --- ratings & more (the original Insights cards) -------------------------------------------------
+  function bars(el, dict, fmt, valueOf, cls = '') {
+    const keys = Object.keys(dict).sort((a, b) => (dict[b].games || 0) - (dict[a].games || 0));
+    $(el).innerHTML = keys.length ? keys.map((k) => { const d = dict[k]; const v = valueOf(d); return barRow(TC_LABEL[k] || cap(k), v.width, fmt(d), cls); }).join('') : empty();
+  }
+
+  let ratingSel = safeGet('ratingSeriesSelection', '');
+  function renderMore() {
+    const L = R.legacy;
+    bars('mo-color', L.win_rate_by_color, (d) => `${pct(d.win_rate_pct)} · ${d.games}`, (d) => ({ width: d.win_rate_pct }));
+    bars('mo-tc', L.win_rate_by_time_control, (d) => `${pct(d.win_rate_pct)} · ${d.games}`, (d) => ({ width: d.win_rate_pct }));
+    bars('mo-acc', L.accuracy_by_time_control, (d) => `${d.avg_accuracy != null ? pct(d.avg_accuracy) : '—'} · ${d.games}`, (d) => ({ width: d.avg_accuracy || 0 }));
+    bars('mo-acpl', L.acpl_by_time_control, (d) => `${d.avg_acpl != null ? d.avg_acpl + ' cp' : '—'} · ${d.games}`, (d) => ({ width: Math.min(100, ((d.avg_acpl || 0) / 150) * 100) }), 'warn');
+    const perf = L.performance_rating_by_time_control;
+    $('mo-perf').innerHTML = Object.keys(perf).length ? Object.keys(perf).sort((a, b) => perf[b].games - perf[a].games).map((k) => `<div><div class="row" style="grid-template-columns:1fr auto"><span class="name">${TC_LABEL[k] || cap(k)}</span><span class="val"><strong>${perf[k].performance_rating}</strong></span></div><p class="note" style="margin:2px 0 0">vs avg opponent ${perf[k].avg_opponent_rating} · scored ${perf[k].score}/${perf[k].games} (${(perf[k].score_fraction * 100).toFixed(1)}%)</p></div>`).join('') : empty('No games with a known opponent rating.');
+    const len = L.avg_game_length, cb = L.comeback_rate;
+    const rows = [];
+    if (len.win) rows.push(`<div class="row" style="grid-template-columns:1fr auto"><span>Average moves in wins</span><span class="val">${len.win.avg_moves}</span></div>`);
+    if (len.loss) rows.push(`<div class="row" style="grid-template-columns:1fr auto"><span>Average moves in losses</span><span class="val">${len.loss.avg_moves}</span></div>`);
+    if (cb.games_significantly_behind) rows.push(`<div class="row" style="grid-template-columns:1fr auto"><span>Comebacks when significantly behind</span><span class="val">${cb.comeback_rate_pct}% (${cb.comebacks_won}/${cb.games_significantly_behind})</span></div>`);
+    $('mo-length').innerHTML = rows.length ? rows.join('') : empty();
+    renderRating(L.rating_progress);
+  }
+
+  const RATING_COLORS = { bullet: 'var(--status-critical)', blitz: 'var(--series-2)', rapid: 'var(--series-1)', classical: 'var(--accent)', daily: 'var(--status-good)' };
+  function renderRating(progress) {
+    const sel = $('rating-series');
+    if (!progress.length) { $('rating-chart').innerHTML = empty('No rating data for these games.'); $('rating-legend').innerHTML = ''; sel.innerHTML = ''; return; }
+    const key = (p) => `${p.source}::${p.time_control || 'unknown'}`;
+    const groups = [...new Set(progress.map(key))].sort((a, b) => progress.filter((p) => key(p) === b).length - progress.filter((p) => key(p) === a).length);
+    if (ratingSel !== 'all' && !groups.includes(ratingSel)) ratingSel = groups[0];
+    sel.innerHTML = '<option value="all">All time controls</option>' + groups.map((g) => { const [s, t] = g.split('::'); return `<option value="${g}">${SOURCE_LABEL[s] || s} ${TC_LABEL[t] || t}</option>`; }).join('');
+    sel.value = ratingSel;
+    const shown = ratingSel === 'all' ? groups : [ratingSel];
+    const legend = [];
+    svgChart($('rating-chart'), 220, (w, h) => {
+      const pad = { l: 40, r: 10, t: 10, b: 10 };
+      const shared = shown.length > 1;
+      const all = progress.filter((p) => shown.includes(key(p)));
+      const lo = Math.min(...all.map((p) => p.player_rating)), hi = Math.max(...all.map((p) => p.player_rating));
+      let s = shared ? '' : axisTicks(w, h, { ...pad, b: 10 }, lo, hi === lo ? lo + 1 : hi, 4);
+      shown.forEach((g) => {
+        const rows = progress.map((p, i) => ({ ...p, i })).filter((r) => key(r) === g);
+        const vals = rows.map((r) => r.player_rating);
+        const mn = shared ? Math.min(...vals) : lo, mx = shared ? Math.max(...vals) : hi;
+        const total = shared ? progress.length : rows.length;
+        const pts = rows.map((r, li) => `${pad.l + ((shared ? r.i : li) / Math.max(1, total - 1)) * (w - pad.l - pad.r)},${h - pad.b - ((r.player_rating - mn) / Math.max(1, mx - mn)) * (h - pad.t - pad.b)}`);
+        const t = g.split('::')[1];
+        s += `<polyline points="${pts.join(' ')}" fill="none" stroke="${RATING_COLORS[t] || 'var(--text-muted)'}" stroke-width="2.5" stroke-linejoin="round" ${shared && g.startsWith('lichess') ? 'stroke-dasharray="6 4"' : ''}/>`;
+      });
+      return s;
+    });
+    shown.forEach((g) => {
+      const rows = progress.filter((p) => key(p) === g);
+      const [s, t] = g.split('::');
+      const first = rows[0].player_rating, last = rows[rows.length - 1].player_rating;
+      legend.push(`<div><i style="border-color:${RATING_COLORS[t] || 'var(--text-muted)'}"></i>${SOURCE_LABEL[s] || s} ${TC_LABEL[t] || t}: ${rows.length} game${rows.length === 1 ? '' : 's'}, ${first} → ${last} (${last - first >= 0 ? '+' : ''}${last - first})</div>`);
+    });
+    $('rating-legend').innerHTML = legend.join('');
+    $('rating-caption').textContent = shown.length > 1 ? "Each line has its own scale — different time controls and sites don't share a rating pool." : '';
+  }
+  $('rating-series').addEventListener('change', (e) => { ratingSel = e.target.value; safeSet('ratingSeriesSelection', ratingSel); charts = []; renderOverviewCharts(); });
+  function renderOverviewCharts() { if (R) { charts = []; renderOverview(); renderMoves(); renderCalendar(); renderMore(); renderCharts(); } }
+
+  // --- boot -------------------------------------------------------------------------------------------------
+  (async () => {
+    syncFilterControls();
+    await loadProfiles();
+    syncFilterControls();
+    await load();
+    const st = await getJson('/api/review/status');
+    if (st.ok && st.data.job && st.data.job.running) pollBuild();
+  })();
 </script>
 </body>
 </html>

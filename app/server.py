@@ -13,7 +13,7 @@ import mimetypes
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -29,8 +29,10 @@ import coaching_chat
 import coaching_report
 import export
 import game_meta
+import geography
 import game_report
 import insights
+import insights_report
 import manual_analysis
 import opening_explorer
 import opening_puzzles
@@ -370,6 +372,83 @@ def api_insights(source: str | None = Query(default=None), profile_id: int | Non
     }
 
 
+# Insights page (insights_report.py): one filter bar drives every section.
+_INSIGHTS_TIME_CLASSES = {"bullet", "blitz", "rapid", "classical", "daily"}
+_INSIGHTS_RANGES = {"7d": 7, "30d": 30, "90d": 90, "180d": 180, "1y": 365}
+
+
+def _insights_filters(source, profile_id, time_class, color, date_range, date_from, date_to) -> insights.Filters:
+    if time_class and time_class not in _INSIGHTS_TIME_CLASSES:
+        raise HTTPException(status_code=422, detail=f"Unknown time class: {time_class}")
+    if color and color not in ("white", "black"):
+        raise HTTPException(status_code=422, detail=f"Unknown color: {color}")
+    if date_range and date_range != "all" and date_range not in _INSIGHTS_RANGES:
+        raise HTTPException(status_code=422, detail=f"Unknown range: {date_range}")
+    for label, value in (("date_from", date_from), ("date_to", date_to)):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"{label} must be YYYY-MM-DD")
+    if not date_from and date_range in _INSIGHTS_RANGES:
+        date_from = (datetime.now(timezone.utc) - timedelta(days=_INSIGHTS_RANGES[date_range])).strftime("%Y-%m-%d")
+    return insights.Filters(source=_normalize_source(source), profile_id=profile_id, time_class=time_class or None,
+                            color=color or None, date_from=date_from or None, date_to=date_to or None)
+
+
+@app.get("/api/insights/report")
+def api_insights_report(
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    tz_offset: int = Query(default=0, ge=-840, le=840),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Every Insights section for the filtered games (see insights_report.py).
+    `tz_offset` is the browser's Date.getTimezoneOffset(), so the calendar
+    sections are in the viewer's own time rather than UTC."""
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return insights_report.build_report(flt, tz_offset)
+
+
+@app.get("/api/insights/geography")
+def api_insights_geography(
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Results by opponent country (from the cached profile lookups) and the
+    most frequent opponents, for the filtered games."""
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return geography.report(flt)
+
+
+@app.post("/api/insights/geography/start")
+def api_insights_geography_start(
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Look up the country of every not-yet-looked-up opponent in the filtered
+    games, in the background (one small public-API request each). Poll
+    GET /api/insights/geography for progress."""
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return {"started": geography.start_lookup(flt)}
+
+
+@app.get("/api/insights/tactic-examples")
+def api_insights_tactic_examples(
+    motif: str = Query(...), side: str = Query(...), outcome: str = Query(...), limit: int = Query(default=4, ge=1, le=12),
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Example positions behind one tactics count (e.g. forks you missed)."""
+    if side not in ("you", "opp"):
+        raise HTTPException(status_code=422, detail="side must be 'you' or 'opp'")
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return {"examples": insights_report.tactic_examples(flt, motif, side, outcome, limit)}
+
+
 @app.get("/api/search")
 def api_search_games(
     opponent: str | None = Query(default=None),
@@ -609,6 +688,14 @@ def api_game_review(game_id: int, retry: bool = Query(default=False),
         raise HTTPException(status_code=409, detail="This game hasn't been analyzed yet")
     if game["skip_reason"]:
         raise HTTPException(status_code=422, detail=f"Not analyzable: {game['skip_reason']}")
+
+    conn = get_connection()
+    try:
+        has_moves = conn.execute("SELECT 1 FROM game_moves WHERE game_id = ? LIMIT 1", (game_id,)).fetchone() is not None
+    finally:
+        conn.close()
+    if not has_moves:
+        raise HTTPException(status_code=422, detail="This game ended before any moves were played, so there's nothing to review.")
 
     job = _review_jobs.get(game_id)
     if job and job["running"]:

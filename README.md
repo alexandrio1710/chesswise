@@ -3,12 +3,15 @@
 [![Tests](https://github.com/alexandrio1710/chesswise/actions/workflows/tests.yml/badge.svg)](https://github.com/alexandrio1710/chesswise/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+A free, local alternative to chess.com's Premium/Diamond analysis tools.
 Pulls your own game history from Lichess and/or Chess.com, runs every game
-through Stockfish, and surfaces *patterns* in your mistakes instead of just
-raw engine analysis of one game at a time — where you're actually losing
-value (which phase, which openings, how time pressure affects you), a
-tactics trainer built from your own real blunders, and month-over-month
-trend tracking.
+through Stockfish, and gives you a chess.com-style **Game Review** (both
+players' accuracy, ten move classes, coach explanations, retry-a-mistake), a
+full **Insights** dashboard (openings, tactics found and missed, move
+quality, game shapes, calendar, opponents' countries), and **interactive
+puzzles** built from your own blunders — plus the pattern-finding this
+project started with: where you're actually losing value (which phase,
+which openings, how time pressure affects you) and month-over-month trends.
 
 ![Dashboard overview](docs/screenshots/dashboard.png)
 ![Puzzle trainer](docs/screenshots/puzzles.png)
@@ -35,12 +38,12 @@ trend tracking.
   -0.08 to 0.09 depending on time control — statistical noise. Removed
   the feature outright rather than keep calibrating something the data
   said wasn't there; see [CHANGELOG.md](CHANGELOG.md) v40-v42.
-- **300+ automated tests** — hand-verified unit tests for chess-specific
+- **500+ automated tests** — hand-verified unit tests for chess-specific
   edge cases (multi-piece tactical exchanges, mate-distance handling,
   opposite-side-castling detection) plus a real-engine integration test,
   running on every push via CI.
 - A numbered schema-migration system with automatic pre-migration
-  backups — 25 migrations shipped over the project's life without losing
+  backups — 29 migrations shipped over the project's life without losing
   data.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full, detailed history of *why*
@@ -52,10 +55,31 @@ each design decision was made, not just what changed.
   internal shape, with optional Lichess OAuth login and multiple local
   profiles (more than one person's data, or one person's separate
   accounts, in a single install)
-- Classifies every move on a ten-tier scale (best/excellent/good/
-  inaccuracy/mistake/blunder, plus brilliant/great/book/miss) and by game
-  phase (opening/middlegame/endgame), using Lichess's own real move-
-  judgment and phase-detection algorithms rather than ad hoc thresholds
+- **Game Review** (chess.com-style, for *both* players): accuracy for
+  each side, the ten move classes (brilliant, great, best, excellent, good,
+  book, inaccuracy, mistake, miss, blunder) as badges on the board, phase
+  grades, a plain-English coach explanation for every move, the engine's best
+  move and line, key moments, a "Retry" that grades your new attempt against
+  the engine, hints, live engine lines, and "drag any piece to explore your
+  own line" with re-analysis. See the comparison table below for what is and
+  isn't the same as chess.com.
+- **Insights**: one filter bar (site, time class, color, date range,
+  profile) over an Overview (games and accuracy over time, accuracy by move
+  number, results by opponent rating, how your games end, game shapes, game
+  phases), Openings (top ten per color with results, accuracy and book
+  depth), Tactics (forks, pins, skewers, discovered attacks, forced mates,
+  free and hanging pieces — found vs. missed, by you *and* your opponents,
+  with example positions), Moves (move-quality mix, quality over time,
+  per-piece accuracy, castling), Opponents (results by country, frequent
+  opponents), Calendar (games per day, weekday, hour — in your own timezone)
+  and the original rating / time-control cards.
+- **Interactive puzzles**: fully playable positions that say whose move it
+  is, legal-move dots, drag or click to move, promotion picker, themes (fork,
+  pin, skewer, mate in N, ...), hints, streaks, a Rush mode with strikes,
+  and a live engine panel to explore after you solve one.
+- Classifies every move by Lichess's own real move-judgment and
+  phase-detection algorithms (opening/middlegame/endgame) rather than ad
+  hoc thresholds
 - A Game Report per game: accuracy (Lichess's own real accuracy formula),
   full ten-tier move classification, and a short written summary — a real
   FIDE-formula Tournament Performance Rating is on the dashboard instead
@@ -85,6 +109,30 @@ each design decision was made, not just what changed.
 - An optional weekly Discord digest
 - Runs entirely locally: SQLite file, no external services required
   beyond the Stockfish binary (Discord and the chat coach are opt-in)
+
+## How this compares to chess.com Premium / Diamond
+
+Chesswise re-creates chess.com's analysis features with open algorithms and
+your own local Stockfish. It is *not* a byte-for-byte clone — chess.com's
+exact scoring and coach are proprietary — so where a number differs, that's
+why. Everything below runs on your machine, on your own games, for free.
+
+| Feature | chess.com | Chesswise |
+|---|---|---|
+| Game Review with ten move classes | Yes | Yes, for both players. Classes come from win-percentage loss (Lichess's formulas) plus book-move detection, so a given move can be classed differently than on chess.com |
+| Accuracy score | CAPS2 (proprietary, rating-calibrated) | Lichess's published accuracy algorithm — the same idea, but the two won't match number for number, so compare your own games to each other rather than to chess.com's figures |
+| "Why was that a mistake?" coach text | Yes | Yes, deterministic: built from the engine's line and facts about the board (forks, pins, hanging pieces, mates). Narrower vocabulary than a human or LLM coach, but never invented |
+| Retry, hints, best-move arrow, key moments | Yes | Yes |
+| Engine lines while reviewing / exploring a variation | Yes | Yes (your local Stockfish, depth 14) |
+| Eval graph, phase grades, clocks per player | Yes | Yes, with phase dividers and clickable scrubbing |
+| Insights: results, openings, tactics, moves, calendar | Yes | Yes — see Features |
+| Game shapes (balanced / sharp / wild / giveaway / smooth / sudden / intense) | Yes | Yes, but the thresholds are this project's own reading of the eval curve, documented in `game_meta.py` |
+| Tactics found vs. missed (forks, pins, mates, hanging pieces) | Yes | Yes, from engine-verified opportunities; "found" means you played it or an equally good alternative |
+| Opening mastery | Yes | Average book moves you played before leaving theory, per opening |
+| Results by opponent country | Yes | Yes, by looking up each opponent's public profile (opt-in, cached); only opponents who show a country can be placed |
+| Interactive puzzles with themes, hints, Rush | Yes, millions of rated puzzles | Puzzles from *your own* mistakes plus Lichess opening puzzles; themes, hints, streaks and a Rush mode with strikes. No puzzle rating or global puzzle database |
+| Peer comparison ("players at your level") | Yes | No — there is no population data to compare against |
+| Lessons, bots, live play, video | Yes | Not in scope |
 
 ## Setup
 
@@ -168,6 +216,7 @@ options.
 | `analyze` | Run Stockfish analysis on every stored game that hasn't been analyzed yet. `--depth` (speed/accuracy tradeoff), `--workers` (parallel processes) |
 | `refresh` | `fetch` (incremental — only games newer than what's stored) + `analyze` in one step. Remembers your usernames after the first run, so later calls need no arguments |
 | `puzzles` | Generate tactics puzzles from every flagged mistake/blunder that doesn't have one yet |
+| `review` | Build Game Review data (the engine's best move for both sides in every position, plus tactic events) for every analyzed game that lacks it. The web app does this on demand and for new games; this is the bulk backfill Insights' move-quality and tactics sections read from |
 | `digest` | `refresh` + `analyze` + post a summary to a Discord webhook (`DISCORD_WEBHOOK_URL` in `.env`, or `--webhook-url`) |
 | `serve` | Start the local dashboard (`--host`, `--port`, `--reload` for development) |
 

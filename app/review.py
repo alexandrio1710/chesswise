@@ -166,6 +166,8 @@ def needs_review(game_id: int) -> bool:
         game = conn.execute("SELECT analyzed, analyzed_at, reviewed_at FROM games WHERE id = ?", (game_id,)).fetchone()
         if game is None or not game["analyzed"]:
             return False
+        if not conn.execute("SELECT 1 FROM game_moves WHERE game_id = ? LIMIT 1", (game_id,)).fetchone():
+            return False  # a game that ended before a move was played has nothing to review
         if game["reviewed_at"] is None:
             return True
         if game["analyzed_at"] and game["analyzed_at"] > game["reviewed_at"]:
@@ -203,7 +205,8 @@ def games_needing_review(game_ids: list[int] | None = None) -> list[int]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id FROM games WHERE analyzed = 1 AND skip_reason IS NULL AND ("
+            "SELECT id FROM games WHERE analyzed = 1 AND skip_reason IS NULL "
+            "AND EXISTS (SELECT 1 FROM game_moves gm WHERE gm.game_id = games.id) AND ("
             "reviewed_at IS NULL OR analyzed_at > reviewed_at OR EXISTS ("
             "SELECT 1 FROM game_moves gm WHERE gm.game_id = games.id AND gm.best_move_uci IS NULL)) "
             "ORDER BY date DESC"

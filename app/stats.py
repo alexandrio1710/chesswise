@@ -779,6 +779,22 @@ def compute_game_accuracy(moves: list[dict], color: str) -> float | None:
     return round((weighted + harmonic) / 2, 1)
 
 
+def move_accuracies(moves: list[dict]) -> dict[int, float]:
+    """Per-move accuracy (0-100) for EVERY move of a game, keyed by ply — the
+    same per-move formula compute_game_accuracy averages, before the
+    volatility weighting. For breaking accuracy down by move number, phase or
+    piece, where the game-level blend doesn't apply."""
+    plies = sorted((m for m in moves if m.get("eval_cp") is not None), key=lambda m: m["ply"])
+    if not plies:
+        return {}
+    win_percents = [win_percent(INITIAL_POSITION_CP)] + [win_percent(m["eval_cp"]) for m in plies]
+    out: dict[int, float] = {}
+    for i, m in enumerate(plies):
+        before_wp, after_wp = win_percents[i], win_percents[i + 1]
+        out[m["ply"]] = _move_accuracy(before_wp, after_wp) if m["color_moved"] == "white" else _move_accuracy(after_wp, before_wp)
+    return out
+
+
 # --- FIDE Tournament Performance Rating --------------------------------------
 # A genuinely different measurement from compute_game_accuracy above: that's
 # about move QUALITY; this is about RESULTS against real opponents — the

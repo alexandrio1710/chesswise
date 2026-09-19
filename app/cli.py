@@ -7,6 +7,7 @@ Subcommands:
   analyze  Run Stockfish analysis on every unanalyzed stored game.
   refresh  fetch (incremental, since last stored game) + analyze in one step.
   puzzles  Generate tactics puzzles from flagged mistakes/blunders.
+  review   Build Game Review data (best moves, tactics) for every analyzed game that lacks it.
   digest   refresh + analyze + post a summary to a Discord webhook.
   serve    Start the local dashboard web server.
 
@@ -87,6 +88,23 @@ def cmd_puzzles(args) -> None:
     generate_all_puzzles(workers=args.workers)
 
 
+def cmd_review(args) -> None:
+    import engine_pool
+    import review
+
+    todo = review.games_needing_review()
+    print(f"{len(todo)} game(s) need review data.")
+
+    def show(done: int, total: int, failed: int) -> None:
+        print(f"  {done}/{total} reviewed" + (f" ({failed} failed)" if failed else ""), end="\r", flush=True)
+
+    try:
+        result = review.backfill_reviews(progress=show)
+    finally:
+        engine_pool.shutdown()
+    print(f"\nDone: {result['reviewed']} reviewed, {result['failed']} failed.")
+
+
 def cmd_digest(args) -> None:
     from digest import DigestError, run_digest
 
@@ -150,6 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_puzzles.add_argument("--workers", type=int, default=config.ANALYSIS_WORKERS,
                             help="parallel Stockfish processes (default: %(default)s)")
     p_puzzles.set_defaults(func=cmd_puzzles)
+
+    p_review = subparsers.add_parser(
+        "review", help="Build Game Review data (best moves, tactics) for every analyzed game that doesn't have it yet.")
+    p_review.set_defaults(func=cmd_review)
 
     p_digest = subparsers.add_parser("digest", help="refresh + analyze + post a summary to a Discord webhook.")
     p_digest.add_argument("--lichess-user", default=None)

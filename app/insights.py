@@ -8,11 +8,27 @@ already in place before this module was written, per the project's own
 rule about extending storage before building the feature that needs it.
 """
 
+from dataclasses import dataclass
+
 import stats
 from db import get_connection
 
 
-def _source_clause(source: str | None, profile_id: int | None = None, alias: str = "g") -> tuple[str, tuple]:
+@dataclass(frozen=True)
+class Filters:
+    """The Insights filter bar. Every field is optional; None = no filter.
+    `date_from`/`date_to` are inclusive ISO dates (YYYY-MM-DD) compared against
+    the stored UTC game date."""
+    source: str | None = None
+    profile_id: int | None = None
+    time_class: str | None = None
+    color: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+def _source_clause(source: str | None, profile_id: int | None = None, alias: str = "g",
+                   flt: Filters | None = None) -> tuple[str, tuple]:
     clauses, params = [], []
     if source:
         clauses.append(f"{alias}.source = ?")
@@ -20,12 +36,25 @@ def _source_clause(source: str | None, profile_id: int | None = None, alias: str
     if profile_id is not None:
         clauses.append(f"{alias}.profile_id = ?")
         params.append(profile_id)
+    if flt is not None:
+        if flt.time_class:
+            clauses.append(f"{alias}.time_control = ?")
+            params.append(flt.time_class)
+        if flt.color:
+            clauses.append(f"{alias}.color = ?")
+            params.append(flt.color)
+        if flt.date_from:
+            clauses.append(f"substr({alias}.date, 1, 10) >= ?")
+            params.append(flt.date_from)
+        if flt.date_to:
+            clauses.append(f"substr({alias}.date, 1, 10) <= ?")
+            params.append(flt.date_to)
     if not clauses:
         return "", ()
     return " AND " + " AND ".join(clauses), tuple(params)
 
 
-def rating_progress(source: str | None = None, profile_id: int | None = None) -> list[dict]:
+def rating_progress(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> list[dict]:
     """Chronological player_rating per game (skipping games with no
     rating data — a handful of very old or unusual games might lack it),
     for a progress-over-time chart. Includes `time_control` since Chess.com
@@ -34,7 +63,7 @@ def rating_progress(source: str | None = None, profile_id: int | None = None) ->
     groups by (source, time_control), not just source, for the same reason
     it already keeps Lichess and Chess.com on separate lines.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -51,8 +80,8 @@ def rating_progress(source: str | None = None, profile_id: int | None = None) ->
         conn.close()
 
 
-def win_rate_by_color(source: str | None = None, profile_id: int | None = None) -> dict:
-    where, params = _source_clause(source, profile_id)
+def win_rate_by_color(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -77,8 +106,8 @@ def win_rate_by_color(source: str | None = None, profile_id: int | None = None) 
         conn.close()
 
 
-def win_rate_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
-    where, params = _source_clause(source, profile_id)
+def win_rate_by_time_control(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -104,7 +133,7 @@ def win_rate_by_time_control(source: str | None = None, profile_id: int | None =
 
 
 def _per_game_metric_by_time_control(
-    metric_fn, result_key: str, source: str | None = None, profile_id: int | None = None,
+    metric_fn, result_key: str, source: str | None = None, profile_id: int | None = None, flt: Filters | None = None,
 ) -> dict:
     """Shared grouping logic for accuracy_by_time_control()/
     acpl_by_time_control(): neither metric is a SQL aggregate (both come
@@ -113,7 +142,7 @@ def _per_game_metric_by_time_control(
     stats.compute_game_accuracy/compute_game_acpl-shaped function —
     over each group.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -148,23 +177,23 @@ def _per_game_metric_by_time_control(
     return result
 
 
-def accuracy_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+def accuracy_by_time_control(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """Mean per-game accuracy (stats.compute_game_accuracy — same formula
     shown on every game's own page and used by progress.average_accuracy()),
     grouped by time control.
     """
-    return _per_game_metric_by_time_control(stats.compute_game_accuracy, "avg_accuracy", source, profile_id)
+    return _per_game_metric_by_time_control(stats.compute_game_accuracy, "avg_accuracy", source, profile_id, flt)
 
 
-def acpl_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+def acpl_by_time_control(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """Mean per-game average centipawn loss (stats.compute_game_acpl —
     the same capped-ACPL figure accuracy is itself derived from), grouped
     by time control. Unlike accuracy, lower is better here.
     """
-    return _per_game_metric_by_time_control(stats.compute_game_acpl, "avg_acpl", source, profile_id)
+    return _per_game_metric_by_time_control(stats.compute_game_acpl, "avg_acpl", source, profile_id, flt)
 
 
-def performance_rating_by_time_control(source: str | None = None, profile_id: int | None = None) -> dict:
+def performance_rating_by_time_control(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """FIDE Tournament Performance Rating (stats.compute_performance_rating
     — the real formula, not an approximation of it: average opponent
     rating plus a score-based adjustment from FIDE's own table), treating
@@ -178,7 +207,7 @@ def performance_rating_by_time_control(source: str | None = None, profile_id: in
     replaying move traces (unlike accuracy/ACPL above), so this doesn't
     go through _per_game_metric_by_time_control.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -206,13 +235,13 @@ def performance_rating_by_time_control(source: str | None = None, profile_id: in
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
-def win_rate_by_day_of_week(source: str | None = None, profile_id: int | None = None) -> dict:
+def win_rate_by_day_of_week(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """Keyed by day name. Based on each game's stored UTC date/time — if
     you play mostly around midnight UTC, a game can land on a different
     calendar day than it felt like locally. Stated here rather than
     silently presented as local-time fact.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -249,12 +278,12 @@ _TIME_BUCKETS = [
 ]
 
 
-def win_rate_by_time_of_day(source: str | None = None, profile_id: int | None = None) -> dict:
+def win_rate_by_time_of_day(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """Four 6-hour UTC buckets — same caveat as win_rate_by_day_of_week:
     this is UTC time, not necessarily local time, since that's what's
     actually stored.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -287,12 +316,12 @@ def win_rate_by_time_of_day(source: str | None = None, profile_id: int | None = 
     return buckets
 
 
-def avg_game_length_wins_vs_losses(source: str | None = None, profile_id: int | None = None) -> dict:
+def avg_game_length_wins_vs_losses(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> dict:
     """Average total ply count (from game_moves) for won vs. lost games —
     draws excluded since they're a third, differently-shaped category
     rather than fitting on the same win/loss axis.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -323,12 +352,12 @@ _RATING_BANDS = [
 ]
 
 
-def performance_vs_rating_band(source: str | None = None, profile_id: int | None = None) -> list[dict]:
+def performance_vs_rating_band(source: str | None = None, profile_id: int | None = None, flt: Filters | None = None) -> list[dict]:
     """Win rate bucketed by opponent_rating - player_rating, to answer
     "do I do better or worse than expected against higher/lower rated
     opponents" directly, rather than leaving it to eyeballing a scatter.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -356,14 +385,14 @@ def performance_vs_rating_band(source: str | None = None, profile_id: int | None
     return [b for b in bands if b["games"] > 0]
 
 
-def comeback_rate(source: str | None = None, profile_id: int | None = None, behind_threshold_cp: int = -300) -> dict:
+def comeback_rate(source: str | None = None, profile_id: int | None = None, behind_threshold_cp: int = -300, flt: Filters | None = None) -> dict:
     """Games where the player was significantly behind at some point
     (their own eval, not the opponent's, dropped to `behind_threshold_cp`
     or worse) but still won — a real fighting-spirit stat, computed from
     the actual per-move eval trace rather than inferred from the result
     alone.
     """
-    where, params = _source_clause(source, profile_id)
+    where, params = _source_clause(source, profile_id, flt=flt)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -390,7 +419,7 @@ def comeback_rate(source: str | None = None, profile_id: int | None = None, behi
     }
 
 
-def top_insights(source: str | None = None, profile_id: int | None = None, n: int = 5) -> list[dict]:
+def top_insights(source: str | None = None, profile_id: int | None = None, n: int = 5, flt: Filters | None = None) -> list[dict]:
     """The most notable findings across every stat above, as plain-English
     sentences — ranked by how far each finding deviates from a 50%/neutral
     baseline, weighted by sample size (a 70% win rate over 3 games isn't
@@ -402,28 +431,28 @@ def top_insights(source: str | None = None, profile_id: int | None = None, n: in
 
     candidates: list[tuple[float, str]] = []
 
-    color = win_rate_by_color(source, profile_id)
+    color = win_rate_by_color(source, profile_id, flt=flt)
     for c, d in color.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)
             score = deviation * math.sqrt(d["games"])
             candidates.append((score, f"You win {d['win_rate_pct']}% of games as {c} ({d['games']} games)."))
 
-    tc = win_rate_by_time_control(source, profile_id)
+    tc = win_rate_by_time_control(source, profile_id, flt=flt)
     for t, d in tc.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)
             score = deviation * math.sqrt(d["games"]) * 0.9  # slightly below color/rating-band framing
             candidates.append((score, f"Your win rate in {t} is {d['win_rate_pct']}% ({d['games']} games)."))
 
-    bands = performance_vs_rating_band(source, profile_id)
+    bands = performance_vs_rating_band(source, profile_id, flt=flt)
     for b in bands:
         if b["games"] >= 3 and b["win_rate_pct"] is not None:
             deviation = abs(b["win_rate_pct"] - 50)
             score = deviation * math.sqrt(b["games"]) * 1.1  # rating-band findings tend to be the most actionable
             candidates.append((score, f"Against opponents {b['label']}, your win rate is {b['win_rate_pct']}% ({b['games']} games)."))
 
-    lengths = avg_game_length_wins_vs_losses(source, profile_id)
+    lengths = avg_game_length_wins_vs_losses(source, profile_id, flt=flt)
     if "win" in lengths and "loss" in lengths:
         diff = lengths["win"]["avg_moves"] - lengths["loss"]["avg_moves"]
         if abs(diff) >= 3:
@@ -431,12 +460,12 @@ def top_insights(source: str | None = None, profile_id: int | None = None, n: in
             longer = "longer" if diff > 0 else "shorter"
             candidates.append((score, f"Your wins average {lengths['win']['avg_moves']} moves — {longer} than your losses ({lengths['loss']['avg_moves']} moves)."))
 
-    cb = comeback_rate(source, profile_id)
+    cb = comeback_rate(source, profile_id, flt=flt)
     if cb["games_significantly_behind"] >= 3:
         score = 40 + cb["games_significantly_behind"]  # always fairly notable, more so with more data
         candidates.append((score, f"When significantly behind, you still win {cb['comeback_rate_pct']}% of the time ({cb['comebacks_won']}/{cb['games_significantly_behind']} games)."))
 
-    dow = win_rate_by_day_of_week(source, profile_id)
+    dow = win_rate_by_day_of_week(source, profile_id, flt=flt)
     for day, d in dow.items():
         if d["games"] >= 3:
             deviation = abs(d["win_rate_pct"] - 50)

@@ -1544,6 +1544,24 @@ def _migration_028_game_review_data(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_029_opponent_countries(conn: sqlite3.Connection) -> None:
+    """Feature — Insights geography. A cache of where each opponent says they
+    are from, looked up from their public profile (geography.py) since games
+    only store a username. `status` records what the lookup found so nothing
+    is asked twice: 'ok' (country set), 'none' (no country / account gone) or
+    'error' (transient failure, retried later)."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS opponent_countries (
+            source TEXT NOT NULL,
+            username TEXT NOT NULL COLLATE NOCASE,
+            country TEXT,
+            status TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (source, username)
+        );
+    """)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1577,6 +1595,7 @@ MIGRATIONS = [
     (27, "Add puzzles.themes (tactical-motif tags for themed puzzles and hints)", _migration_027_puzzle_themes),
     (28, "Add game review data: best moves/lines per ply, termination, game shape, tactic events",
      _migration_028_game_review_data),
+    (29, "Add opponent_countries (cached opponent country lookups for Insights geography)", _migration_029_opponent_countries),
 ]
 
 
