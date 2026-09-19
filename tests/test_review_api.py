@@ -72,6 +72,8 @@ class TestReviewRoute:
         assert [m["san"] for m in body["moves"]] == ["Kf2", "Ke8", "Ke3", "Ke7"]
         assert body["players"]["white"]["name"] == "alice"
         assert body["start_fen"] == FORK_FEN
+        # Human-readable labels come from the server so the page doesn't duplicate them.
+        assert {"termination_label", "shape_blurb"} <= set(body["game"])
 
     def test_moves_carry_the_best_move_and_coach_text(self):
         body = client.get(f"/api/games/{_insert_reviewed_game()}/review").json()

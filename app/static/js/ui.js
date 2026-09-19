@@ -97,7 +97,7 @@ export function findMoveBetween(fenA, fenB) {
 }
 
 const EVALBAR_CSS = `
-.cw-evalbar { position: relative; width: 26px; flex-shrink: 0; align-self: stretch; border-radius: 5px; overflow: hidden;
+.cw-evalbar { position: relative; width: 34px; flex-shrink: 0; align-self: stretch; border-radius: 5px; overflow: hidden;
   background: #403d39; border: 1px solid var(--border, rgba(255,255,255,.14)); }
 .cw-evalbar-fill { position: absolute; left: 0; right: 0; background: #f4f4f4; transition: height .3s ease; }
 .cw-evalbar-label { position: absolute; left: 0; right: 0; text-align: center; font: 700 10px/1 system-ui, sans-serif;

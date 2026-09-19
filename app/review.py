@@ -394,6 +394,8 @@ def game_review_payload(game_id: int) -> dict:
             "opening_name": game["opening_name"], "eco": game.get("eco"), "book_plies": book_plies,
             "player_rating": game["player_rating"], "opponent_rating": game["opponent_rating"],
             "termination": game.get("termination_method"), "shape": game.get("game_shape"),
+            "termination_label": game_meta.TERMINATION_LABELS.get(game.get("termination_method") or ""),
+            "shape_blurb": game_meta.SHAPE_BLURBS.get(game.get("game_shape") or ""),
             "reviewed_at": game.get("reviewed_at"),
         },
         "players": {
