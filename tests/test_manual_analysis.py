@@ -21,7 +21,7 @@ class TestAnalyzeFenIncludesResultingPosition:
     def test_each_top_line_carries_its_resulting_fen(self, monkeypatch):
         monkeypatch.setattr(
             manual_analysis, "get_top_lines",
-            lambda fen, depth=None, num_lines=3: [
+            lambda fen, depth=None, num_lines=3, with_pv=False: [
                 {"move_uci": "e7e5", "move_san": "e5", "eval_cp": -30, "mate_in": None},
                 {"move_uci": "c7c5", "move_san": "c5", "eval_cp": -45, "mate_in": None},
             ],
@@ -39,7 +39,7 @@ class TestAnalyzeFenIncludesResultingPosition:
             pass
 
     def test_includes_legal_moves_for_the_interactive_board(self, monkeypatch):
-        monkeypatch.setattr(manual_analysis, "get_top_lines", lambda fen, depth=None, num_lines=3: [])
+        monkeypatch.setattr(manual_analysis, "get_top_lines", lambda fen, depth=None, num_lines=3, with_pv=False: [])
         result = manual_analysis.analyze_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")
         assert {"from": "e7", "to": "e5"} in result["legal_moves"]
         assert {"from": "g8", "to": "f6"} in result["legal_moves"]
@@ -175,3 +175,16 @@ class TestAnalyzePgnOneoffIncludesBoardTrace:
         # annotate_fen must not disturb the fields analyze_pgn_oneoff's own
         # callers (the frontend's move list/eval chart) already depend on.
         assert result["moves"][0]["eval_cp"] == 30
+
+
+class TestAnalyzeFenRequestsFullLines:
+    def test_asks_the_engine_for_the_full_pv_not_just_the_first_move(self, monkeypatch):
+        seen = {}
+
+        def fake(fen, depth=None, num_lines=3, with_pv=False):
+            seen["with_pv"] = with_pv
+            return []
+
+        monkeypatch.setattr(manual_analysis, "get_top_lines", fake)
+        manual_analysis.analyze_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")
+        assert seen["with_pv"] is True

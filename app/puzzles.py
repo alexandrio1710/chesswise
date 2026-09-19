@@ -19,9 +19,13 @@ import chess
 import chess.engine
 import chess.pgn
 
-from analysis import get_engine
-from config import ANALYSIS_WORKERS, PUZZLE_DEPTH, PUZZLE_TOP_LINES, STOCKFISH_MAX_SECONDS_PER_POSITION
+import tactics
+from analysis import MATE_SCORE_CP, get_engine
+from config import (
+    ANALYSIS_WORKERS, PUZZLE_ATTEMPT_DEPTH, PUZZLE_DEPTH, PUZZLE_TOP_LINES, STOCKFISH_MAX_SECONDS_PER_POSITION,
+)
 from db import get_connection, get_pgn
+from mistakes import classify_tier
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,9 @@ logger = logging.getLogger(__name__)
 # instructive. Inaccuracies (100-199cp) are usually too subtle/ambiguous
 # for a clean "find the best move" puzzle.
 PUZZLE_SEVERITIES = ("mistake", "blunder")
+
+# How many plies of each engine line to hand back when asked for the full PV.
+MAX_PV_PLIES = 10
 
 PIECE_NAMES_LONG = {
     chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
@@ -97,7 +104,8 @@ def board_before_ply(pgn_text: str, target_ply: int) -> chess.Board:
     raise ValueError(f"ply {target_ply} not found in game (game has {ply} plies)")
 
 
-def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_TOP_LINES) -> list[dict]:
+def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_TOP_LINES,
+                  with_pv: bool = False) -> list[dict]:
     """Top engine lines at a position, evaluation from the perspective of
     whoever is about to move there (positive = good for them) — UCI's
     standard turn-relative convention, via `PovScore.pov(board.turn)`.
@@ -117,12 +125,15 @@ def get_top_lines(fen: str, depth: int = PUZZLE_DEPTH, num_lines: int = PUZZLE_T
         move = info["pv"][0]
         score = info["score"].pov(board.turn)
         mate_in = score.mate()
-        lines.append({
+        line = {
             "move_uci": move.uci(),
             "move_san": board.san(move),
             "eval_cp": score.score() if mate_in is None else None,
             "mate_in": mate_in,
-        })
+        }
+        if with_pv:
+            line["pv_uci"] = [m.uci() for m in info["pv"][:MAX_PV_PLIES]]
+        lines.append(line)
     return lines
 
 
@@ -156,9 +167,16 @@ def generate_puzzle_for_mistake(mistake_row, pgn_text: str) -> dict | None:
         "best_move_explanation": describe_move(board, best_move),
         "played_move_explanation": played_move_explanation,
         "top_lines": top_lines,
+        "themes": tactics.puzzle_themes(fen_before, best["move_uci"], _positive_mate(best)),
         "phase": mistake_row["phase"],
         "severity": mistake_row["severity"],
     }
+
+
+def _positive_mate(line: dict) -> int | None:
+    """Mate distance when the line is a forced mate FOR the side to move."""
+    mate = line.get("mate_in")
+    return mate if mate is not None and mate > 0 else None
 
 
 def store_puzzle(p: dict) -> None:
@@ -169,15 +187,16 @@ def store_puzzle(p: dict) -> None:
             INSERT OR IGNORE INTO puzzles
                 (mistake_id, game_id, fen_before, side_to_move, played_move_san,
                  best_move_uci, best_move_san, best_move_explanation,
-                 played_move_explanation, top_lines, phase, severity, created_at, user_id)
+                 played_move_explanation, top_lines, phase, severity, created_at, user_id, themes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
-                    (SELECT user_id FROM games WHERE id = ?))
+                    (SELECT user_id FROM games WHERE id = ?), ?)
             """,
             (
                 p["mistake_id"], p["game_id"], p["fen_before"], p["side_to_move"],
                 p["played_move_san"], p["best_move_uci"], p["best_move_san"],
                 p["best_move_explanation"], p["played_move_explanation"],
                 json.dumps(p["top_lines"]), p["phase"], p["severity"], p["game_id"],
+                json.dumps(p.get("themes", [])),
             ),
         )
         conn.commit()
@@ -360,7 +379,7 @@ def _source_clause(source: str | None) -> tuple[str, tuple]:
 
 
 def get_puzzle_queue(source: str | None = None, phase: str | None = None,
-                      severity: str | None = None, limit: int = 20) -> list[dict]:
+                      severity: str | None = None, limit: int = 20, theme: str | None = None) -> list[dict]:
     """Puzzle summaries only (no FEN/answer) for populating a queue list.
     Ordered worst-first (biggest eval drop) so the most instructive puzzles
     in the selected category surface first.
@@ -372,6 +391,12 @@ def get_puzzle_queue(source: str | None = None, phase: str | None = None,
     if severity:
         where += " AND p.severity = ?"
         params = params + (severity,)
+    if theme:
+        _ensure_themes()
+        # themes is a JSON list of plain keys, so a quoted-key LIKE is an
+        # exact match ("mate" doesn't hit "mate_in_2").
+        where += " AND p.themes LIKE ?"
+        params = params + (f'%"{theme}"%',)
 
     conn = get_connection()
     try:
@@ -426,9 +451,10 @@ def get_puzzle(puzzle_id: int) -> dict | None:
         row = conn.execute(
             """
             SELECT p.*, g.source, g.date, g.opponent, g.color as game_color,
-                   g.time_control, g.opening_name
+                   g.time_control, g.opening_name, m.ply AS mistake_ply
             FROM puzzles p
             JOIN games g ON p.game_id = g.id
+            LEFT JOIN mistakes m ON m.id = p.mistake_id
             WHERE p.id = ?
             """,
             (puzzle_id,),
@@ -437,6 +463,12 @@ def get_puzzle(puzzle_id: int) -> dict | None:
             return None
         d = dict(row)
         d["top_lines"] = json.loads(d["top_lines"])
+        if d.get("themes") is None:
+            d["themes"] = tactics.puzzle_themes(
+                d["fen_before"], d["best_move_uci"], _positive_mate(d["top_lines"][0]) if d["top_lines"] else None,
+            )
+        else:
+            d["themes"] = json.loads(d["themes"])
         return d
     finally:
         conn.close()
@@ -458,28 +490,153 @@ def legal_moves_for_fen(fen: str) -> list[dict]:
     return moves
 
 
+def last_move_before_ply(pgn_text: str, target_ply: int | None) -> dict | None:
+    """The move that led INTO the position where `target_ply` was played —
+    what the puzzle board highlights so the solver can see what the opponent
+    just did (None if the puzzle starts at the very first move)."""
+    if target_ply is None or target_ply < 2:
+        return None
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    if game is None:
+        return None
+    board = game.board()
+    for ply, node in enumerate(game.mainline(), start=1):
+        move = node.move
+        if ply == target_ply - 1:
+            return {"from": chess.square_name(move.from_square), "to": chess.square_name(move.to_square),
+                    "san": board.san(move)}
+        board.push(move)
+    return None
+
+
+def _ensure_themes() -> None:
+    """Fill in themes for any puzzle still missing them — cheap when there's
+    nothing to do (one indexed-ish existence check), so callers that filter
+    or count by theme can just call this first."""
+    conn = get_connection()
+    try:
+        missing = conn.execute("SELECT 1 FROM puzzles WHERE themes IS NULL LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    if missing:
+        backfill_puzzle_themes()
+
+
+def backfill_puzzle_themes() -> int:
+    """Compute themes for puzzles that predate the column (or were stored
+    without them). Pure python-chess — a few thousand puzzles take under a
+    second. Returns how many rows were filled."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT id, fen_before, best_move_uci, top_lines FROM puzzles WHERE themes IS NULL").fetchall()
+        for row in rows:
+            lines = json.loads(row["top_lines"])
+            themes = tactics.puzzle_themes(
+                row["fen_before"], row["best_move_uci"], _positive_mate(lines[0]) if lines else None,
+            )
+            conn.execute("UPDATE puzzles SET themes = ? WHERE id = ?", (json.dumps(themes), row["id"]))
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def get_theme_counts(source: str | None = None) -> list[dict]:
+    """[{key, label, count}] for every theme that has at least one puzzle, in
+    the order the UI lists them (tactics.THEME_KEYS)."""
+    _ensure_themes()
+    where, params = _source_clause(source)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT p.themes FROM puzzles p JOIN games g ON p.game_id = g.id WHERE p.themes IS NOT NULL {where}",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    counts: dict[str, int] = {}
+    for row in rows:
+        for key in json.loads(row["themes"]):
+            counts[key] = counts.get(key, 0) + 1
+    return [
+        {"key": key, "label": tactics.theme_label(key), "count": counts[key]}
+        for key in tactics.THEME_KEYS if counts.get(key)
+    ]
+
+
+def get_hint(puzzle: dict, level: int) -> dict:
+    """Progressive hints, chess.com style: level 1 points at the piece to
+    move (and names the theme if there is one), level 2 gives the move."""
+    best_uci = puzzle["best_move_uci"]
+    themes = [t for t in puzzle.get("themes", []) if not t.startswith("mate_in_")]
+    hint = {"level": level, "from": best_uci[:2], "themes": [tactics.theme_label(t) for t in themes[:2]]}
+    if level >= 2:
+        hint["to"] = best_uci[2:4]
+        hint["san"] = puzzle["best_move_san"]
+        hint["uci"] = best_uci
+    return hint
+
+
+def _line_cp(line: dict) -> float:
+    """A top-line's eval as one number (mover's perspective), with a forced
+    mate mapped onto the same +-MATE_SCORE_CP scale the analysis pipeline
+    stores, so it can go through the same win%-based judgment as any move."""
+    mate = line.get("mate_in")
+    if mate is not None:
+        return float(MATE_SCORE_CP - abs(mate)) * (1 if mate > 0 else -1)
+    return float(line.get("eval_cp") or 0)
+
+
+def evaluate_move(fen_before: str, uci: str, depth: int = PUZZLE_ATTEMPT_DEPTH) -> dict:
+    """Engine verdict on one specific move, from the mover's perspective:
+    {"cp": float (mate-encoded), "mate_in": int | None}. One shallow search
+    of the position after the move — used for an attempt that isn't among the
+    pre-computed top lines."""
+    board = chess.Board(fen_before)
+    mover = board.turn
+    board.push_uci(uci)
+    if board.is_checkmate():
+        return {"cp": float(MATE_SCORE_CP - 1), "mate_in": 1}
+    if board.is_game_over():
+        return {"cp": 0.0, "mate_in": None}
+    engine = get_engine()
+    try:
+        info = engine.analyse(board, chess.engine.Limit(depth=depth, time=STOCKFISH_MAX_SECONDS_PER_POSITION))
+    finally:
+        engine.quit()
+    score = info["score"].pov(mover)
+    return {"cp": float(score.score(mate_score=MATE_SCORE_CP)), "mate_in": score.mate()}
+
+
 class IllegalMoveError(Exception):
     pass
 
 
-def check_attempt(puzzle: dict, from_square: str, to_square: str, promotion: str | None = None) -> dict:
+def check_attempt(puzzle: dict, from_square: str, to_square: str, promotion: str | None = None,
+                  evaluate: bool = False) -> dict:
     """Validate a puzzle attempt against the actual rules of chess (not just
     string-matching the target square), then grade it.
 
-    "Correct" means either the engine's single best move, or one of the
-    other pre-fetched top lines within a small eval margin of the best one
-    (an equally good alternative) — graded from data already fetched at
-    generation time, no extra engine call needed here.
+    Default ("classic") grading: "correct" means either the engine's single
+    best move, or one of the other pre-fetched top lines within a small eval
+    margin of the best one — graded from data already fetched at generation
+    time, no extra engine call needed here.
+
+    `evaluate=True` (the interactive puzzle trainer) additionally judges a
+    move that isn't among the pre-computed lines with one quick engine call,
+    so an equally good alternative isn't marked wrong just because it fell
+    outside the top three, and a bad move gets a real verdict (inaccuracy /
+    mistake / blunder) and eval instead of a bare "incorrect".
     """
     board = chess.Board(puzzle["fen_before"])
     try:
-        move = chess.Move.from_uci(f"{from_square}{to_square}")
+        move = chess.Move.from_uci(f"{from_square}{to_square}{promotion or ''}")
     except ValueError:
         raise IllegalMoveError(f"'{from_square}{to_square}' isn't a valid pair of squares")
 
     if move not in board.legal_moves:
         # Auto-promote to queen if the raw move needs a promotion piece and
-        # the UI didn't send one (kept out of the click-to-move interaction).
+        # the caller didn't send one.
         queen_move = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
         if queen_move in board.legal_moves:
             move = queen_move
@@ -503,16 +660,38 @@ def check_attempt(puzzle: dict, from_square: str, to_square: str, promotion: str
                 correct = abs((line["eval_cp"] or 0) - (best["eval_cp"] or 0)) <= 20
             break
 
-    return {
+    result = {
         "correct": correct,
         "played_san": played_san,
+        "played_uci": played_uci,
         "played_explanation": describe_move(board, move),
         "best_move_san": best["move_san"],
+        "best_move_uci": best["move_uci"],
         "best_move_explanation": puzzle.get("best_move_explanation"),
         "original_mistake_move_san": puzzle["played_move_san"],
         "original_mistake_explanation": puzzle.get("played_move_explanation"),
         "top_lines": top_lines,
+        "themes": puzzle.get("themes", []),
+        "theme_labels": [tactics.theme_label(t) for t in puzzle.get("themes", [])],
     }
+
+    if evaluate:
+        best_cp = _line_cp(best)
+        listed = next((line for line in top_lines if line["move_uci"] == played_uci), None)
+        if listed is not None:
+            played = {"cp": _line_cp(listed), "mate_in": listed.get("mate_in")}
+        else:
+            played = evaluate_move(puzzle["fen_before"], played_uci)
+        verdict = "best" if played_uci == best["move_uci"] else classify_tier(best_cp, played["cp"])
+        result.update({
+            "verdict": verdict,
+            "played_cp": None if played["mate_in"] is not None else played["cp"],
+            "played_mate_in": played["mate_in"],
+            "best_cp": None if best.get("mate_in") is not None else best.get("eval_cp"),
+            "best_mate_in": best.get("mate_in"),
+            "correct": verdict in ("best", "excellent"),
+        })
+    return result
 
 
 if __name__ == "__main__":

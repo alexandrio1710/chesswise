@@ -78,7 +78,7 @@ def analyze_fen(fen: str, depth: int = STOCKFISH_DEPTH) -> dict:
         board = chess.Board(fen)
     except ValueError as e:
         raise ValueError(f"Not a valid FEN: {e}")
-    lines = get_top_lines(fen, depth=depth, num_lines=3)
+    lines = get_top_lines(fen, depth=depth, num_lines=3, with_pv=True)
     for line in lines:
         move = chess.Move.from_uci(line["move_uci"])
         board.push(move)

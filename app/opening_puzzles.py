@@ -233,7 +233,8 @@ def _board_after(fen: str, solution_uci: list[str], through_index: int) -> chess
     return board
 
 
-def attempt_move(puzzle_id: int, move_index: int, from_square: str, to_square: str) -> dict:
+def attempt_move(puzzle_id: int, move_index: int, from_square: str, to_square: str,
+                 promotion: str | None = None) -> dict:
     """Grades one of the solver's moves against solution_uci[move_index]
     (always an even index — odd indices are the opponent's forced replies,
     which this plays automatically rather than asking the solver for them).
@@ -262,7 +263,7 @@ def attempt_move(puzzle_id: int, move_index: int, from_square: str, to_square: s
     board = _board_after(puzzle["fen"], solution, move_index)
 
     try:
-        move = chess.Move.from_uci(f"{from_square}{to_square}")
+        move = chess.Move.from_uci(f"{from_square}{to_square}{promotion or ''}")
     except ValueError:
         move = None
     if move is not None and move not in board.legal_moves:

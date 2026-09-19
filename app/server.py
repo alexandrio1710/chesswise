@@ -9,6 +9,7 @@ without the backend knowing anything about how it's rendered.
 
 import json
 import logging
+import mimetypes
 import threading
 import time
 from collections import defaultdict, deque
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 import alerts
@@ -38,7 +40,7 @@ import srs
 import srs_sm2
 import stats
 import tablebase
-from config import ANALYSIS_WORKERS, SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
+from config import ANALYSIS_WORKERS, ANALYZE_RATE_LIMIT, SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
 from db import get_connection
 
 # Celery/Redis (Web platform, Section 4) are optional infrastructure — only
@@ -57,6 +59,17 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Chesswise")
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Browsers refuse to run an ES module served with a non-JavaScript MIME
+# type, and Python's mimetypes module reads Windows' registry, where .js is
+# sometimes mapped to text/plain by whatever software last touched it.
+mimetypes.add_type("text/javascript", ".js")
+
+# Only the script directories are exposed as static assets — the HTML pages
+# themselves are still served through their own routes below.
+app.mount("/static/js", StaticFiles(directory=STATIC_DIR / "js"), name="static-js")
+app.mount("/static/css", StaticFiles(directory=STATIC_DIR / "css"), name="static-css")
+app.mount("/static/vendor", StaticFiles(directory=STATIC_DIR / "vendor"), name="static-vendor")
 
 PHASES = ("opening", "middlegame", "endgame")
 
@@ -759,7 +772,7 @@ def api_get_drift_puzzle(puzzle_id: int, user: dict | None = Depends(auth.get_cu
 # In-memory/per-process, same tradeoff as _refresh_status/_report_jobs
 # above — not a substitute for a real rate limiter (e.g. at a reverse
 # proxy) in front of a public multi-tenant deployment.
-_ANALYZE_RATE_LIMIT = 10
+_ANALYZE_RATE_LIMIT = ANALYZE_RATE_LIMIT
 _ANALYZE_RATE_WINDOW_SECONDS = 60.0
 _analyze_request_log: dict[str, deque] = defaultdict(deque)
 _analyze_rate_lock = threading.Lock()
@@ -783,12 +796,13 @@ def _rate_limit_analysis(request: Request) -> None:
 
 class AnalyzeFenRequest(BaseModel):
     fen: str
+    depth: int | None = Field(default=None, ge=8, le=22)
 
 
 @app.post("/api/analyze/fen")
 def api_analyze_fen(req: AnalyzeFenRequest, _rl: None = Depends(_rate_limit_analysis)):
     try:
-        return manual_analysis.analyze_fen(req.fen)
+        return manual_analysis.analyze_fen(req.fen, depth=req.depth or STOCKFISH_DEPTH)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -913,6 +927,7 @@ def api_puzzle_queue(
     mode: str = Query(default="all"),
     phase: str | None = Query(default=None),
     severity: str | None = Query(default=None),
+    theme: str | None = Query(default=None),
     limit: int = 20,
 ):
     """mode='all' lists puzzles across every phase (optionally narrowed by
@@ -932,8 +947,15 @@ def api_puzzle_queue(
 
     return {
         "phase": phase,
-        "puzzles": puzzles.get_puzzle_queue(source, phase=phase, severity=severity, limit=limit),
+        "puzzles": puzzles.get_puzzle_queue(source, phase=phase, severity=severity, limit=limit, theme=theme),
     }
+
+
+@app.get("/api/puzzles/themes")
+def api_puzzle_themes(source: str | None = Query(default=None)):
+    """Tactical themes that have at least one puzzle, with counts, for the
+    trainer's theme filter."""
+    return {"themes": puzzles.get_theme_counts(_normalize_source(source))}
 
 
 @app.get("/api/puzzles/review-stats")
@@ -947,12 +969,25 @@ def api_get_puzzle(puzzle_id: int, _access: dict | None = Depends(auth.require_p
     if puzzle is None:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
-    # Deliberately omit best_move_san / top_lines / played_move_san — those
-    # are the answer, and are only revealed via the /attempt response.
+    last_move = None
+    if puzzle.get("mistake_ply"):
+        conn = get_connection()
+        try:
+            game_row = conn.execute("SELECT pgn FROM games WHERE id = ?", (puzzle["game_id"],)).fetchone()
+        finally:
+            conn.close()
+        if game_row and game_row["pgn"]:
+            last_move = puzzles.last_move_before_ply(game_row["pgn"], puzzle["mistake_ply"])
+
+    # Deliberately omit best_move_san / top_lines / played_move_san / themes —
+    # those are the answer (or hint at it), and are only revealed via the
+    # /attempt and /hint responses.
     return {
         "id": puzzle["id"],
         "fen_before": puzzle["fen_before"],
         "side_to_move": puzzle["side_to_move"],
+        "last_move": last_move,
+        "game_id": puzzle["game_id"],
         "legal_moves": puzzles.legal_moves_for_fen(puzzle["fen_before"]),
         "phase": puzzle["phase"],
         "severity": puzzle["severity"],
@@ -970,6 +1005,9 @@ class PuzzleAttempt(BaseModel):
     to_square: str = Field(alias="to")
     time_taken_ms: int | None = None
     session_type: str = "practice"  # 'practice' | 'rush' | 'review'
+    promotion: str | None = None  # 'q' | 'r' | 'b' | 'n' when the move promotes
+    record: bool = True  # False for a retry after a wrong first attempt — checked, not scored
+    hints_used: int = 0  # 2 = the answer was shown, so it can't count as solved
 
 
 @app.post("/api/puzzles/{puzzle_id}/attempt")
@@ -979,18 +1017,29 @@ def api_puzzle_attempt(puzzle_id: int, attempt: PuzzleAttempt, _access: dict | N
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
     try:
-        result = puzzles.check_attempt(puzzle, attempt.from_square, attempt.to_square)
+        result = puzzles.check_attempt(
+            puzzle, attempt.from_square, attempt.to_square, attempt.promotion, evaluate=True,
+        )
     except puzzles.IllegalMoveError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Every attempt, from every mode, feeds the same spaced-repetition
-    # history — recorded server-side so nothing depends on the frontend
-    # remembering to log it separately.
-    srs_state = srs.record_attempt(
-        puzzle_id, result["correct"], attempt.time_taken_ms, attempt.session_type
-    )
-    result["srs"] = srs_state
+    if attempt.record:
+        # Every scored attempt, from every mode, feeds the same
+        # spaced-repetition history — recorded server-side so nothing
+        # depends on the frontend remembering to log it separately.
+        result["srs"] = srs.record_attempt(
+            puzzle_id, result["correct"] and attempt.hints_used < 2, attempt.time_taken_ms, attempt.session_type,
+        )
     return result
+
+
+@app.get("/api/puzzles/{puzzle_id}/hint")
+def api_puzzle_hint(puzzle_id: int, level: int = Query(default=1, ge=1, le=2),
+                    _access: dict | None = Depends(auth.require_puzzle_access)):
+    puzzle = puzzles.get_puzzle(puzzle_id)
+    if puzzle is None:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+    return puzzles.get_hint(puzzle, level)
 
 
 @app.post("/api/drift-puzzles/{puzzle_id}/attempt")
@@ -1053,13 +1102,14 @@ class OpeningPuzzleAttempt(BaseModel):
     from_square: str = Field(alias="from")
     to_square: str = Field(alias="to")
     move_index: int = 0
+    promotion: str | None = None
 
 
 @app.post("/api/opening-puzzles/{puzzle_id}/attempt")
 def api_opening_puzzle_attempt(puzzle_id: int, attempt: OpeningPuzzleAttempt):
     try:
         return opening_puzzles.attempt_move(
-            puzzle_id, attempt.move_index, attempt.from_square, attempt.to_square
+            puzzle_id, attempt.move_index, attempt.from_square, attempt.to_square, attempt.promotion,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

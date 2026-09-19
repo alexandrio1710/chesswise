@@ -1473,6 +1473,23 @@ def _migration_026_remove_estimated_rating(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_027_puzzle_themes(conn: sqlite3.Connection) -> None:
+    """Feature — tactical-motif themes on puzzles (fork, pin, skewer, mate
+    in N, hanging piece, ...), so puzzles can be filtered by theme and hinted
+    ("look for a fork") the way chess.com's themed puzzles are.
+
+    Stored as a JSON list of theme keys. NULL means "not computed yet", not
+    "no theme" — an empty list means the best move carries no named motif
+    (most positional puzzles). Existing rows are backfilled by
+    puzzles.backfill_puzzle_themes() (pure python-chess, no engine) on server
+    start rather than in this migration, which shouldn't import live
+    application code (same reasoning as migrations 17/18).
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(puzzles)")}
+    if "themes" not in existing:
+        conn.execute("ALTER TABLE puzzles ADD COLUMN themes TEXT")
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1503,6 +1520,7 @@ MIGRATIONS = [
      _migration_025_drop_uscf_from_rating_estimate),
     (26, "Remove the per-game estimated-rating feature entirely (no real ACPL-vs-rating correlation)",
      _migration_026_remove_estimated_rating),
+    (27, "Add puzzles.themes (tactical-motif tags for themed puzzles and hints)", _migration_027_puzzle_themes),
 ]
 
 

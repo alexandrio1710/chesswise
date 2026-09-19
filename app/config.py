@@ -43,6 +43,13 @@ STOCKFISH_DEPTH = int(os.environ.get("STOCKFISH_DEPTH", "15"))
 # and it only runs once per flagged mistake/blunder, not once per move.
 PUZZLE_DEPTH = int(os.environ.get("PUZZLE_DEPTH", "18"))
 PUZZLE_TOP_LINES = int(os.environ.get("PUZZLE_TOP_LINES", "3"))
+# Per-IP cap on the Stockfish-backed /api/analyze/* endpoints (per minute).
+# Generous by default because the interactive boards call it on every move a
+# person makes on their own machine; lower it for a public deployment.
+ANALYZE_RATE_LIMIT = int(os.environ.get("ANALYZE_RATE_LIMIT", "120"))
+# Depth for judging a puzzle attempt that isn't one of the pre-computed top
+# lines — one quick engine call per such attempt, so shallower than PUZZLE_DEPTH.
+PUZZLE_ATTEMPT_DEPTH = int(os.environ.get("PUZZLE_ATTEMPT_DEPTH", "14"))
 
 # A pure depth target has no wall-clock ceiling: search extensions in an
 # unusually sharp position can occasionally make one position take far
