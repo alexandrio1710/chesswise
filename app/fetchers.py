@@ -473,14 +473,23 @@ def _parse_pgn_tags(pgn: str) -> dict:
 
 
 def _classify_time_control_from_clock(time_control_tag: str) -> str:
-    """Classify Lichess TimeControl tag (e.g. '180+2') into a bucket using
-    estimated game duration, matching Lichess's own speed categories.
+    """Classify a PGN TimeControl tag into a speed bucket using estimated
+    game duration, matching Lichess's own speed categories.
+
+    Handles every shape a real PGN carries: "180+2" (Lichess, and Chess.com
+    with an increment), "300" (Chess.com sudden death — no "+" at all, which
+    used to fall through to "unknown"), "1/86400" (correspondence: one move
+    per N seconds, this app's "daily") and "40/7200:3600" (classical time
+    controls with periods). "-" and anything unparseable stay "unknown".
     """
-    if not time_control_tag or "+" not in time_control_tag:
+    tag = (time_control_tag or "").strip()
+    if not tag or tag == "-":
         return "unknown"
+    if "/" in tag:
+        return "daily" if tag.startswith("1/") else "classical"
     try:
-        base, increment = time_control_tag.split("+")
-        base, increment = int(base), int(increment)
+        base, _, increment = tag.partition("+")
+        base, increment = int(base), int(increment or 0)
     except ValueError:
         return "unknown"
 
@@ -492,6 +501,69 @@ def _classify_time_control_from_clock(time_control_tag: str) -> str:
     if estimated_seconds < 1500:
         return "rapid"
     return "classical"
+
+
+# ---------------------------------------------------------------------------
+# Importing a PGN (pasted, or a multi-game export) rather than fetching it
+# ---------------------------------------------------------------------------
+
+_LICHESS_SITE = re.compile(r"https?://(?:www\.)?lichess\.org/([A-Za-z0-9]{8})")
+_CHESSCOM_LINK = re.compile(r'\[Link\s+"https?://(?:www\.)?chess\.com/game/(?:live|daily)/(\d+)"\]')
+
+
+def chesscom_link_id(pgn: str) -> str | None:
+    """The numeric game id in a Chess.com PGN's Link tag (".../game/live/
+    174390743510"). Synced Chess.com rows are keyed by the API's uuid, which a
+    PGN doesn't carry — this id, present in every stored Chess.com PGN, is how
+    the same game is recognized whether it arrived by sync or by import."""
+    match = _CHESSCOM_LINK.search(pgn or "")
+    return match.group(1) if match else None
+
+
+def normalize_pgn_game(pgn: str, color: str, opponent: str | None = None, default_source: str = "manual") -> dict | None:
+    """One PGN -> db.save_games' normalized shape, with the same fields a
+    synced game gets: the full UTC timestamp, the opening name (Lichess's
+    Opening tag or Chess.com's ECOUrl), the time control bucket, both ratings,
+    and Chess.com clocks in the one format the clock analysis reads.
+
+    A PGN from Lichess or Chess.com keeps its real `source` and id, so
+    importing a game that was already synced dedupes instead of storing it
+    twice; anything else (OTB, other sites) gets `default_source` and a
+    content-hash id. `result` is None when the Result tag isn't a finished
+    game — the caller decides whether that means "skip" or "call it a draw".
+    Returns None if the text has no PGN tags at all.
+    """
+    import hashlib
+
+    tags = _parse_pgn_tags(pgn)
+    if not tags:
+        return None
+    white, black = tags.get("White", "Unknown"), tags.get("Black", "Unknown")
+
+    source, source_game_id = default_source, None
+    lichess = _LICHESS_SITE.search(tags.get("Site", "")) or _LICHESS_SITE.search(tags.get("Link", ""))
+    if lichess:
+        source, source_game_id = "lichess", lichess.group(1)
+    elif chesscom_link_id(pgn):
+        source, source_game_id = "chesscom", chesscom_link_id(pgn)
+    if source_game_id is None:
+        source_game_id = hashlib.sha256(pgn.encode()).hexdigest()[:16]
+
+    white_elo = int(tags["WhiteElo"]) if tags.get("WhiteElo", "").isdigit() else None
+    black_elo = int(tags["BlackElo"]) if tags.get("BlackElo", "").isdigit() else None
+    player_rating, opponent_rating = (white_elo, black_elo) if color == "white" else (black_elo, white_elo)
+
+    return {
+        "source": source, "source_game_id": source_game_id,
+        "date": _combine_lichess_datetime(tags.get("UTCDate") or tags.get("Date", ""), tags.get("UTCTime", "")),
+        "opponent": opponent or (black if color == "white" else white),
+        "result": _lichess_result_to_outcome(tags.get("Result", "*"), color),
+        "color": color,
+        "time_control": _classify_time_control_from_clock(tags.get("TimeControl", "")),
+        "opening_name": _extract_opening_from_pgn(pgn),
+        "pgn": _normalize_chesscom_clock_format(pgn).strip(),
+        "player_rating": player_rating, "opponent_rating": opponent_rating,
+    }
 
 
 if __name__ == "__main__":

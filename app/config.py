@@ -158,6 +158,13 @@ API_MAX_RETRIES = int(os.environ.get("API_MAX_RETRIES", "3"))
 API_BACKOFF_BASE_SECONDS = float(os.environ.get("API_BACKOFF_BASE_SECONDS", "1.0"))
 API_INTER_REQUEST_DELAY_SECONDS = float(os.environ.get("API_INTER_REQUEST_DELAY_SECONDS", "0.3"))
 
+# The first time a profile's games are pulled from a site there is no "latest
+# stored game" to fetch since, so a refresh used to fall back to the tiny
+# default page (20 games, 2 Chess.com months) and silently import almost none
+# of the history. Later refreshes are incremental and uncapped regardless.
+FIRST_IMPORT_MAX_GAMES = int(os.environ.get("FIRST_IMPORT_MAX_GAMES", "100"))
+FIRST_IMPORT_CHESSCOM_MONTHS = int(os.environ.get("FIRST_IMPORT_CHESSCOM_MONTHS", "3"))
+
 
 # --- Optional integrations ----------------------------------------------------
 

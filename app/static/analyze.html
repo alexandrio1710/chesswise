@@ -814,6 +814,11 @@
     const save = document.getElementById("save-checkbox").checked;
     const body = { pgn, save };
     if (save) {
+      // Saving keeps a single game. Say so before dropping the rest of a multi-game paste.
+      const gamesPasted = (pgn.match(/^\s*\[Event\s/gm) || []).length;
+      if (gamesPasted > 1 && !confirm(
+        `This paste contains ${gamesPasted} games, and only the first will be saved. ` +
+        "To import many games at once, use Coaching Report → import.\n\nSave the first game?")) return;
       body.player_color = document.getElementById("save-color").value;
       const opponent = document.getElementById("save-opponent").value.trim();
       if (opponent) body.opponent = opponent;

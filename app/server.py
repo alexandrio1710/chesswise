@@ -1030,7 +1030,8 @@ def api_analyze_pgn(
             game_id = manual_analysis.save_manual_game(req.pgn, req.player_color, req.opponent, req.profile_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        return {"saved": True, "game_id": game_id}
+        # Only the first game of a multi-game paste is saved; say so rather than dropping the rest silently.
+        return {"saved": True, "game_id": game_id, "ignored_games": manual_analysis.first_game_of(req.pgn)[1] - 1}
 
     try:
         return {"saved": False, **manual_analysis.analyze_pgn_oneoff(req.pgn)}

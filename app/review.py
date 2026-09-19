@@ -51,6 +51,14 @@ def _most_valuable(board: chess.Board, squares: list[chess.Square]) -> int:
     return max(VALUE[board.piece_type_at(sq)] for sq in squares)
 
 
+def _captured_value(board_before: chess.Board, move: chess.Move) -> int:
+    """Material (pawn units) a move captures; 0 for a quiet move."""
+    if board_before.is_en_passant(move):
+        return VALUE[chess.PAWN]
+    piece = board_before.piece_at(move.to_square)
+    return VALUE[piece.piece_type] if piece else 0
+
+
 def find_tactic_events(pgn_text: str, rows: list[dict]) -> list[dict]:
     """Every tactic event in one game.
 
@@ -109,17 +117,23 @@ def find_tactic_events(pgn_text: str, rows: list[dict]) -> list[dict]:
                                 elif loss >= EQUIVALENT_WIN_PERCENT:
                                     add(motif, "missed", swing, best_uci)
 
-        # The opponent left something en prise and this side could take it.
+        # The opponent left something en prise and this side could take it. A
+        # piece that only looks loose because the opponent just captured
+        # something worth as much (a recapture in a trade) isn't a free piece.
         if not board_before.is_check():
-            free = hanging_pieces(board_before, not mover)
+            prev_gain = _captured_value(boards[ply - 2], moves[ply - 2]) if ply >= 2 else 0
+            free = [sq for sq in hanging_pieces(board_before, not mover) if VALUE[board_before.piece_type_at(sq)] > prev_gain]
             capturable = [sq for sq in free if any(m.to_square == sq and board_before.is_capture(m)
                                                    for m in board_before.legal_moves)]
             if capturable:
                 taken = board_before.is_capture(move) and move.to_square in capturable
                 add("free_piece", "taken" if taken else "ignored", _most_valuable(board_before, capturable))
 
-        # This side's own move left a piece en prise.
-        mine = hanging_pieces(after, mover)
+        # This side's own move left a piece en prise — net of whatever the move
+        # itself just captured: taking a rook and being recaptured is a trade,
+        # not a piece left hanging.
+        gained = _captured_value(board_before, move)
+        mine = [sq for sq in hanging_pieces(after, mover) if VALUE[after.piece_type_at(sq)] > gained]
         capturable = [sq for sq in mine if any(m.to_square == sq and after.is_capture(m) for m in after.legal_moves)]
         if capturable:
             reply = moves[ply] if ply < len(moves) else None

@@ -24,8 +24,8 @@ import chess.pgn
 
 from analysis import analyze_game_moves
 from config import STOCKFISH_DEPTH
-from db import get_connection, save_games
-from fetchers import _lichess_result_to_outcome
+from db import find_game_id, get_connection, save_games
+from fetchers import _parse_pgn_tags, _split_pgn_blobs, normalize_pgn_game
 from mistakes import STANDARD_VARIANT_TAGS, classify_tier, get_pgn_variant
 from puzzles import get_top_lines, legal_moves_for_fen
 from stats import annotate_fen, capped_eval_drop, compute_game_accuracy, get_starting_fen
@@ -178,6 +178,7 @@ def analyze_pgn_oneoff(pgn_text: str, depth: int = STOCKFISH_DEPTH) -> dict:
     functions /api/games/{id} uses) — no separate chess logic needed
     client-side, no second round-trip.
     """
+    pgn_text, _ = first_game_of(pgn_text)
     moves = _graded_moves(pgn_text, depth)
     moves = annotate_fen(moves, pgn_text)
 
@@ -211,42 +212,66 @@ def _parse_pgn_date(date_str: str) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_BARE_HEADERS = '[Event "?"]\n[White "?"]\n[Black "?"]\n[Result "*"]\n\n'
+
+
+def first_game_of(pgn_text: str) -> tuple[str, int]:
+    """The first game in pasted text, and how many games the paste held.
+
+    A paste can carry stray leading whitespace, Windows line endings, several
+    games back to back, or just bare movetext with no tags; python-chess only
+    reads one game and chokes on indented tags, so this cleans that up once
+    for every caller. Bare movetext gets a minimal tag block so the stored PGN
+    is a normal one.
+    """
+    blobs = _split_pgn_blobs(pgn_text)
+    first = blobs[0] if blobs else pgn_text.strip()
+    if not _parse_pgn_tags(first):
+        first = _BARE_HEADERS + first
+    return first, max(1, len(blobs))
+
+
 def save_manual_game(
     pgn_text: str, player_color: str, opponent_override: str | None = None, profile_id: int | None = None,
 ) -> int:
-    """Insert a pasted PGN as a manual game and run it through the exact
-    same analysis pipeline as a synced one. Returns the new game_id.
+    """Insert a pasted PGN as a game and run it through the exact same
+    analysis pipeline as a synced one. Returns the game_id.
+
+    A PGN that came from Lichess or Chess.com keeps its real source and id
+    (fetchers.normalize_pgn_game), so pasting a game you already synced —
+    or that a later sync brings in — is recognized as the same game and
+    returns the existing row rather than storing (and counting) it twice.
+    Anything else (an over-the-board game, another site) is saved as
+    source='manual' with a per-paste id, so pasting it twice makes two rows.
+    Only the first game of a multi-game paste is saved; the API reports how
+    many were left out.
     """
+    pgn_text, _ = first_game_of(pgn_text)
     game = chess.pgn.read_game(io.StringIO(pgn_text))
     if game is None or not game.headers:
         raise ValueError("Couldn't parse this PGN — check it's well-formed.")
-    headers = game.headers
 
-    white = headers.get("White", "Unknown")
-    black = headers.get("Black", "Unknown")
-    opponent = opponent_override or (black if player_color == "white" else white)
+    normalized = normalize_pgn_game(pgn_text, player_color, opponent_override, default_source="manual")
+    if normalized is None:
+        raise ValueError("Couldn't parse this PGN — check it's well-formed.")
 
-    # Unlike the bulk Lichess/Chess.com fetch (where an unrecognized Result
-    # tag means "skip this game entirely" — see fetchers.py), this is a
-    # single, deliberate "save this exact game" action: silently dropping
-    # or 400ing it over a missing/unclear Result tag (common for a
-    # manually-typed-out OTB game) would be worse than a best-effort
-    # default, since the moves/analysis themselves are still perfectly
-    # valid and exactly what the user asked to save.
-    result = _lichess_result_to_outcome(headers.get("Result", "*"), player_color) or "draw"
-    date_iso = _parse_pgn_date(headers.get("Date", ""))
+    # Unlike the bulk fetch (where an unrecognized Result tag means "skip this
+    # game entirely" — see fetchers.py), this is a single, deliberate "save
+    # this exact game" action: dropping it over a missing/unclear Result tag
+    # (common for a manually-typed-out OTB game) would be worse than a
+    # best-effort default, since the moves/analysis are still perfectly valid.
+    normalized["result"] = normalized["result"] or "draw"
+    normalized["date"] = normalized["date"] or _parse_pgn_date(game.headers.get("Date", ""))
+    if normalized["source"] == "manual":
+        # No natural external id — hash the content plus a timestamp so
+        # re-pasting the same PGN twice creates two rows (each paste is a
+        # deliberate save action).
+        normalized["source_game_id"] = hashlib.sha256(f"{pgn_text}{datetime.now().isoformat()}".encode()).hexdigest()[:16]
 
-    # No natural external id for a pasted game — hash the content plus a
-    # timestamp so re-pasting the exact same PGN twice creates two rows
-    # (each paste is a deliberate save action) rather than deduping like
-    # synced fetches do.
-    source_game_id = hashlib.sha256(f"{pgn_text}{datetime.now().isoformat()}".encode()).hexdigest()[:16]
+    existing_id = find_game_id(normalized)
+    if existing_id is not None:
+        return existing_id
 
-    normalized = {
-        "source": "manual", "source_game_id": source_game_id, "date": date_iso,
-        "opponent": opponent, "result": result, "color": player_color,
-        "time_control": "unknown", "opening_name": "", "pgn": pgn_text,
-    }
     # The caller passes the profile currently selected in the Analyze
     # board's own switcher; a caller with no switcher of its own (the CLI,
     # or an older client) falls back to whichever profile was created
@@ -258,16 +283,10 @@ def save_manual_game(
 
     save_games([normalized], profile_id=profile_id)
 
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT id FROM games WHERE source = 'manual' AND source_game_id = ?", (source_game_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
+    game_id = find_game_id(normalized)
+    if game_id is None:
         raise RuntimeError("Saved game not found immediately after insert — this shouldn't happen.")
 
     from mistakes import analyze_and_store_game
-    analyze_and_store_game(row["id"], pgn_text)
-    return row["id"]
+    analyze_and_store_game(game_id, normalized["pgn"])
+    return game_id

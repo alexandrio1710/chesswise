@@ -54,7 +54,7 @@ from config import (
 )
 from db import get_connection, save_games
 from eco import classify_game_opening, moves_from_pgn
-from fetchers import _classify_time_control_from_clock, _parse_pgn_tags, _split_pgn_blobs
+from fetchers import _parse_pgn_tags, _split_pgn_blobs, normalize_pgn_game
 from profiles import _profile_usernames
 from repertoire import detect_structure
 
@@ -76,55 +76,32 @@ MAX_HIGHLIGHTED_POSITIONS = 5
 
 def _normalize_bulk_game(pgn: str, known_usernames: set[str], default_color: str | None) -> dict | None:
     """One game blob -> db.save_games' normalized shape, or None if it
-    can't be parsed/attributed at all. Mirrors manual_analysis.
-    save_manual_game's per-field extraction, but the source_game_id is a
-    pure content hash (no timestamp) — re-uploading the same export
-    should dedupe exactly like a routine sync re-fetch does, unlike a
-    single deliberate paste.
+    can't be parsed/attributed at all. Which side is "this player" comes
+    from the profile's linked usernames (or `default_color`); everything
+    else is fetchers.normalize_pgn_game, so an imported game carries the same
+    fields as a synced one and — for a Lichess/Chess.com PGN — the same
+    (source, id), which means re-uploading an export, or importing games that
+    were already synced, dedupes instead of storing them twice.
     """
-    import hashlib
-
     tags = _parse_pgn_tags(pgn)
     if not tags:
         return None
 
-    white = tags.get("White", "")
-    black = tags.get("Black", "")
-    white_lower, black_lower = white.lower(), black.lower()
-
+    white_lower, black_lower = tags.get("White", "").lower(), tags.get("Black", "").lower()
     if white_lower in known_usernames:
-        color, opponent = "white", black
+        color = "white"
     elif black_lower in known_usernames:
-        color, opponent = "black", white
+        color = "black"
     elif default_color in ("white", "black"):
         color = default_color
-        opponent = black if color == "white" else white
     else:
         return None  # can't tell which side was this player — skip rather than guess
 
-    result_tag = tags.get("Result", "*")
-    result = {"1-0": "win" if color == "white" else "loss",
-              "0-1": "loss" if color == "white" else "win",
-              "1/2-1/2": "draw"}.get(result_tag)
-    if result is None:
+    game = normalize_pgn_game(pgn, color, default_source="bulk_upload")
+    if game is None or game["result"] is None:
         return None  # unterminated/unknown result — nothing meaningful to store
-
-    date_str = tags.get("UTCDate") or tags.get("Date", "")
-    date_iso = date_str.replace(".", "-") if date_str and date_str != "????.??.??" else None
-
-    time_control = _classify_time_control_from_clock(tags.get("TimeControl", ""))
-    white_elo = int(tags["WhiteElo"]) if tags.get("WhiteElo", "").isdigit() else None
-    black_elo = int(tags["BlackElo"]) if tags.get("BlackElo", "").isdigit() else None
-    player_rating, opponent_rating = (white_elo, black_elo) if color == "white" else (black_elo, white_elo)
-
-    source_game_id = hashlib.sha256(pgn.encode()).hexdigest()[:16]
-
-    return {
-        "source": "bulk_upload", "source_game_id": source_game_id, "date": date_iso,
-        "opponent": opponent, "result": result, "color": color, "time_control": time_control,
-        "opening_name": tags.get("Opening", ""), "pgn": pgn.strip(),
-        "player_rating": player_rating, "opponent_rating": opponent_rating,
-    }
+    game["date"] = game["date"] or None
+    return game
 
 
 def bulk_import_pgn(pgn_text: str, profile_id: int, default_color: str | None = None) -> dict:

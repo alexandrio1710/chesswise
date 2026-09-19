@@ -9,6 +9,7 @@ import logging
 import sqlite3
 from datetime import datetime
 
+from config import FIRST_IMPORT_CHESSCOM_MONTHS, FIRST_IMPORT_MAX_GAMES
 from migrations import DB_PATH, run_migrations
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,40 @@ def _classify_opening(conn: sqlite3.Connection, game_id: int, pgn_text: str) -> 
         logger.warning(f"ECO classification skipped for game {game_id}: {e}")
 
 
+def _find_existing_game(conn: sqlite3.Connection, g: dict):
+    """The stored row for this game, if any: same (source, source_game_id), or —
+    for Chess.com — the same game under a different id. A synced Chess.com game
+    is keyed by the API's uuid while a PGN import only knows the numeric id in
+    its Link tag, so without this check importing a game you already synced
+    (or syncing one you imported) stored it twice and double-counted it
+    everywhere."""
+    row = conn.execute(
+        "SELECT id, profile_id FROM games WHERE source = ? AND source_game_id = ?",
+        (g["source"], g["source_game_id"]),
+    ).fetchone()
+    if row is not None or g["source"] != "chesscom":
+        return row
+    from fetchers import chesscom_link_id
+
+    link_id = chesscom_link_id(g.get("pgn") or "")
+    if not link_id:
+        return None
+    return conn.execute(
+        "SELECT id, profile_id FROM games WHERE source = 'chesscom' AND (pgn LIKE ? OR pgn LIKE ?) LIMIT 1",
+        (f'%/game/live/{link_id}"%', f'%/game/daily/{link_id}"%'),
+    ).fetchone()
+
+
+def find_game_id(g: dict) -> int | None:
+    """Id of the stored game matching a normalized game dict, or None."""
+    conn = get_connection()
+    try:
+        row = _find_existing_game(conn, g)
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
 def save_games(games: list[dict], profile_id: int | None = None) -> dict:
     """Insert normalized games (from fetchers.py) into the DB.
 
@@ -94,10 +129,11 @@ def save_games(games: list[dict], profile_id: int | None = None) -> dict:
     skipped_other_profile = 0
     try:
         for g in games:
-            existing = conn.execute(
-                "SELECT profile_id FROM games WHERE source = ? AND source_game_id = ?",
-                (g["source"], g["source_game_id"]),
-            ).fetchone()
+            existing = _find_existing_game(conn, g)
+            if existing is not None:
+                if existing["profile_id"] != profile_id:
+                    skipped_other_profile += 1
+                continue
 
             cur = conn.execute(
                 """
@@ -116,8 +152,6 @@ def save_games(games: list[dict], profile_id: int | None = None) -> dict:
             if cur.rowcount:
                 inserted += 1
                 _classify_opening(conn, cur.lastrowid, g["pgn"])
-            elif existing is not None and existing["profile_id"] != profile_id:
-                skipped_other_profile += 1
         conn.commit()
     finally:
         conn.close()
@@ -227,12 +261,15 @@ def fetch_and_store(
         # latest game (see get_latest_game_date's docstring).
         profile_id = resolve_profile_id("lichess", lichess_user)
         since_ms = None
+        lichess_max = max_games
         if refresh:
             latest = get_latest_game_date("lichess", profile_id=profile_id)
             if latest:
                 since_ms = (_iso_to_epoch(latest) + 1) * 1000
+            else:
+                lichess_max = max(max_games, FIRST_IMPORT_MAX_GAMES)  # first import: bring in real history
         try:
-            lichess_games = fetch_lichess_games(lichess_user, max_games=max_games, since_ms=since_ms)
+            lichess_games = fetch_lichess_games(lichess_user, max_games=lichess_max, since_ms=since_ms)
             suffix = " (since last refresh)" if since_ms else ""
             logger.info(f"Fetched {len(lichess_games)} Lichess games for '{lichess_user}'{suffix}")
             result = save_games(lichess_games, profile_id=profile_id)
@@ -247,13 +284,17 @@ def fetch_and_store(
     if chesscom_user:
         profile_id = resolve_profile_id("chesscom", chesscom_user)
         since_epoch = None
+        chesscom_max, chesscom_months = max_games, 2
         if refresh:
             latest = get_latest_game_date("chesscom", profile_id=profile_id)
             if latest:
                 since_epoch = _iso_to_epoch(latest) + 1
+            else:
+                chesscom_max = max(max_games, FIRST_IMPORT_MAX_GAMES)
+                chesscom_months = max(chesscom_months, FIRST_IMPORT_CHESSCOM_MONTHS)
         try:
             chesscom_games = fetch_chesscom_games(
-                chesscom_user, months_back=2, max_games=max_games, since_epoch=since_epoch
+                chesscom_user, months_back=chesscom_months, max_games=chesscom_max, since_epoch=since_epoch
             )
             suffix = " (since last refresh)" if since_epoch else ""
             logger.info(f"Fetched {len(chesscom_games)} Chess.com games for '{chesscom_user}'{suffix}")

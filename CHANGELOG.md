@@ -68,6 +68,38 @@ cached in `opponent_countries` (migration 29) including "no country" and
   chess.com's PGN doesn't include it.
 - No peer comparison, lessons, bots or live play.
 
+**Game imports.** Pasting or bulk-importing PGNs used to build a thinner,
+different row than a sync did, and could store the same game twice.
+- *Duplicates.* A synced Chess.com game is keyed by the API's uuid, which a
+  PGN doesn't carry, so importing a game you'd already synced (or syncing one
+  you'd imported) stored it under a second id and double-counted it in every
+  stat. Chess.com games are now also recognized by the numeric id in their
+  `Link` tag, and Lichess PGNs keep their real Lichess id, so both directions
+  dedupe. (`db.save_games`, `fetchers.normalize_pgn_game`)
+- *Complete rows.* One shared normalizer now feeds both the Analyze paste box
+  and the Coaching Report bulk import: full UTC timestamp (imports had only a
+  date, which skewed the hour-of-day view), Chess.com opening names from
+  `ECOUrl` (imports left them blank), both ratings, and Chess.com fractional
+  clocks in the format the clock analysis reads.
+- *Time control.* Chess.com writes `TimeControl "300"` with no increment, which
+  the classifier read as "unknown", so those games never matched a time-class
+  filter. It now understands `300`, `180+2`, `1/86400` (daily) and
+  `40/7200:3600`.
+- *Pasting.* Bare movetext with no tags, stray leading whitespace and Windows
+  line endings are accepted. Saving a multi-game paste keeps the first game and
+  now says so (a confirm on the page, `ignored_games` in the API) instead of
+  silently dropping the rest.
+- *First import.* A brand-new profile's first refresh fetched only 20 games (2
+  Chess.com months), because the incremental "since the last game" path has
+  nothing to be relative to yet. It now pulls up to `FIRST_IMPORT_MAX_GAMES`
+  (100) games / `FIRST_IMPORT_CHESSCOM_MONTHS` (3); later refreshes are
+  unchanged and uncapped.
+
+Also fixed: tactic events counted ordinary trades as "left hanging" (a rook
+takes a rook and is recaptured) and recaptures as "free pieces". Both now net
+out what the move itself just captured; on the real history that cut "pieces
+left hanging, taken by the opponent" from 2,308 to 822 events over 466 games.
+
 Also fixed: a game that ended before any move was played (analyzed, zero
 moves) counted as "needs review" forever; it's now excluded, and opening it
 says so instead of failing.

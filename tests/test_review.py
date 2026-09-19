@@ -93,6 +93,26 @@ class TestLeftHanging:
         assert _events(_pgn(self.FEN, "1. Qd2 Ke7"), [], motif="left_hanging") == []
 
 
+class TestTradesAreNotHangingPieces:
+    """Capturing something as valuable and being recaptured is a trade — not a
+    piece left hanging, and the recapture isn't a free piece."""
+
+    TRADE = "4k3/8/8/8/8/1b6/r7/R3K3 w - - 0 1"  # Rxa2 (rook takes rook), Bxa2 recaptures
+    LOSING = "4k3/8/2p5/3p4/8/4N3/8/4K3 w - - 0 1"  # Nxd5 wins a pawn but loses the knight to ...cxd5
+
+    def test_an_equal_trade_leaves_nothing_hanging(self):
+        assert _events(_pgn(self.TRADE, "1. Rxa2 Bxa2"), [], motif="left_hanging") == []
+
+    def test_the_recapture_is_not_a_free_piece(self):
+        assert _events(_pgn(self.TRADE, "1. Rxa2 Bxa2"), [], motif="free_piece") == []
+
+    def test_winning_a_pawn_but_losing_the_knight_is_still_flagged(self):
+        hanging = _events(_pgn(self.LOSING, "1. Nxd5 cxd5"), [], motif="left_hanging")
+        assert [(e["color"], e["outcome"], e["gain"]) for e in hanging] == [("white", "punished", 3)]
+        free = _events(_pgn(self.LOSING, "1. Nxd5 cxd5"), [], motif="free_piece")
+        assert [(e["color"], e["outcome"]) for e in free] == [("black", "taken")]
+
+
 class TestExtractAndNeedsReview:
     def _insert_game(self, reviewed_at=None, analyzed_at="2026-01-01 00:00:00", with_best=True):
         n = next(_counter)

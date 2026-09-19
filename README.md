@@ -14,6 +14,9 @@ project started with: where you're actually losing value (which phase,
 which openings, how time pressure affects you) and month-over-month trends.
 
 ![Dashboard overview](docs/screenshots/dashboard.png)
+![Game Review](docs/screenshots/game_review.png)
+![Insights](docs/screenshots/insights.png)
+![Tactics found and missed, with example positions](docs/screenshots/insights_tactics.png)
 ![Puzzle trainer](docs/screenshots/puzzles.png)
 ![Coaching Report](docs/screenshots/coaching_report.png)
 
@@ -51,8 +54,9 @@ each design decision was made, not just what changed.
 
 ## Features
 
-- Fetches and normalizes games from both Lichess and Chess.com into one
-  internal shape, with optional Lichess OAuth login and multiple local
+- Fetches and normalizes games from both Lichess and Chess.com — or imports
+  PGNs you paste or upload — into one internal shape (an imported game that
+  was already synced is recognized and not stored twice), with optional Lichess OAuth login and multiple local
   profiles (more than one person's data, or one person's separate
   accounts, in a single install)
 - **Game Review** (chess.com-style, for *both* players): accuracy for
