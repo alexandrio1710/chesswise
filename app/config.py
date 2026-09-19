@@ -96,7 +96,14 @@ DRIFT_MAX_EVAL_DROP_CP = int(os.environ.get("DRIFT_MAX_EVAL_DROP_CP", "40"))
 # per-game runtimes (2-30s+ depending on game length) eat into the
 # theoretical gain. Expect this ratio to vary a lot by machine — try
 # ANALYSIS_WORKERS=1 vs. the default and compare on yours if it matters to you.
-ANALYSIS_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", str(min(4, os.cpu_count() or 4))))
+ANALYSIS_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", str(max(2, min(8, (os.cpu_count() or 4) // 2)))))
+
+# The dashboard's "Sync & analyze" runs a QUICK pass by default: depth 12 is ~4x
+# faster than the standard depth 15 (measured: 25 vs 107 ms per position on one
+# core) and lands within ~17 cp of it on average (median 11), which is plenty to
+# flag mistakes and blunders. Pick Standard/Deep in the dashboard for the slow,
+# more careful pass; STANDARD is STOCKFISH_DEPTH above.
+QUICK_ANALYSIS_DEPTH = int(os.environ.get("QUICK_ANALYSIS_DEPTH", "12"))
 
 
 def find_stockfish_path() -> str:

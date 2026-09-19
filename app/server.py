@@ -44,7 +44,7 @@ import srs
 import srs_sm2
 import stats
 import tablebase
-from config import ANALYSIS_WORKERS, ANALYZE_RATE_LIMIT, SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
+from config import ANALYSIS_WORKERS, ANALYZE_RATE_LIMIT, QUICK_ANALYSIS_DEPTH, SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_TTL_DAYS, STOCKFISH_DEPTH
 from db import get_connection
 
 # Celery/Redis (Web platform, Section 4) are optional infrastructure — only
@@ -224,49 +224,32 @@ def _run_phase_with_progress(key: object, phase: str, total: int, count_remainin
         _refresh_status[key]["phase_done"] = total
 
 
-def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None) -> None:
-    """Runs the analyze/puzzle-generation phases at full ANALYSIS_WORKERS
-    parallelism, spawned from this background thread — not forced
-    sequential the way an earlier version of this function was. The
-    concern that used to justify workers=1 here (a ProcessPoolExecutor
-    started from a thread in a process that isn't a `__main__`-guarded
-    script "works on your machine, breaks on someone else's" on Windows)
-    turned out to not apply to this app's actual launch shape: the
-    picklable worker functions (batch_analyze._analyze_one,
-    puzzles._generate_one) live in their own real modules, not inline in
-    `__main__`/server.py, so a spawned child never needs to re-execute
-    anything from this module to find them. Verified directly on a real
-    291-puzzle backlog through this exact code path (Windows, launched via
-    `-m uvicorn` like this app's own launch config): no errors, no
-    duplicate processes, correct final state, ~2 minutes instead of the
-    hour-plus workers=1 would have taken.
+def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | None,
+                 depth: int, do_fetch: bool = True) -> None:
+    """Fetch new games (optional) and analyze whatever is unanalyzed. Only
+    that: building puzzles (/api/puzzle-build) and review data (Insights, or
+    on demand when a game is opened) are separate, so this stays quick.
+    The analysis phase fans out over ANALYSIS_WORKERS processes — spawned from
+    this background thread, which is fine here because the worker functions
+    live in their own real modules (batch_analyze._analyze_one), so a spawned
+    child never needs to re-execute anything from this module.
     """
     from batch_analyze import get_unanalyzed_games, run_batch_analysis
     from db import fetch_and_store
-    from puzzles import generate_all_puzzles, get_mistakes_without_puzzles
 
     try:
-        _refresh_status[key]["phase"] = "fetching"
-        result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
+        result = {"inserted": 0, "skipped": 0, "skipped_other_profile": 0}
+        if do_fetch:
+            _refresh_status[key]["phase"] = "fetching"
+            result = fetch_and_store(lichess_user, chesscom_user, refresh=True)
 
         newly_analyzed = _run_phase_with_progress(
             key, "analyzing", len(get_unanalyzed_games()),
             lambda: len(get_unanalyzed_games()),
-            lambda: run_batch_analysis(workers=ANALYSIS_WORKERS),
-        )
-        _run_phase_with_progress(
-            key, "generating_puzzles", len(get_mistakes_without_puzzles()),
-            lambda: len(get_mistakes_without_puzzles()),
-            lambda: generate_all_puzzles(workers=ANALYSIS_WORKERS),
+            lambda: run_batch_analysis(depth=depth, workers=ANALYSIS_WORKERS),
         )
         alerts.send_alerts_for_games(newly_analyzed)
-        # Review data (best moves, tactics) is only needed for Game Review and
-        # Insights, and takes seconds per game — so it builds in the
-        # background after the refresh has finished (progress on the Insights
-        # page) instead of holding the refresh open. A game opened before
-        # then is reviewed on demand.
-        review.start_bulk_review()
-        _refresh_status[key]["result"] = result
+        _refresh_status[key]["result"] = {**result, "analyzed": len(newly_analyzed or []), "depth": depth}
         _refresh_status[key]["error"] = None
     except Exception as e:
         logger.exception("Web-triggered refresh failed")
@@ -277,14 +260,19 @@ def _run_refresh(key: object, lichess_user: str | None, chesscom_user: str | Non
         _refresh_status[key]["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
+class RefreshRequest(SettingsUpdate):
+    depth: int | None = Field(default=None, ge=6, le=24)  # None = the quick default
+    fetch: bool = True  # False = only analyze games already stored
+
+
 @app.post("/api/refresh")
 def api_trigger_refresh(
-    settings: SettingsUpdate = SettingsUpdate(), user: dict | None = Depends(auth.get_current_user_optional),
+    settings: RefreshRequest = RefreshRequest(), user: dict | None = Depends(auth.get_current_user_optional),
 ):
-    """Kick off fetch (incremental) + analyze in the background and
-    return immediately — poll /api/refresh/status for progress. Any
-    username given here is saved for next time, same as the CLI.
-    """
+    """Kick off (fetch new games +) analysis in the background and return
+    immediately — poll /api/refresh/status for progress. Any username given
+    here is saved for next time, same as the CLI. Puzzles and review data are
+    separate jobs."""
     key = user["id"] if user else _LOCAL_KEY
     if _refresh_status.get(key, {}).get("running"):
         raise HTTPException(status_code=409, detail="A refresh is already running.")
@@ -292,7 +280,7 @@ def api_trigger_refresh(
     state = _settings_for(user)
     lichess_user = settings.lichess_user or state.get("lichess_user")
     chesscom_user = settings.chesscom_user or state.get("chesscom_user")
-    if not lichess_user and not chesscom_user:
+    if settings.fetch and not lichess_user and not chesscom_user:
         raise HTTPException(
             status_code=400,
             detail="No usernames configured. Set at least one in Settings first.",
@@ -304,16 +292,82 @@ def api_trigger_refresh(
     _refresh_status[key] = {
         "running": True, "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None, "error": None, "result": None,
-        "phase": "fetching", "phase_total": None, "phase_done": None,
+        "phase": "fetching" if settings.fetch else "analyzing", "phase_total": None, "phase_done": None,
     }
-    threading.Thread(target=_run_refresh, args=(key, lichess_user, chesscom_user), daemon=True).start()
-    return {"status": "started"}
+    depth = settings.depth or QUICK_ANALYSIS_DEPTH
+    threading.Thread(target=_run_refresh, args=(key, lichess_user, chesscom_user, depth, settings.fetch), daemon=True).start()
+    return {"status": "started", "depth": depth}
 
 
 @app.get("/api/refresh/status")
 def api_refresh_status(user: dict | None = Depends(auth.get_current_user_optional)):
     key = user["id"] if user else _LOCAL_KEY
     return _refresh_status.get(key, _empty_refresh_status())
+
+
+_puzzle_build_status: dict = {"running": False, "total": 0, "done": 0, "error": None, "finished_at": None}
+
+
+def _run_puzzle_build() -> None:
+    from puzzles import generate_all_puzzles, get_mistakes_without_puzzles
+
+    stop = threading.Event()
+    try:
+        total = len(get_mistakes_without_puzzles())
+        _puzzle_build_status.update(total=total, done=0)
+        threading.Thread(target=_track_puzzle_progress, args=(stop, total), daemon=True).start()
+        if total:
+            generate_all_puzzles(workers=ANALYSIS_WORKERS)
+        _puzzle_build_status.update(done=total, error=None)
+    except Exception as e:
+        logger.exception("Puzzle build failed")
+        _puzzle_build_status["error"] = str(e)
+    finally:
+        stop.set()
+        _puzzle_build_status.update(running=False, finished_at=datetime.now(timezone.utc).isoformat())
+
+
+def _track_puzzle_progress(stop: threading.Event, total: int) -> None:
+    from puzzles import get_mistakes_without_puzzles
+
+    while not stop.is_set():
+        try:
+            _puzzle_build_status["done"] = total - len(get_mistakes_without_puzzles())
+        except Exception:
+            pass
+        stop.wait(2)
+
+
+@app.post("/api/puzzle-build")
+def api_puzzle_build():
+    """Generate puzzles for every flagged mistake that doesn't have one yet, in
+    the background (separate from refreshing/analyzing games). Poll
+    /api/puzzle-build/status."""
+    if _puzzle_build_status["running"]:
+        raise HTTPException(status_code=409, detail="Puzzles are already being built.")
+    _puzzle_build_status.update(running=True, total=0, done=0, error=None, finished_at=None)
+    threading.Thread(target=_run_puzzle_build, daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/api/puzzle-build/status")
+def api_puzzle_build_status():
+    return dict(_puzzle_build_status)
+
+
+@app.get("/api/pending")
+def api_pending():
+    """What each separate refresh would do right now: games waiting for
+    analysis, flagged mistakes without a puzzle, analyzed games without
+    review data."""
+    from batch_analyze import get_unanalyzed_games
+    from puzzles import get_mistakes_without_puzzles
+
+    return {
+        "unanalyzed_games": len(get_unanalyzed_games()),
+        "mistakes_without_puzzles": len(get_mistakes_without_puzzles()),
+        "games_without_review": len(review.games_needing_review()),
+    }
 
 
 @app.get("/api/summary")

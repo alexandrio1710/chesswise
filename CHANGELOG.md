@@ -1,5 +1,29 @@
 # Changelog
 
+## v45 — Refreshes are separate, and analysis is fast
+
+A refresh used to fetch, analyze, generate puzzles and (briefly) review every
+game before it reported done — about 12 minutes to catch up on 67 games. They
+are now separate actions on the dashboard:
+
+- **Sync & analyze** fetches new games and runs Stockfish on them, nothing else.
+  **Analyze only** skips the fetch. **Build puzzles** is its own background job
+  with its own progress (`/api/puzzle-build`), and review data for Game Review /
+  Insights builds from the Insights page or when a game is opened. A line under
+  the buttons says what each would do right now (`/api/pending`).
+- **Quick analysis by default.** Depth 12 instead of 15: measured on this
+  player's own games, 25 vs 107 ms per position on one core (4.3x), and evals
+  land within 17 cp of depth 15 on average (median 11; 1.4% of positions differ
+  by more than 100 cp). Standard (15) and Deep (18) are in the dashboard's depth
+  picker; `QUICK_ANALYSIS_DEPTH` changes the default. Games analyzed earlier keep
+  their depth-15 evals.
+- **More cores.** `ANALYSIS_WORKERS` defaulted to at most 4; it now uses about
+  half the logical cores, up to 8. A 60-game batch takes 24 seconds on a
+  20-thread machine, against roughly 4.5 minutes before.
+- The dashboard now says when a refresh was interrupted by a server restart and
+  keeps retrying if the server is briefly unreachable, instead of freezing on the
+  last phase.
+
 ## v44 — A free alternative to chess.com Premium: Game Review, Insights, interactive puzzles
 
 Asked for chess.com's Game Review, Insights and puzzle experience,

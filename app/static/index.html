@@ -532,14 +532,29 @@
         <input type="text" id="settings-chesscom" placeholder="e.g. vxyzrs00" autocomplete="off">
       </label>
     </div>
+    <div class="settings-row">
+      <label>
+        Analysis depth
+        <select id="settings-depth">
+          <option value="12">Quick (depth 12) — fastest</option>
+          <option value="15">Standard (depth 15)</option>
+          <option value="18">Deep (depth 18) — slow</option>
+        </select>
+      </label>
+    </div>
     <div class="settings-actions">
       <button id="settings-save">Save</button>
-      <button id="settings-refresh">Save &amp; Refresh now</button>
+      <button id="settings-refresh">Sync &amp; analyze</button>
+      <button id="settings-analyze" title="Analyze games already stored, without fetching">Analyze only</button>
+      <button id="settings-puzzles" title="Generate puzzles from flagged mistakes">Build puzzles</button>
       <span class="settings-status" id="settings-status"></span>
     </div>
+    <p class="settings-pending" id="settings-pending"></p>
     <p class="settings-hint">
-      Refresh pulls any new games since the last run, analyzes them, and generates puzzles —
-      it can take a few minutes depending on how many games are new. You can navigate away; it keeps running.
+      <strong>Sync &amp; analyze</strong> pulls new games and runs Stockfish on them — nothing else, so it stays quick.
+      <strong>Analyze only</strong> skips the fetch. <strong>Build puzzles</strong> is its own step (slower), and review data
+      for Game Review / Insights builds from the Insights page or when you open a game. Quick depth 12 is about 4x faster
+      than depth 15 and lands within ~17 centipawns of it on average. You can navigate away; it keeps running.
     </p>
   </section>
 
@@ -731,7 +746,7 @@
     const res = await fetch("/api/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
+      body: JSON.stringify({ ...settings, depth: chosenDepth() }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -1039,12 +1054,76 @@
     statusEl.textContent = "Saved.";
   });
 
+  // Analysis depth choice (Quick 12 / Standard 15 / Deep 18), remembered between visits.
+  const depthSelect = document.getElementById("settings-depth");
+  try { depthSelect.value = localStorage.getItem("analysisDepth") || "12"; } catch (e) { /* storage blocked */ }
+  if (!depthSelect.value) depthSelect.value = "12";
+  depthSelect.addEventListener("change", () => { try { localStorage.setItem("analysisDepth", depthSelect.value); } catch (e) { /* ignore */ } });
+  function chosenDepth() { return Number(depthSelect.value) || 12; }
+
+  // What each separate step would do right now.
+  async function loadPending() {
+    const el = document.getElementById("settings-pending");
+    try {
+      const p = await fetchJson("/api/pending");
+      const bits = [];
+      bits.push(p.unanalyzed_games ? `${p.unanalyzed_games} game(s) waiting for analysis` : "all stored games analyzed");
+      bits.push(p.mistakes_without_puzzles ? `${p.mistakes_without_puzzles} mistake(s) without a puzzle` : "puzzles up to date");
+      if (p.games_without_review) bits.push(`${p.games_without_review} game(s) without review data (build on the Insights page)`);
+      el.textContent = bits.join(" · ");
+    } catch (e) { el.textContent = ""; }
+  }
+
+  document.getElementById("settings-analyze").addEventListener("click", async () => {
+    const statusEl = document.getElementById("settings-status");
+    const res = await fetch("/api/refresh", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fetch: false, depth: chosenDepth() }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.textContent = body.detail || "Couldn't start analysis.";
+      return;
+    }
+    pollRefreshStatus();
+  });
+
+  async function pollPuzzleBuild() {
+    const statusEl = document.getElementById("settings-status");
+    let st;
+    try { st = await fetchJson("/api/puzzle-build/status"); } catch (e) {
+      statusEl.textContent = "Lost contact with the server — retrying…";
+      setTimeout(pollPuzzleBuild, 5000);
+      return;
+    }
+    if (st.running) {
+      statusEl.textContent = `Building puzzles… (${st.done}/${st.total || "?"})`;
+      setTimeout(pollPuzzleBuild, 3000);
+    } else if (st.error) {
+      statusEl.textContent = `Puzzle build failed: ${st.error}`;
+    } else if (st.finished_at) {
+      statusEl.textContent = `Puzzles built (${st.total} new).`;
+      loadPending();
+    }
+  }
+
+  document.getElementById("settings-puzzles").addEventListener("click", async () => {
+    const statusEl = document.getElementById("settings-status");
+    const res = await fetch("/api/puzzle-build", { method: "POST" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.textContent = body.detail || "Couldn't start the puzzle build.";
+      return;
+    }
+    pollPuzzleBuild();
+  });
+
   document.getElementById("settings-refresh").addEventListener("click", async () => {
     const statusEl = document.getElementById("settings-status");
     const res = await fetch("/api/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentSettingsInput()),
+      body: JSON.stringify({ ...currentSettingsInput(), depth: chosenDepth() }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -1074,13 +1153,12 @@
       const PHASE_LABEL = {
         fetching: "Fetching games…",
         analyzing: "Analyzing games with Stockfish…",
-        generating_puzzles: "Generating puzzles from flagged mistakes…",
       };
       let text = PHASE_LABEL[status.phase] || "Refreshing…";
       if (status.phase_total) {
         text += ` (${status.phase_done ?? 0}/${status.phase_total})`;
       }
-      statusEl.textContent = text + " This can take a while on a large first-time sync — safe to leave this tab open in the background.";
+      statusEl.textContent = text + " Safe to leave this tab open in the background.";
       setTimeout(() => pollRefreshStatus(onDone), 3000);
     } else if (status.error) {
       statusEl.textContent = `Refresh failed: ${status.error}`;
@@ -1088,7 +1166,9 @@
     } else if (status.finished_at) {
       const inserted = status.result ? status.result.inserted : 0;
       const otherProfile = status.result ? status.result.skipped_other_profile : 0;
-      let text = `Done — ${inserted} new game(s).`;
+      const analyzed = status.result && status.result.analyzed != null ? status.result.analyzed : 0;
+      const depth = status.result && status.result.depth ? ` at depth ${status.result.depth}` : "";
+      let text = `Done — ${inserted} new game(s), ${analyzed} analyzed${depth}.`;
       if (otherProfile) {
         text += ` ${otherProfile} game(s) already exist in this database under a different profile ` +
           `(you both played each other and whichever profile fetched first "owns" that game row) — ` +
@@ -1096,6 +1176,7 @@
       }
       statusEl.textContent = text + " Reloading…";
       refreshWasRunning = false;
+      loadPending();
       loadProfileOptions();
       loadOverview(currentSource);
       if (openingsLoaded) loadOpenings(currentSource);
@@ -1124,6 +1205,7 @@
   })();
 
   loadSettings();
+  loadPending();
   loadProfileOptions();
   loadOverview("all");
 </script>
