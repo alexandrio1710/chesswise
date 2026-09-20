@@ -297,6 +297,24 @@ def _class_of(row: dict) -> str | None:
     return row.get("classification") or row.get("tier")
 
 
+def _mistake_causes(game_id: int, you: str, pgn_text: str, rows: list[dict]) -> dict[int, dict]:
+    """{ply: {key, label, habit}} for this player's mistakes in the game — why
+    each happened (a piece left hanging, a tactic walked into or missed, time
+    trouble, ...). The same classification the Skills page aggregates."""
+    import insights_report
+    import skills
+
+    events = skills._load_tactics([game_id])
+    g = {"id": game_id, "color": you, "base_seconds": insights_report.base_seconds(pgn_text)}
+    out = {}
+    for row in rows:
+        if row["color_moved"] != you or (row.get("classification") or row.get("tier")) not in skills.BAD_CLASSES:
+            continue
+        key = skills.classify_mistake(g, row, events)
+        out[row["ply"]] = {"key": key, "label": skills.CAUSES[key]["label"], "habit": skills.CAUSES[key]["habit"]}
+    return out
+
+
 def game_review_payload(game_id: int) -> dict:
     """Everything the review page needs, for BOTH players: accuracy and
     move-class counts per side, phase grades, every move with its
@@ -374,6 +392,11 @@ def game_review_payload(game_id: int) -> dict:
             "clock_seconds_remaining": row["clock_seconds_remaining"], "time_spent_seconds": row.get("time_spent_seconds"),
             "puzzle_id": row["puzzle_id"], "is_book": ply <= book_plies,
         })
+
+    causes = _mistake_causes(game_id, game["color"], game["pgn"], rows)
+    for m in moves_out:
+        if m["ply"] in causes:
+            m["cause"] = causes[m["ply"]]
 
     accuracy = {c: stats.compute_game_accuracy(rows, c) for c in ("white", "black")}
     phase_accuracy = {

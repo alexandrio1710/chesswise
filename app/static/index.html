@@ -468,6 +468,15 @@
   .home-links { display: flex; gap: 8px 14px; flex-wrap: wrap; font-size: 13px; }
   .home-status { font-size: 12px; color: var(--text-secondary); min-height: 1em; }
 
+  .practice { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .pbar { height: 8px; border-radius: 99px; background: var(--page-plane); overflow: hidden; margin-bottom: 10px; }
+  .pbar > span { display: block; height: 100%; background: var(--status-good); border-radius: 99px; transition: width .4s; }
+  .prow { display: flex; gap: 8px 22px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+  .prow select { padding: 2px 6px; font-size: 13px; border-radius: 6px; }
+  .pdots { display: inline-flex; gap: 4px; }
+  .pdot { width: 12px; height: 12px; border-radius: 3px; background: var(--page-plane); border: 1px solid var(--border); }
+  .pdot.on { background: var(--status-good); border-color: transparent; }
+
   /* Loading spinner */
   .spinner {
     display: inline-block;
@@ -593,6 +602,7 @@
           <div class="home-status" id="home-status"></div>
         </div>
       </div>
+      <div class="practice" id="practice"></div>
     </section>
 
     <section class="card" id="summary-card">
@@ -810,6 +820,7 @@
       renderWorstGames(worstGames);
       renderTrend(trend);
       loadFocus();
+      loadPractice();
     } catch (err) {
       // Previously any one of these four failing (network error, or a
       // non-2xx response .then(r => r.json()) happily "succeeded" parsing
@@ -936,6 +947,26 @@
     } catch (err) {
       el.innerHTML = `<p class="focus-why">Could not work out a plan right now.</p>`;
     }
+  }
+
+  // Daily puzzle goal and streak (the small habit loop: short sessions, most days).
+  async function loadPractice() {
+    const el = document.getElementById("practice");
+    let goal = 5;
+    try { goal = parseInt(localStorage.getItem("dailyGoal") || "5", 10) || 5; } catch (e) { /* storage blocked */ }
+    try {
+      const p = await fetchJson(`/api/practice?tz_offset=${new Date().getTimezoneOffset()}&goal=${goal}`);
+      const pct = Math.min(100, Math.round((p.today / p.goal) * 100));
+      const dots = p.days.map((d) => `<span class="pdot ${d.count ? "on" : ""}" title="${d.date}: ${d.count} puzzle${d.count === 1 ? "" : "s"}"></span>`).join("");
+      const streak = p.streak ? `<strong>${p.streak}-day streak</strong>${p.best_streak > p.streak ? ` <span class="muted">(best ${p.best_streak})</span>` : ""}` : "No streak yet — a puzzle today starts one";
+      el.innerHTML = `<div class="pbar"><span style="width:${pct}%"></span></div>
+        <div class="prow"><span><strong>${p.today}</strong> of <select id="goal-select" title="Daily puzzle goal">${[3, 5, 10, 20].map((n) => `<option value="${n}" ${n === p.goal ? "selected" : ""}>${n}</option>`).join("")}</select> puzzles today${p.today >= p.goal ? " ✓" : ""}</span>
+        <span class="pdots">${dots}</span><span>${streak}</span><a href="/puzzles">Practise →</a></div>`;
+      document.getElementById("goal-select").addEventListener("change", (e) => {
+        try { localStorage.setItem("dailyGoal", e.target.value); } catch (err) { /* ignore */ }
+        loadPractice();
+      });
+    } catch (err) { el.innerHTML = ""; }
   }
 
   // The big button starts the same fetch + quick analysis the Settings panel does.

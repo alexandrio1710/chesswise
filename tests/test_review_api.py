@@ -133,3 +133,19 @@ class TestReviewStatus:
         assert body["total"] >= body["reviewed"] >= 1
         assert body["pending"] == body["total"] - body["reviewed"]
         assert {"running", "total", "done"} <= set(body["job"])
+
+
+class TestMistakeCause:
+    def test_your_bad_moves_carry_a_cause_and_habit(self):
+        game_id = _insert_reviewed_game()
+        _tactic_conn = get_connection()
+        try:
+            _tactic_conn.execute("INSERT INTO game_tactics (game_id, ply, color, motif, outcome, gain, best_uci, played_uci) "
+                                 "VALUES (?, 1, 'white', 'left_hanging', 'punished', 3, NULL, 'e1f2')", (game_id,))
+            _tactic_conn.commit()
+        finally:
+            _tactic_conn.close()
+        body = client.get(f"/api/games/{game_id}/review").json()
+        first, second = body["moves"][0], body["moves"][1]
+        assert first["cause"]["key"] == "hung_piece" and "undefended" in first["cause"]["habit"]
+        assert "cause" not in second  # not your move, and not a mistake

@@ -575,6 +575,7 @@
         <div class="coach-sub">${escapeHtml(who)} · ${m.move_number}${m.color === 'white' ? '.' : '...'} ${escapeHtml(m.san)} · ${cap(m.phase)}${keyIdx >= 0 ? ` · Key moment ${keyIdx + 1} of ${km.length}` : ''}</div></div>
         <span class="ev" title="Evaluation after this move (White's point of view)">${evText(m.eval_cp)}</span></div>
       ${m.explanation.text ? `<p>${escapeHtml(m.explanation.text)}</p>` : ''}
+      ${m.cause ? `<div class="bestline" style="background:color-mix(in srgb, var(--status-warning) 12%, var(--surface-1))"><strong>Why: ${escapeHtml(m.cause.label)}</strong><span class="pv">Habit: ${escapeHtml(m.cause.habit)}</span></div>` : ''}
       ${best}
       <div class="btn-row">
         ${canRetry ? '<button class="btn primary" id="c-retry">↺ Retry</button>' : ''}

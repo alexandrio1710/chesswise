@@ -35,6 +35,7 @@ import insights
 import insights_report
 import nav
 import play
+import practice
 import skills
 import manual_analysis
 import opening_explorer
@@ -356,6 +357,12 @@ def api_puzzle_build():
 @app.get("/api/puzzle-build/status")
 def api_puzzle_build_status():
     return dict(_puzzle_build_status)
+
+
+@app.get("/api/practice")
+def api_practice(tz_offset: int = Query(default=0, ge=-840, le=840), goal: int = Query(default=5, ge=1, le=200)):
+    """Today's puzzle count against a goal, and the practice streak (see practice.py)."""
+    return practice.daily_progress(tz_offset, goal)
 
 
 @app.get("/api/pending")
