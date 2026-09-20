@@ -17,7 +17,7 @@ from __future__ import annotations
 import chess
 
 from tactics import (
-    VALUE, hanging_pieces, material_balance, motif_details, move_motifs, piece_name, pv_material_swing,
+    VALUE, hanging_pieces, motif_details, move_motifs, piece_name, pv_material_swing,
 )
 
 MATE_CP = 9000

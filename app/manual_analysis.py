@@ -24,7 +24,7 @@ import chess.pgn
 
 from analysis import analyze_game_moves
 from config import STOCKFISH_DEPTH
-from db import find_game_id, get_connection, save_games
+from db import find_game_id, save_games
 from fetchers import _parse_pgn_tags, _split_pgn_blobs, normalize_pgn_game
 from mistakes import STANDARD_VARIANT_TAGS, classify_tier, get_pgn_variant
 from puzzles import get_top_lines, legal_moves_for_fen
