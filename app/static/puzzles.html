@@ -197,7 +197,7 @@
   import { EvalBar, escapeHtml, formatEval, formatPv, findMoveBetween, CLASS_STYLE } from '/static/js/ui.js';
   import { mountChrome } from '/static/js/chrome.js';
 
-  mountChrome({ title: 'Puzzle trainer', active: 'puzzles' });
+  mountChrome({ title: 'Puzzle trainer', active: '/puzzles' });
 
   const $ = (id) => document.getElementById(id);
   const GOOD_GREEN = '#81b64c';
@@ -783,8 +783,16 @@
   ['filter-phase', 'filter-severity', 'filter-theme'].forEach((id) => $(id).addEventListener('change', loadQueue));
 
   refreshDueCount();
-  loadThemes();
-  loadQueue();
+  // Links from the Skills page ("Train hanging piece puzzles") preset the filters: ?theme=, ?phase=, ?severity=.
+  (async () => {
+    await loadThemes();
+    const preset = new URLSearchParams(location.search);
+    for (const [key, id] of [['theme', 'filter-theme'], ['phase', 'filter-phase'], ['severity', 'filter-severity']]) {
+      const value = preset.get(key);
+      if (value && [...$(id).options].some((o) => o.value === value)) $(id).value = value;
+    }
+    loadQueue();
+  })();
 </script>
 </body>
 </html>

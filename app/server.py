@@ -33,6 +33,8 @@ import geography
 import game_report
 import insights
 import insights_report
+import nav
+import skills
 import manual_analysis
 import opening_explorer
 import opening_puzzles
@@ -485,6 +487,31 @@ def api_insights_geography_start(
     GET /api/insights/geography for progress."""
     flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
     return {"started": geography.start_lookup(flt)}
+
+
+@app.get("/api/skills")
+def api_skills(
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Skills, mistake anatomy, opening leaks and the prioritized plan (see skills.py)."""
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return skills.build(flt)
+
+
+@app.get("/api/skills/examples")
+def api_skills_examples(
+    cause: str = Query(...), limit: int = Query(default=6, ge=1, le=12),
+    source: str | None = Query(default=None), time_class: str | None = Query(default=None), color: str | None = Query(default=None),
+    range: str | None = Query(default=None), date_from: str | None = Query(default=None), date_to: str | None = Query(default=None),
+    profile_id: int | None = Depends(auth.require_profile_filter_access),
+):
+    """Example positions behind one mistake cause."""
+    if cause not in skills.CAUSES:
+        raise HTTPException(status_code=422, detail=f"Unknown cause: {cause}")
+    flt = _insights_filters(source, profile_id, time_class, color, range, date_from, date_to)
+    return {"examples": skills.mistake_examples(flt, cause, limit)}
 
 
 @app.get("/api/insights/tactic-examples")
@@ -1350,49 +1377,31 @@ def api_opening_puzzle_attempt(puzzle_id: int, attempt: OpeningPuzzleAttempt):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+# Every HTML page: (path, file, which nav link is highlighted). Adding a page is one line here plus its file —
+# the older pages get their nav from nav.py, so it is never edited by hand per page.
+PAGES = [
+    ("/", "index.html", "/"), ("/puzzles", "puzzles.html", "/puzzles"), ("/game", "game.html", "/"),
+    ("/play", "play.html", "/play"), ("/skills", "skills.html", "/skills"),
+    ("/explorer", "explorer.html", "/explorer"), ("/endgame", "endgame.html", "/endgame"), ("/analyze", "analyze.html", "/analyze"),
+    ("/search", "search.html", "/search"), ("/insights", "insights.html", "/insights"), ("/clock", "clock.html", "/clock"),
+    ("/progress", "progress.html", "/progress"), ("/coaching-report", "coaching_report.html", "/coaching-report"),
+    ("/profiles", "profiles.html", None),
+]
 
 
-@app.get("/puzzles", response_class=HTMLResponse)
-def puzzles_page():
-    return (STATIC_DIR / "puzzles.html").read_text(encoding="utf-8")
+def _register_page(path: str, filename: str, active: str | None) -> None:
+    def page():
+        file = STATIC_DIR / filename
+        if not file.exists():
+            raise HTTPException(status_code=404, detail="Page not found")
+        return nav.apply_nav(file.read_text(encoding="utf-8"), active)
+
+    page.__name__ = "page_" + (path.strip("/").replace("-", "_") or "index")
+    app.add_api_route(path, page, methods=["GET"], response_class=HTMLResponse, include_in_schema=False)
 
 
-@app.get("/game", response_class=HTMLResponse)
-def game_page():
-    return (STATIC_DIR / "game.html").read_text(encoding="utf-8")
-
-
-@app.get("/explorer", response_class=HTMLResponse)
-def explorer_page():
-    return (STATIC_DIR / "explorer.html").read_text(encoding="utf-8")
-
-
-@app.get("/endgame", response_class=HTMLResponse)
-def endgame_page():
-    return (STATIC_DIR / "endgame.html").read_text(encoding="utf-8")
-
-
-@app.get("/analyze", response_class=HTMLResponse)
-def analyze_page():
-    return (STATIC_DIR / "analyze.html").read_text(encoding="utf-8")
-
-
-@app.get("/search", response_class=HTMLResponse)
-def search_page():
-    return (STATIC_DIR / "search.html").read_text(encoding="utf-8")
-
-
-@app.get("/insights", response_class=HTMLResponse)
-def insights_page():
-    return (STATIC_DIR / "insights.html").read_text(encoding="utf-8")
-
-
-@app.get("/coaching-report", response_class=HTMLResponse)
-def coaching_report_page():
-    return (STATIC_DIR / "coaching_report.html").read_text(encoding="utf-8")
+for _path, _file, _active in PAGES:
+    _register_page(_path, _file, _active)
 
 
 @app.get("/api/clock-analysis")
@@ -1402,11 +1411,6 @@ def api_clock_analysis(source: str | None = Query(default=None), profile_id: int
         "avg_thinking_time_by_tier": clock_analysis.avg_thinking_time_by_tier(source, profile_id),
         "pressure": clock_analysis.clock_pressure_games(source, profile_id),
     }
-
-
-@app.get("/clock", response_class=HTMLResponse)
-def clock_page():
-    return (STATIC_DIR / "clock.html").read_text(encoding="utf-8")
 
 
 # --- Multi-profile support (Advanced features, Section 9) -------------------
@@ -1473,11 +1477,6 @@ def api_compare_profiles(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.get("/profiles", response_class=HTMLResponse)
-def profiles_page():
-    return (STATIC_DIR / "profiles.html").read_text(encoding="utf-8")
-
-
 # --- Progress, goals, auto-reports (Section 10) -----------------------------
 
 @app.get("/api/progress")
@@ -1519,11 +1518,6 @@ def api_create_goal(body: GoalCreate, user: dict | None = Depends(auth.get_curre
 def api_delete_goal(goal_id: int, _access: None = Depends(auth.require_goal_access)):
     progress.delete_goal(goal_id)
     return {"status": "deleted"}
-
-
-@app.get("/progress", response_class=HTMLResponse)
-def progress_page():
-    return (STATIC_DIR / "progress.html").read_text(encoding="utf-8")
 
 
 # --- Web platform: Lichess OAuth, per-user SM-2 SRS, background analysis --

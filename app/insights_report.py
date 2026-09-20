@@ -23,6 +23,7 @@ than quietly extrapolating from a subset.
 from __future__ import annotations
 
 import io
+import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
@@ -96,6 +97,16 @@ def _record(games: list[dict]) -> dict:
             "loss_rate_pct": _pct(losses, len(games))}
 
 
+_TIME_CONTROL_TAG = re.compile(r'\[TimeControl\s+"(\d+)(?:\+(\d+))?"\]')
+
+
+def base_seconds(pgn: str | None) -> int | None:
+    """Starting clock in seconds from a PGN's TimeControl tag ("300+3" -> 300);
+    None for daily/unknown controls."""
+    match = _TIME_CONTROL_TAG.search(pgn or "")
+    return int(match.group(1)) if match else None
+
+
 def _load(flt: Filters) -> list[dict]:
     """The filtered games, each with its moves and per-game/per-move
     accuracy already worked out, so every section reads the same numbers."""
@@ -104,12 +115,12 @@ def _load(flt: Filters) -> list[dict]:
     try:
         games = [dict(r) for r in conn.execute(
             f"SELECT g.id, g.source, g.date, g.opponent, g.result, g.color, g.time_control, g.opening_name, g.eco, "
-            f"g.player_rating, g.opponent_rating, g.termination_method, g.game_shape, g.book_plies "
+            f"g.player_rating, g.opponent_rating, g.termination_method, g.game_shape, g.book_plies, g.pgn "
             f"FROM games g WHERE g.analyzed = 1 AND g.skip_reason IS NULL {where} ORDER BY g.date", params)]
         by_game: dict[int, list[dict]] = defaultdict(list)
         for r in conn.execute(
-            f"SELECT gm.game_id, gm.ply, gm.move_number, gm.color_moved, gm.move_san, gm.eval_cp, gm.eval_drop, "
-            f"gm.tier, gm.classification, gm.phase FROM game_moves gm JOIN games g ON g.id = gm.game_id "
+            f"SELECT gm.game_id, gm.ply, gm.move_number, gm.color_moved, gm.move_san, gm.eval_cp, gm.eval_before_cp, gm.eval_drop, "
+            f"gm.tier, gm.classification, gm.phase, gm.clock_seconds_remaining FROM game_moves gm JOIN games g ON g.id = gm.game_id "
             f"WHERE g.analyzed = 1 AND g.skip_reason IS NULL {where} ORDER BY gm.game_id, gm.ply", params):
             by_game[r["game_id"]].append(dict(r))
     finally:
@@ -121,6 +132,7 @@ def _load(flt: Filters) -> list[dict]:
         moves = by_game.get(g["id"], [])
         dt = _parse_dt(g["date"])
         opp = "black" if g["color"] == "white" else "white"
+        g["base_seconds"] = base_seconds(g.pop("pgn", None))
         g.update({
             "moves": moves, "dt": dt, "day": dt.date() if dt else None, "reviewed": g["id"] not in pending,
             "maccs": stats.move_accuracies(moves),

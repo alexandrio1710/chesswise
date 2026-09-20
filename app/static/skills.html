@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chesswise — Skills &amp; plan</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  .filters { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .filters .grow { flex: 1; }
+  .filters .hint { font-size: 12px; color: var(--text-secondary); align-self: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+  .note { font-size: 12px; color: var(--text-secondary); margin: 0 0 12px; line-height: 1.5; }
+  .empty { color: var(--text-secondary); font-size: 13px; padding: 6px 0; }
+  .card h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .card h2 .sub { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+
+  .plan { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+  .plan-card { padding: 16px; border-radius: 16px; background: var(--surface-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+  .plan-card .rank { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .plan-card h3 { font-size: 17px; margin: 0; }
+  .plan-card p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+  .habit { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--status-good) 12%, var(--surface-1)); font-size: 13px; line-height: 1.45; }
+  .habit b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--status-good); margin-bottom: 2px; }
+
+  .skill { padding: 14px 16px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+  .skill .lbl { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+  .skill .val { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .skill .unit { font-size: 12px; color: var(--text-secondary); }
+  .skill .det { font-size: 12px; line-height: 1.45; color: var(--text-secondary); margin-top: 4px; }
+  .skill .blurb { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .warn { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: color-mix(in srgb, var(--status-warning) 22%, transparent); color: var(--status-warning); margin-left: 6px; vertical-align: 2px; }
+
+  .row { display: grid; grid-template-columns: minmax(150px, 1.3fr) minmax(90px, 2fr) auto; gap: 12px; align-items: center; font-size: 13px; padding: 7px 8px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
+  .row:hover { background: var(--accent-soft); }
+  .row.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .bar { height: 10px; border-radius: 99px; background: var(--page-plane); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .row .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; min-width: 80px; }
+  .seg { display: flex; gap: 4px; margin-bottom: 12px; }
+  .examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-top: 14px; }
+  .ex { display: flex; flex-direction: column; gap: 8px; }
+  .ex .cap { font-size: 12px; color: var(--text-secondary); line-height: 1.45; }
+  .ex .cap strong { color: var(--text-primary); }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tbl th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); padding: 6px 8px; white-space: nowrap; }
+  table.tbl td { padding: 8px; border-top: 1px solid var(--border); }
+  table.tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tscroll { overflow-x: auto; }
+  .neg { color: var(--status-critical); font-weight: 700; } .pos { color: var(--status-good); font-weight: 700; }
+  .notice { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; border-color: var(--accent); }
+  .notice .txt { flex: 1; min-width: 240px; font-size: 13px; line-height: 1.5; }
+  .stack { display: flex; flex-direction: column; gap: 20px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header id="site-header"></header>
+
+  <section class="card flat filters" id="filters">
+    <label class="field">Profile<select id="f-profile"><option value="">All profiles</option></select></label>
+    <label class="field">Site<select id="f-source"><option value="all">All</option><option value="lichess">Lichess</option><option value="chesscom">Chess.com</option></select></label>
+    <label class="field">Time class<select id="f-tc"><option value="">All</option><option value="bullet">Bullet</option><option value="blitz">Blitz</option><option value="rapid">Rapid</option><option value="classical">Classical</option><option value="daily">Daily</option></select></label>
+    <label class="field">Color<select id="f-color"><option value="">Both</option><option value="white">White</option><option value="black">Black</option></select></label>
+    <label class="field">Games from<select id="f-range"><option value="all">All time</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="180d">Last 6 months</option><option value="1y">Last year</option></select></label>
+    <span class="grow"></span>
+    <span class="hint" id="f-summary"></span>
+  </section>
+
+  <section class="card flat notice hidden" id="coverage"></section>
+  <div id="loading" class="card"><p class="empty"><span class="spinner"></span>Working out where you lose points…</p></div>
+
+  <div id="content" class="stack hidden">
+    <section class="card">
+      <h2>Your plan <span class="sub" id="plan-sub"></span></h2>
+      <p class="note">Ranked by how many points each cause cost you: the mistake that decided each lost or drawn game (a loss is a point, a draw half). Fix the top one first.</p>
+      <div class="plan" id="plan"></div>
+    </section>
+
+    <section class="card">
+      <h2>Skills <span class="sub">six measures, each with its sample size</span></h2>
+      <p class="note">There is no overall score and no comparison to "players at your rating" — that data doesn't exist here, and an invented benchmark would mislead. Compare these against your own past figures. Under 20 games a figure is flagged as noisy.</p>
+      <div class="grid" id="skills"></div>
+    </section>
+
+    <section class="card">
+      <h2>Why you make mistakes <span class="sub" id="anatomy-sub"></span></h2>
+      <p class="note">Each of your mistakes, misses and blunders gets one primary cause, worked out from the engine's best move and simple board facts (not from what you were thinking). Click a cause to see examples.</p>
+      <div class="seg" id="anatomy-seg"><button class="btn small primary" data-view="deciding">Decided your lost/drawn games</button><button class="btn small" data-view="all">All mistakes</button></div>
+      <div id="anatomy"></div>
+      <div id="anatomy-detail" class="hidden"></div>
+    </section>
+
+    <section class="card" id="convert-card">
+      <h2 id="convert">Winning positions you let slip <span class="sub">play them out again</span></h2>
+      <p class="note">Positions from games where you were clearly winning and it went wrong. Play them against Stockfish and practise converting.</p>
+      <div class="examples" id="convert-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Opening leaks <span class="sub">openings you've played 5+ times, worst first</span></h2>
+      <p class="note">"After move 10" is the engine's average evaluation of the position from your side at that point. A consistently negative number means the line itself is costing you, before the middlegame starts.</p>
+      <div class="tscroll" id="openings"></div>
+    </section>
+    <p class="note" id="footnote"></p>
+  </div>
+</div>
+
+<script type="module">
+  import { Board } from '/static/js/board.js';
+  import { escapeHtml } from '/static/js/ui.js';
+  import { mountChrome } from '/static/js/chrome.js';
+
+  mountChrome({ title: 'Skills & plan', active: '/skills' });
+  const $ = (id) => document.getElementById(id);
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const safeGet = (k, fb) => { try { return localStorage.getItem(k) ?? fb; } catch (e) { return fb; } };
+  const safeSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
+
+  // Filters share the Insights page's saved values so the two pages stay in step.
+  const F = Object.assign({ profile: safeGet('profileId', ''), source: 'all', tc: '', color: '', range: 'all' },
+    (() => { try { return JSON.parse(safeGet('insightsFilters', '{}')); } catch (e) { return {}; } })());
+  if (F.range === 'custom' || F.range === '7d') F.range = 'all';
+  let R = null;
+  let view = 'deciding';
+  let token = 0;
+
+  function query(extra = {}) {
+    const p = new URLSearchParams();
+    if (F.profile) p.set('profile_id', F.profile);
+    if (F.source && F.source !== 'all') p.set('source', F.source);
+    if (F.tc) p.set('time_class', F.tc);
+    if (F.color) p.set('color', F.color);
+    if (F.range && F.range !== 'all') p.set('range', F.range);
+    for (const [k, v] of Object.entries(extra)) p.set(k, v);
+    return p.toString();
+  }
+  async function getJson(url) {
+    try { const res = await fetch(url); return { ok: res.ok, status: res.status, data: await res.json().catch(() => null) }; }
+    catch (e) { return { ok: false, status: 0, data: null }; }
+  }
+
+  async function loadProfiles() {
+    const r = await getJson('/api/profiles');
+    if (!r.ok) return;
+    $('f-profile').innerHTML = '<option value="">All profiles</option>' + r.data.map((p) => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join('');
+    if (F.profile && !r.data.some((p) => String(p.id) === String(F.profile))) F.profile = '';
+  }
+  function sync() { $('f-profile').value = F.profile; $('f-source').value = F.source; $('f-tc').value = F.tc; $('f-color').value = F.color; $('f-range').value = F.range; }
+  function onFilter() {
+    F.profile = $('f-profile').value; F.source = $('f-source').value; F.tc = $('f-tc').value; F.color = $('f-color').value; F.range = $('f-range').value;
+    if (F.profile) safeSet('profileId', F.profile);
+    const saved = (() => { try { return JSON.parse(safeGet('insightsFilters', '{}')); } catch (e) { return {}; } })();
+    safeSet('insightsFilters', JSON.stringify({ ...saved, source: F.source, tc: F.tc, color: F.color, range: F.range }));
+    load();
+  }
+  ['f-profile', 'f-source', 'f-tc', 'f-color', 'f-range'].forEach((id) => $(id).addEventListener('change', onFilter));
+
+  async function load() {
+    const mine = ++token;
+    $('loading').classList.remove('hidden');
+    $('content').classList.add('hidden');
+    const r = await getJson(`/api/skills?${query()}`);
+    if (mine !== token) return;
+    if (!r.ok) {
+      $('loading').innerHTML = `<p class="empty">${escapeHtml((r.data && r.data.detail) || "Couldn't load this — is the server running?")}</p>`;
+      return;
+    }
+    R = r.data;
+    $('loading').classList.add('hidden');
+    $('content').classList.remove('hidden');
+    const g = R.coverage.games;
+    $('f-summary').textContent = g ? `${g} game${g === 1 ? '' : 's'}` : 'No games match';
+    renderCoverage();
+    renderPlan();
+    renderSkills();
+    renderAnatomy();
+    renderConvert();
+    renderOpenings();
+    $('footnote').textContent = `Thresholds: "clearly winning/losing" = ${R.notes.thresholds.advantage_cp / 100} pawns or more held for two moves; "time trouble" = ${R.notes.thresholds.time_trouble}. Causes are heuristics, not a diagnosis of what you were thinking.`;
+  }
+
+  function renderCoverage() {
+    const c = R.coverage, el = $('coverage');
+    if (!c.pending) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.innerHTML = `<div class="txt"><strong>${c.reviewed} of ${c.games} games have review data.</strong> The mistake causes, tactics and plan are built from it, so they only count reviewed games. Build the rest from the Insights page.</div><a class="btn primary" href="/insights">Open Insights</a>`;
+  }
+
+  const warn = (low, n) => (low ? `<span class="warn" title="Fewer than ${R.notes.low_sample_games} games — treat as noisy">small sample (${n})</span>` : '');
+
+  function renderPlan() {
+    if (!R.plan.length) {
+      $('plan').innerHTML = `<p class="empty">${R.coverage.reviewed ? 'No lost or drawn game has a clear deciding mistake yet.' : 'Build review data (Insights page) to get a plan.'}</p>`;
+      $('plan-sub').textContent = '';
+      return;
+    }
+    $('plan-sub').textContent = `from ${R.coverage.reviewed} reviewed games`;
+    $('plan').innerHTML = R.plan.map((p, i) => `<div class="plan-card"><span class="rank">Priority ${i + 1}</span><h3>${escapeHtml(p.title)}${warn(p.low_sample, R.coverage.reviewed)}</h3>
+      <p>${escapeHtml(p.why)}</p>
+      <div class="habit"><b>Habit to build</b>${escapeHtml(p.habit)}</div>
+      <div class="btn-row">${p.actions.map((a) => `<a class="btn small ${a.href.startsWith('#') ? '' : 'primary'}" href="${a.href}">${escapeHtml(a.label)}</a>`).join('')}</div></div>`).join('');
+  }
+
+  function skillColor(s) {
+    if (s.value == null) return 'var(--text-muted)';
+    if (s.key === 'time') return s.value <= 5 ? 'var(--status-good)' : s.value <= 15 ? 'var(--status-warning)' : 'var(--status-critical)';
+    return s.value >= 85 ? 'var(--status-good)' : s.value >= 60 ? 'var(--status-warning)' : 'var(--status-critical)';
+  }
+  function renderSkills() {
+    $('skills').innerHTML = R.skills.map((s) => `<div class="skill"><span class="lbl">${escapeHtml(s.label)}${warn(s.low_sample, s.n)}</span>
+      <span class="val" style="color:${skillColor(s)}">${s.value == null ? '—' : s.value + '%'}</span><span class="unit">${escapeHtml(s.unit)} · ${s.n} game${s.n === 1 ? '' : 's'}</span>
+      <span class="det">${escapeHtml(s.detail)}</span><span class="blurb">${escapeHtml(s.blurb)}</span></div>`).join('');
+  }
+
+  function renderAnatomy() {
+    const a = R.anatomy;
+    const rows = view === 'deciding'
+      ? a.decisive.causes.map((c) => ({ ...c, pct: a.decisive.games ? c.games / a.decisive.games * 100 : 0, text: `${c.games} games · ${c.points_lost} pts` }))
+      : a.causes.map((c) => ({ ...c, text: `${c.count} · ${c.pct}%` }));
+    $('anatomy-sub').textContent = view === 'deciding'
+      ? `${a.decisive.games} of ${a.decisive.lost_or_drawn} lost/drawn games had a clear deciding mistake`
+      : `${a.total} mistakes, misses and blunders in total`;
+    const max = Math.max(1, ...rows.map((r) => r.pct || 0));
+    $('anatomy').innerHTML = rows.length ? rows.map((r) => `<div class="row" data-cause="${r.key}"><span title="${escapeHtml(r.blurb)}">${escapeHtml(r.label)}</span>
+      <div class="bar"><span style="width:${(r.pct || 0) / max * 100}%"></span></div><span class="val">${r.text}</span></div>`).join('')
+      : '<p class="empty">No data yet — needs reviewed games.</p>';
+    $('anatomy').querySelectorAll('.row').forEach((el) => el.addEventListener('click', () => showCause(el.dataset.cause)));
+    document.querySelectorAll('#anatomy-seg button').forEach((b) => { b.classList.toggle('primary', b.dataset.view === view); });
+  }
+  document.querySelectorAll('#anatomy-seg button').forEach((b) => b.addEventListener('click', () => { view = b.dataset.view; $('anatomy-detail').classList.add('hidden'); if (R) renderAnatomy(); }));
+
+  function miniBoard(host, fen, orientation, arrows) {
+    const b = new Board(host, { fen, orientation, interactive: false, showCoords: false, userShapes: false, animate: false });
+    b.setArrows(arrows || []);
+    return b;
+  }
+
+  async function showCause(key) {
+    document.querySelectorAll('#anatomy .row').forEach((r) => r.classList.toggle('sel', r.dataset.cause === key));
+    const cause = [...R.anatomy.causes, ...R.anatomy.decisive.causes].find((c) => c.key === key);
+    const box = $('anatomy-detail');
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="habit" style="margin-top:12px"><b>${escapeHtml(cause.label)}</b>${escapeHtml(cause.blurb)} <br><strong>Habit:</strong> ${escapeHtml(cause.habit)}</div>
+      ${cause.theme ? `<div class="btn-row" style="margin-top:10px"><a class="btn small primary" href="/puzzles?theme=${cause.theme}">Train ${cause.theme.replace('_', ' ')} puzzles</a></div>` : ''}
+      <div class="examples" id="cause-examples"><p class="empty"><span class="spinner"></span>Loading positions…</p></div>`;
+    const r = await getJson(`/api/skills/examples?${query({ cause: key, limit: 6 })}`);
+    const list = (r.ok && r.data.examples) || [];
+    if (!list.length) { $('cause-examples').innerHTML = '<p class="empty">No example positions available.</p>'; return; }
+    $('cause-examples').innerHTML = list.map((e, i) => `<div class="ex"><div id="cx-${i}"></div><div class="cap"><strong>${cap(e.turn)} to move</strong> · move ${Math.ceil(e.ply / 2)} vs ${escapeHtml(e.opponent || '?')} · cost ${e.drop} cp<br>
+      ${e.best_san ? `Best: <strong>${escapeHtml(e.best_san)}</strong> · ` : ''}played <strong>${escapeHtml(e.played_san)}</strong><br><a href="/game?id=${e.game_id}&ply=${e.ply}">Open in review →</a></div></div>`).join('');
+    list.forEach((e, i) => {
+      const arrows = [];
+      if (e.best_uci) arrows.push({ from: e.best_uci.slice(0, 2), to: e.best_uci.slice(2, 4), color: '#81b64c', width: 0.17 });
+      if (e.played_uci !== e.best_uci) arrows.push({ from: e.played_uci.slice(0, 2), to: e.played_uci.slice(2, 4), color: '#ca3431', width: 0.12, opacity: 0.65, dashed: true });
+      miniBoard($(`cx-${i}`), e.fen, e.turn, arrows);
+    });
+  }
+
+  function renderConvert() {
+    const card = $('convert-card');
+    if (!R.convert.length) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    $('convert-list').innerHTML = R.convert.map((c, i) => `<div class="ex"><div id="cv-${i}"></div><div class="cap"><strong>${cap(c.color)} to move</strong> — you were ${(c.eval_before / 100).toFixed(1)} up<br>
+      vs ${escapeHtml(c.opponent || '?')} · you ${c.result === 'loss' ? 'lost' : 'drew'} · cost ${Math.round(c.eval_drop)} cp<br>
+      <a class="btn small primary" href="/play?fen=${encodeURIComponent(c.fen)}&color=${c.color}&game=${c.game_id}&ply=${c.ply}">Play it out</a> <a href="/game?id=${c.game_id}&ply=${c.ply}">Review →</a></div></div>`).join('');
+    R.convert.forEach((c, i) => miniBoard($(`cv-${i}`), c.fen, c.color, []));
+  }
+
+  function renderOpenings() {
+    const rows = R.openings;
+    $('openings').innerHTML = rows.length ? `<table class="tbl"><thead><tr><th>Opening</th><th>As</th><th class="num">Games</th><th class="num">After move 10</th><th class="num">Win rate</th><th class="num">Accuracy</th></tr></thead><tbody>${
+      rows.map((r) => `<tr><td><strong>${escapeHtml(r.opening)}</strong></td><td>${cap(r.color)}</td><td class="num">${r.games}</td>
+        <td class="num ${r.avg_eval_move10 < -30 ? 'neg' : r.avg_eval_move10 > 30 ? 'pos' : ''}">${r.avg_eval_move10 > 0 ? '+' : ''}${(r.avg_eval_move10 / 100).toFixed(2)}</td>
+        <td class="num">${r.win_rate_pct == null ? '—' : Math.round(r.win_rate_pct) + '%'}</td><td class="num">${r.accuracy == null ? '—' : r.accuracy + '%'}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="empty">No opening has 5+ games for these filters.</p>';
+  }
+
+  (async () => { sync(); await loadProfiles(); sync(); load(); })();
+</script>
+</body>
+</html>

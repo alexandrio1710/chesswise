@@ -1,18 +1,22 @@
 // Page chrome shared by the pages built on the interactive board: header
 // with the site nav, light/dark toggle, and a board-color picker. Inject into
-// <header id="site-header"> with mountChrome({ title, active }).
+// <header id="site-header"> with mountChrome({ title, active }), where `active`
+// is the path of the page ("/insights").
 
+// Keep in step with app/nav.py (tests/test_nav.py fails if the two drift apart).
 const NAV = [
-  { href: '/', label: 'Dashboard', key: 'dashboard' },
-  { href: '/puzzles', label: 'Puzzles', key: 'puzzles' },
-  { label: 'Train', key: 'train', items: [
+  { href: '/', label: 'Dashboard' },
+  { href: '/puzzles', label: 'Puzzles' },
+  { href: '/play', label: 'Play' },
+  { href: '/skills', label: 'Skills' },
+  { label: 'Train', items: [
     { href: '/explorer', label: 'Explorer' }, { href: '/endgame', label: 'Endgame' }, { href: '/analyze', label: 'Analyze' },
   ] },
-  { label: 'Insights', key: 'insights', items: [
-    { href: '/insights', label: 'Insights', key: 'insights' }, { href: '/clock', label: 'Clock' },
+  { label: 'Insights', items: [
+    { href: '/insights', label: 'Insights' }, { href: '/clock', label: 'Clock' },
     { href: '/progress', label: 'Progress' }, { href: '/coaching-report', label: 'Coaching Report' },
   ] },
-  { href: '/search', label: 'Search', key: 'search' },
+  { href: '/search', label: 'Search' },
 ];
 
 export const BOARD_THEMES = {
@@ -50,11 +54,11 @@ export function mountChrome({ title, active }) {
   if (!header) return;
   header.className = 'top';
   const nav = NAV.map((n) => {
-    if (!n.items) return `<a href="${n.href}" class="${n.key === active ? 'active' : ''}">${n.label}</a>`;
-    const on = n.key === active;
+    if (!n.items) return `<a href="${n.href}" class="${n.href === active ? 'active' : ''}">${n.label}</a>`;
+    const on = n.items.some((i) => i.href === active);
     return `<div class="nav-dropdown">
       <button type="button" class="nav-dropdown-toggle ${on ? 'active-section' : ''}" aria-haspopup="true" aria-expanded="false">${n.label} ▾</button>
-      <div class="nav-dropdown-menu">${n.items.map((i) => `<a href="${i.href}" class="${i.key === active ? 'active' : ''}">${i.label}</a>`).join('')}</div>
+      <div class="nav-dropdown-menu">${n.items.map((i) => `<a href="${i.href}" class="${i.href === active ? 'active' : ''}">${i.label}</a>`).join('')}</div>
     </div>`;
   }).join('');
   header.innerHTML = `<h1>${title}</h1>

@@ -132,9 +132,25 @@ class TestSlowPagesStayFast:
         assert {"idx_mistakes_game_ply", "idx_puzzles_mistake", "idx_notes_game"} <= names
 
     def test_endgame_trainer_does_not_sleep_for_ineligible_positions(self, monkeypatch):
+        import chess
+
+        import puzzles
         import tablebase
-        slept = []
+        from db import get_connection
+        conn = get_connection()
+        try:
+            gid = conn.execute("INSERT INTO games (source, source_game_id, date, result, color, analyzed, pgn) "
+                               "VALUES ('manual', 'tb-sleep-1', '2026-01-01', 'loss', 'white', 1, '1. e4 e5 *')").lastrowid
+            for ply in (2, 3, 4):  # several candidate positions, as in a real history
+                conn.execute("INSERT INTO mistakes (game_id, move_number, move_san, phase, severity, eval_drop, ply, color_moved) "
+                             "VALUES (?, ?, 'x', 'endgame', 'blunder', 99999, ?, 'white')", (gid, ply, ply))
+            conn.commit()
+        finally:
+            conn.close()
+        slept, looked_up = [], []
         monkeypatch.setattr(tablebase.time, "sleep", lambda s: slept.append(s))
-        monkeypatch.setattr(tablebase, "is_tablebase_eligible", lambda fen: False)
-        assert tablebase.find_endgame_trainer_positions(limit=3, scan_limit=20) == []
-        assert slept == []
+        monkeypatch.setattr(puzzles, "board_before_ply", lambda pgn, ply: chess.Board())  # 32 pieces: never tablebase-eligible
+        monkeypatch.setattr(puzzles, "get_pgn", lambda game_id: "1. e4 e5 *")
+        monkeypatch.setattr(tablebase, "get_tablebase_result", lambda fen: looked_up.append(fen))
+        assert tablebase.find_endgame_trainer_positions(limit=3, scan_limit=50) == []
+        assert slept == [] and looked_up == []  # no waiting and no network for positions with too many pieces
