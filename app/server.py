@@ -446,17 +446,20 @@ def api_search_games(
     has_blunder: bool | None = Query(default=None),
     sort_by: str = Query(default="date"),
     sort_dir: str = Query(default="desc"),
-    limit: int = 200,
+    limit: int = Query(default=200, ge=1, le=5000),
 ):
-    games = stats.search_games(
+    # The stat tiles and the total describe every game that matches; `limit` only pages the table (it used
+    # to cap both, so a 533-game history read as "200 games").
+    every = stats.search_games(
         opponent=opponent, date_from=date_from, date_to=date_to, opening=opening,
         result=result, time_control=time_control, source=_normalize_source(source),
         profile_id=profile_id, color=color, has_blunder=has_blunder,
-        sort_by=sort_by, sort_dir=sort_dir, limit=limit,
+        sort_by=sort_by, sort_dir=sort_dir, limit=1_000_000,
     )
     return {
-        "games": games,
-        "stats": stats.compute_stats_for_game_ids([g["id"] for g in games]),
+        "games": every[:limit],
+        "total": len(every),
+        "stats": stats.compute_stats_for_game_ids([g["id"] for g in every]),
     }
 
 

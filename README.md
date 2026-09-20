@@ -14,6 +14,7 @@ project started with: where you're actually losing value (which phase,
 which openings, how time pressure affects you) and month-over-month trends.
 
 ![Dashboard overview](docs/screenshots/dashboard.png)
+![Skills & plan](docs/screenshots/skills.png)
 ![Game Review](docs/screenshots/game_review.png)
 ![Insights](docs/screenshots/insights.png)
 ![Tactics found and missed, with example positions](docs/screenshots/insights_tactics.png)
@@ -41,12 +42,12 @@ which openings, how time pressure affects you) and month-over-month trends.
   -0.08 to 0.09 depending on time control — statistical noise. Removed
   the feature outright rather than keep calibrating something the data
   said wasn't there; see [CHANGELOG.md](CHANGELOG.md) v40-v42.
-- **500+ automated tests** — hand-verified unit tests for chess-specific
+- **580 automated tests** — hand-verified unit tests for chess-specific
   edge cases (multi-piece tactical exchanges, mate-distance handling,
   opposite-side-castling detection) plus a real-engine integration test,
   running on every push via CI.
 - A numbered schema-migration system with automatic pre-migration
-  backups — 29 migrations shipped over the project's life without losing
+  backups — 30 migrations shipped over the project's life without losing
   data.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full, detailed history of *why*
@@ -77,6 +78,15 @@ each design decision was made, not just what changed.
   per-piece accuracy, castling), Opponents (results by country, frequent
   opponents), Calendar (games per day, weekday, hour — in your own timezone)
   and the original rating / time-control cards.
+- **Skills & plan**: six skill measures (each with its sample size, no made-up
+  overall score), a "why you make mistakes" breakdown that gives every mistake a
+  cause, opening leaks, winning positions you let slip, and a plan ranked by the
+  points each cause cost you, with the habit to build and where to train it
+- **Play**: play any position out against Stockfish at a chosen strength, from
+  Game Review ("Play from here") or the Skills page; an optional Coach mode flags
+  a move that costs you before the engine replies
+- **Daily practice**: a puzzle goal and streak on the dashboard, which also
+  leads with what to work on and your recent games
 - **Interactive puzzles**: fully playable positions that say whose move it
   is, legal-move dots, drag or click to move, promotion picker, themes (fork,
   pin, skewer, mate in N, ...), hints, streaks, a Rush mode with strikes,
@@ -135,6 +145,7 @@ why. Everything below runs on your machine, on your own games, for free.
 | Opening mastery | Yes | Average book moves you played before leaving theory, per opening |
 | Results by opponent country | Yes | Yes, by looking up each opponent's public profile (opt-in, cached); only opponents who show a country can be placed |
 | Interactive puzzles with themes, hints, Rush | Yes, millions of rated puzzles | Puzzles from *your own* mistakes plus Lichess opening puzzles; themes, hints, streaks and a Rush mode with strikes. No puzzle rating or global puzzle database |
+| Skills report (opening / tactics / endgame / conversion / resourcefulness / time) | Aimchess | Yes, from your own games with sample sizes — but no comparison to other players at your rating, because there is no population data here |
 | Peer comparison ("players at your level") | Yes | No — there is no population data to compare against |
 | Lessons, bots, live play, video | Yes | Not in scope |
 

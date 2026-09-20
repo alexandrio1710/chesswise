@@ -1,5 +1,81 @@
 # Changelog
 
+## v46 — A plan, a place to practise it, and a faster app
+
+Went through every page for defects, then looked at what coaches and other
+improvement tools (Aimchess, Chessigma, Chessable/Listudy, Lichess, chess.com)
+say actually moves a club player's rating, and built what this app was missing.
+
+**What the research pointed at.** The consistent advice: sort your mistakes by
+*cause* rather than only counting them (hanging pieces, missed or walked-into
+tactics, time trouble, opening and endgame errors); fix the biggest cause first
+with a specific habit (check your opponent's checks, captures and threats before
+you commit); replay winning positions you failed to convert; and practise a
+little most days. Aimchess's six-skill scorecard is the well-known version of
+this. Its critics' point — an overall score is noise, small samples are
+"entertainment, not evidence", and tools describe symptoms, not causes — shaped
+the design below.
+
+**Skills & plan (`/skills`).** `skills.py` computes six measures from data the
+app already had: opening (accuracy once theory ends), tactics (found vs. missed),
+endgames (accuracy and converting a clear edge), converting winning positions,
+defending losing ones, and time management (share of moves in time trouble). Each
+shows its sample size and is flagged under 20 games. There is deliberately no
+overall score and no "vs. players at your rating": that population data doesn't
+exist here and an invented benchmark would mislead.
+*Mistake anatomy:* each of your mistakes, misses and blunders gets one primary
+cause (piece left hanging, walked into a tactic, missed mate/tactic/free piece,
+time trouble, opening, endgame, or middlegame judgment) from the engine's best
+moves and board facts — heuristics, stated as such. The *plan* ranks the causes
+of the mistakes that decided your lost and drawn games by the points they cost,
+each with the habit to build and links to the right puzzles/trainer. On your own
+533 games the top items were walking into tactics (53 lost/drawn games), leaving
+pieces hanging (51) and middlegame judgment (51). Also: opening leaks (average
+evaluation after move 10, per opening) and positions where a winning game slipped.
+Game Review now names the cause of each of your mistakes in the coach card.
+
+**Play (`/play`).** Play any position out against Stockfish at a chosen strength
+(Stockfish's own UCI_Elo limiter for ~1350-2200, Skill Level for the gentler
+ones). "Play from here" in Game Review and "Play it out" on the Skills page start
+from a real position. Coach mode flags a move that costs 1.5+ pawns *before* the
+engine replies and offers a take-back (real-time correction is one of the features
+that one improvement-tools guide singles out as most valuable for club players). Games can be saved and reviewed like any other.
+
+**Habit loop.** The dashboard leads with the top plan item and a Sync & analyze
+button, shows a daily puzzle goal with a practice streak (`practice.py`; a streak
+isn't broken until you miss a whole local day), and lists recent games with
+accuracy instead of "worst games by eval swing", whose rows were all mate-score
+artifacts (a won game showing a 2000 cp "blunder").
+
+**Faster.** `/api/progress` took 7.5 s and now takes ~0.1 s: `mistakes` had no
+index (every per-game move load scanned it — migration 30 adds it, plus
+`puzzles.mistake_id` and `notes.game_id`), and accuracy was averaged with two
+queries per game (now one). The Endgame trainer slept 0.3 s per candidate position
+even when no network call was made (12 s for a page load); it now skips positions
+too big for a tablebase.
+
+**Correctness fixes found on the way.**
+- Search silently capped results at 200 and computed its stat tiles from those 200
+  ("200 games" for a 533-game history). It now reports the total, the tiles cover
+  every match, and the table pages ("Show 200 more").
+- The Coaching Report made you choose a profile every visit; it now picks the
+  remembered one, or the profile with the most games.
+- The Clock page listed all 71 clock/result mismatches; it now summarizes them and
+  shows the first ten.
+
+**Code.** The nav lived in a dozen hand-edited copies; `nav.py` is now the one
+definition for the older pages (the server rewrites their nav block) and
+`tests/test_nav.py` fails if `chrome.js` drifts from it. Pages are registered in
+one `PAGES` list. The Insights/Skills/Opponents endpoints moved out of the
+1,700-line `server.py` into `routes_insights.py`, unused imports removed. The puzzle
+page accepts `?theme=`, `?phase=` and `?severity=` presets.
+
+**Honest limits.** Mistake causes and the "clearly winning" thresholds are
+heuristics (documented in `skills.py`); play strength is Stockfish's limiter, not a
+human-calibrated rating; and I did not build an opening-repertoire spaced-repetition
+trainer (Chessable/Listudy territory) — the opening leaks and opening puzzles cover
+the diagnosis, not memorization.
+
 ## v45 — Refreshes are separate, and analysis is fast
 
 A refresh used to fetch, analyze, generate puzzles and (briefly) review every

@@ -265,6 +265,12 @@
       const profiles = await fetch("/api/profiles").then(r => r.json());
       select.innerHTML = `<option value="">Select a profile…</option>` +
         profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.game_count})</option>`).join("");
+      if (!(currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) && profiles.length) {
+        // Nothing remembered: with one profile the choice is obvious; otherwise start on the one with the most games.
+        const best = profiles.slice().sort((a, b) => b.game_count - a.game_count)[0];
+        currentProfileId = String(best.id);
+        localStorage.setItem("profileId", currentProfileId);
+      }
       if (currentProfileId && profiles.some(p => String(p.id) === currentProfileId)) {
         select.value = currentProfileId;
         loadHistory();

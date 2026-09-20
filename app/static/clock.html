@@ -167,6 +167,8 @@
     vertical-align: -3px; margin-right: 8px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .flag-more { margin-top: 10px; font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+  .flag-more:hover { background: var(--accent-soft); }
 </style>
 </head>
 <body>
@@ -300,7 +302,10 @@
       list.innerHTML = `<p class="empty-note">No clock/result mismatches found — your time usage and results line up as you'd expect.</p>`;
       return;
     }
-    list.innerHTML = pressure.flagged.map(f => {
+    const counts = {};
+    pressure.flagged.forEach(f => { counts[f.pattern] = (counts[f.pattern] || 0) + 1; });
+    const summary = Object.entries(counts).map(([pattern, n]) => `<span class="flag-pattern ${pattern}">${n} × ${PATTERN_LABELS[pattern]}</span>`).join(" ");
+    const item = (f) => {
       const date = new Date(f.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
       const diffAbs = Math.abs(f.clock_diff_seconds);
       return `
@@ -311,7 +316,17 @@
           <span class="flag-pattern ${f.pattern}">${PATTERN_LABELS[f.pattern]}</span>
         </a>
       `;
-    }).join("");
+    };
+    const SHOWN = 10;
+    const draw = (all) => {
+      const rows = all ? pressure.flagged : pressure.flagged.slice(0, SHOWN);
+      list.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${summary}</div>` + rows.map(item).join("") +
+        (pressure.flagged.length > SHOWN ? `<button class="flag-more" id="flag-more">${all ? "Show fewer" : `Show all ${pressure.flagged.length}`}</button>` : "") +
+        `<p class="empty-note" style="margin-top:12px">Time management as a whole (share of moves in time trouble, accuracy under pressure) is on the <a href="/skills">Skills page</a>.</p>`;
+      const more = document.getElementById("flag-more");
+      if (more) more.addEventListener("click", () => draw(!all));
+    };
+    draw(false);
   }
 
   function escapeHtml(s) {

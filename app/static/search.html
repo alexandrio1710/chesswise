@@ -302,10 +302,16 @@
   });
 
   let searchRequestId = 0;
+  const PAGE_SIZE = 200;
+  let pageLimit = PAGE_SIZE;
+  let lastSearchKey = null;
 
   async function runSearch() {
     const filters = currentFilters();
-    const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir });
+    // A new search (different filters or sort) starts back at the first page; "Show more" keeps its size.
+    const searchKey = JSON.stringify([filters, sortBy, sortDir, currentProfileId]);
+    if (searchKey !== lastSearchKey) { pageLimit = PAGE_SIZE; lastSearchKey = searchKey; }
+    const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir, limit: String(pageLimit) });
     for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
 
     // Text filters debounce, but selects/dates fire runSearch() immediately
@@ -324,7 +330,12 @@
 
       renderStats(data.stats);
       renderResults(data.games);
-      document.getElementById("result-count").textContent = `${data.games.length} game${data.games.length === 1 ? "" : "s"}`;
+      const total = data.total ?? data.games.length;
+      document.getElementById("result-count").innerHTML = data.games.length < total
+        ? `Showing ${data.games.length} of ${total} games — the stats above cover all ${total}. <button class="btn small" id="show-more">Show ${Math.min(PAGE_SIZE, total - data.games.length)} more</button>`
+        : `${total} game${total === 1 ? "" : "s"}`;
+      const more = document.getElementById("show-more");
+      if (more) more.addEventListener("click", () => { pageLimit += PAGE_SIZE; runSearch(); });
     } catch (err) {
       if (thisRequestId !== searchRequestId) return;
       document.getElementById("results-body").innerHTML =

@@ -140,3 +140,14 @@ class TestRecentGames:
         assert rows[0]["blunders"] == 1 and rows[1]["blunders"] == 0
         assert rows[0]["accuracy"] is not None and 0 <= rows[0]["accuracy"] <= 100
         assert client.get("/api/recent-games", params={"profile_id": pid, "limit": 1}).json()[0]["game_id"] == newer
+
+
+class TestSearchPaging:
+    def test_stats_and_total_cover_every_match_while_rows_are_paged(self):
+        pid = _profile()
+        for i in range(5):
+            _game(pid, date=f"2026-04-0{i + 1}T10:00:00+00:00")
+        body = client.get("/api/search", params={"profile_id": pid, "limit": 2}).json()
+        assert len(body["games"]) == 2 and body["total"] == 5
+        assert body["stats"]["total_games"] == 5  # not 2: the tiles describe the whole result set
+        assert client.get("/api/search", params={"profile_id": pid, "limit": 0}).status_code == 422

@@ -59,6 +59,7 @@
         <button class="btn" id="undo" title="Take back your last move">↶ Take back</button>
         <button class="btn" id="hint" title="Show the engine's suggestion">💡 Hint</button>
         <button class="btn" id="eval-toggle" title="Show the evaluation bar">± Eval</button>
+        <button class="btn" id="coach-toggle" title="Coach mode: flags a move that costs you material or the game before the engine replies">🎓 Coach</button>
         <button class="btn" id="flip">⇅ Flip</button>
         <button class="btn" id="resign">Resign</button>
       </div>
@@ -94,7 +95,7 @@
   }
 
   const params = new URLSearchParams(location.search);
-  const G = { board: null, bar: null, side: 'white', startFen: START, level: '1600', history: [], thinking: false, over: null, token: 0, showEval: false, levels: {} };
+  const G = { board: null, bar: null, side: 'white', startFen: START, level: '1600', history: [], thinking: false, over: null, token: 0, showEval: false, coach: false, levels: {} };
   const fromGame = params.get('game') ? { id: params.get('game'), ply: params.get('ply') } : null;
 
   // --- setup ---------------------------------------------------------------------------
@@ -166,8 +167,47 @@
     G.history.push({ san: mv.san, uci: mv.uci, fenBefore: mv.fenBefore, fenAfter: mv.fenAfter, by: 'you' });
     render();
     if (checkOver()) return;
+    if (G.coach) coachThenReply(mv); else engineMove();
+  }
+
+  // Coach mode: compare the position before your move with the best reply after it; if the move cost a lot,
+  // stop and say so — before the engine answers — and let you take it back. (Real-time correction, not a post-mortem.)
+  const COACH_COST_CP = 150;
+  const cpOf = (l, turn) => {
+    if (!l) return null;
+    const v = l.mate_in != null ? (l.mate_in > 0 ? 1000 : -1000) : Math.max(-1000, Math.min(1000, l.eval_cp || 0));
+    return v * turn;
+  };
+  async function coachThenReply(mv) {
+    const mine = ++G.token;
+    G.thinking = true;
+    G.board.setInteractive(false);
+    setStatus(`<div class="big"><span class="spinner"></span>Checking your move…</div>`);
+    const [before, after] = await Promise.all([api('/api/analyze/fen', { fen: mv.fenBefore, depth: 10 }), api('/api/analyze/fen', { fen: mv.fenAfter, depth: 10 })]);
+    if (mine !== G.token) return;
+    const b = before.ok && before.data.top_lines && before.data.top_lines[0];
+    const a = after.ok && after.data.top_lines && after.data.top_lines[0];
+    if (b && a && b.move_uci !== mv.uci) {
+      const bestCp = cpOf(b, 1);           // your side to move: positive = good for you
+      const yourCp = cpOf(a, -1);          // their side to move after your move: flip to your view
+      const cost = bestCp - yourCp;
+      if (cost >= COACH_COST_CP) {
+        setStatus(`<div class="big">⚠ That costs about ${(cost / 100).toFixed(1)} pawns</div>The engine preferred <strong>${escapeHtml(b.move_san)}</strong>.
+          <div class="btn-row" style="margin-top:8px"><button class="btn small primary" id="coach-undo">Take it back</button><button class="btn small" id="coach-go">Play on anyway</button></div>`);
+        $('coach-undo').addEventListener('click', () => $('undo').click());
+        $('coach-go').addEventListener('click', () => engineMove());
+        G.thinking = false;
+        return;
+      }
+    }
     engineMove();
   }
+  $('coach-toggle').addEventListener('click', () => {
+    G.coach = !G.coach;
+    $('coach-toggle').classList.toggle('primary', G.coach);
+    try { localStorage.setItem('playCoach', G.coach ? '1' : '0'); } catch (e) { /* ignore */ }
+  });
+  try { if (localStorage.getItem('playCoach') === '1') { G.coach = true; $('coach-toggle').classList.add('primary'); } } catch (e) { /* ignore */ }
 
   async function engineMove() {
     const mine = ++G.token;
