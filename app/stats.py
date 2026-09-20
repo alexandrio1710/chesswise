@@ -210,6 +210,32 @@ def worst_games(source: str | None = None, profile_id: int | None = None, limit:
         conn.close()
 
 
+def recent_games(source: str | None = None, profile_id: int | None = None, limit: int = 10) -> list[dict]:
+    """The latest analyzed games with what you want to know at a glance: result,
+    your accuracy, and how many blunders/mistakes — a "what happened lately"
+    list, unlike worst_games (a single move's eval swing, which is dominated by
+    mate-score artifacts in won games)."""
+    where, params = _source_clause(source, profile_id)
+    conn = get_connection()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            f"""
+            SELECT g.id AS game_id, g.source, g.date, g.opponent, g.color, g.result, g.time_control, g.opening_name, g.player_rating,
+                   (SELECT COUNT(*) FROM mistakes m WHERE m.game_id = g.id AND m.severity = 'blunder') AS blunders,
+                   (SELECT COUNT(*) FROM mistakes m WHERE m.game_id = g.id AND m.severity = 'mistake') AS mistakes
+            FROM games g WHERE g.analyzed = 1 AND g.skip_reason IS NULL {where}
+            ORDER BY g.date DESC LIMIT ?
+            """,
+            params + (limit,),
+        )]
+    finally:
+        conn.close()
+    accuracies = game_accuracies([r["game_id"] for r in rows])
+    for r in rows:
+        r["accuracy"] = accuracies.get(r["game_id"])
+    return rows
+
+
 def overall_summary(source: str | None = None, profile_id: int | None = None) -> dict:
     where, params = _source_clause(source, profile_id)
     where_analyzed, params_a = _source_clause(source, profile_id)

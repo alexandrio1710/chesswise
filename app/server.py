@@ -34,6 +34,7 @@ import game_report
 import insights
 import insights_report
 import nav
+import play
 import skills
 import manual_analysis
 import opening_explorer
@@ -648,6 +649,13 @@ def api_explorer(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/recent-games")
+def api_recent_games(source: str | None = Query(default=None), limit: int = Query(default=10, ge=1, le=50),
+                     profile_id: int | None = Depends(auth.require_profile_filter_access)):
+    source = _normalize_source(source)
+    return stats.recent_games(source, profile_id, limit)
+
+
 @app.get("/api/worst-games")
 def api_worst_games(source: str | None = Query(default=None), profile_id: int | None = Depends(auth.require_profile_filter_access), limit: int = 5):
     source = _normalize_source(source)
@@ -1114,6 +1122,25 @@ def api_analyze_pgn(
 
     try:
         return {"saved": False, **manual_analysis.analyze_pgn_oneoff(req.pgn)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class PlayReplyRequest(BaseModel):
+    fen: str
+    level: str = play.DEFAULT_LEVEL
+
+
+@app.get("/api/play/levels")
+def api_play_levels():
+    return {"default": play.DEFAULT_LEVEL, "levels": [{"key": k, "label": v["label"]} for k, v in play.LEVELS.items()]}
+
+
+@app.post("/api/play/reply")
+def api_play_reply(req: PlayReplyRequest, _rl: None = Depends(_rate_limit_analysis)):
+    """The engine's reply in a position at the chosen strength (see play.py)."""
+    try:
+        return play.reply(req.fen, req.level)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

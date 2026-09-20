@@ -454,6 +454,20 @@
   ul.opening-list .opening-name { color: var(--text-primary); }
   ul.opening-list .opening-metric { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+  /* Home / focus card */
+  .home-grid { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; }
+  @media (max-width: 800px) { .home-grid { grid-template-columns: 1fr; } }
+  .focus-title { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+  .focus-why, .focus-habit { margin: 4px 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+  .focus-habit strong { color: var(--status-good); }
+  .focus-btn, .primary-action { display: inline-block; margin-top: 8px; padding: 9px 16px; border-radius: 10px; border: none; background: var(--accent); color: #fff !important; font: inherit; font-weight: 700; font-size: 13px; text-decoration: none; cursor: pointer; }
+  .focus-btn:hover, .primary-action:hover { filter: brightness(1.1); }
+  .focus-more { font-size: 12px; margin-left: 8px; }
+  .home-actions { display: flex; flex-direction: column; gap: 10px; align-items: stretch; min-width: 220px; }
+  .primary-action { margin-top: 0; padding: 14px 18px; font-size: 15px; }
+  .home-links { display: flex; gap: 8px 14px; flex-wrap: wrap; font-size: 13px; }
+  .home-status { font-size: 12px; color: var(--text-secondary); min-height: 1em; }
+
   /* Loading spinner */
   .spinner {
     display: inline-block;
@@ -565,6 +579,22 @@
 
   <div class="tab-panel active" id="tab-overview">
 
+    <section class="card" id="home-card">
+      <div class="home-grid">
+        <div>
+          <h2 style="margin-bottom:6px">What to work on</h2>
+          <div id="focus"><span class="loading-text">Working it out…</span></div>
+        </div>
+        <div class="home-actions">
+          <button class="primary-action" id="home-sync">Sync &amp; analyze</button>
+          <div class="home-links">
+            <a href="/puzzles">Puzzles</a><a href="/play">Play</a><a href="/skills">Full plan</a><a href="/insights">Insights</a>
+          </div>
+          <div class="home-status" id="home-status"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="card" id="summary-card">
       <p class="takeaway" id="takeaway"><span class="spinner"></span><span class="loading-text">Loading…</span></p>
       <div class="stat-row">
@@ -605,20 +635,14 @@
     </section>
 
     <section class="card">
-      <h2>5 worst games (biggest single eval swing)</h2>
+      <h2>Recent games</h2>
       <div class="table-scroll">
         <table class="data-table">
           <thead>
-            <tr>
-              <th>Date</th>
-              <th>Site</th>
-              <th>Opponent</th>
-              <th>Result</th>
-              <th>Worst move</th>
-            </tr>
+            <tr><th>Date</th><th>Site</th><th>Opponent</th><th>Result</th><th>Time</th><th>Accuracy</th><th>Blunders</th><th></th></tr>
           </thead>
           <tbody id="worst-games-body">
-            <tr><td colspan="5" class="empty-note">Loading…</td></tr>
+            <tr><td colspan="8" class="empty-note">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -778,13 +802,14 @@
       const [summary, phaseCounts, worstGames, trend] = await Promise.all([
         fetchJson(`/api/summary${q}`),
         fetchJson(`/api/mistakes-by-phase${q}`),
-        fetchJson(`/api/worst-games${q}`),
+        fetchJson(`/api/recent-games${q}`),
         fetchJson(`/api/trend${q}`),
       ]);
       renderSummary(summary);
       renderBarChart(phaseCounts);
       renderWorstGames(worstGames);
       renderTrend(trend);
+      loadFocus();
     } catch (err) {
       // Previously any one of these four failing (network error, or a
       // non-2xx response .then(r => r.json()) happily "succeeded" parsing
@@ -862,61 +887,63 @@
   }
 
   function renderWorstGames(games) {
+    // Now the "Recent games" table (the function keeps its old name so the loader below is unchanged).
     const body = document.getElementById("worst-games-body");
-    body.innerHTML = "";
-
     if (!games.length) {
-      body.innerHTML = `<tr><td colspan="5" class="empty-note">No analyzed games for this filter yet — run fetch and analyze to get started.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="8" class="empty-note">No analyzed games for this filter yet — use Sync &amp; analyze to get started.</td></tr>`;
       return;
     }
-
-    games.forEach((g, i) => {
-      const date = new Date(g.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+    body.innerHTML = games.map((g) => {
+      const date = new Date(g.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
       const badgeClass = g.source === "lichess" ? "lichess" : "chesscom";
       const badgeLabel = g.source === "lichess" ? "Lichess" : "Chess.com";
-      const wm = g.worst_move;
-
-      const row = document.createElement("tr");
-      row.className = "game-row";
-      row.tabIndex = 0;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-expanded", "false");
-      row.dataset.target = `detail-${i}`;
-      row.innerHTML = `
+      const acc = g.accuracy;
+      const accColor = acc == null ? "" : acc >= 80 ? "var(--status-good)" : acc >= 60 ? "var(--status-warning)" : "var(--status-critical)";
+      const resColor = g.result === "win" ? "var(--status-good)" : g.result === "loss" ? "var(--status-critical)" : "var(--text-secondary)";
+      return `<tr class="game-row" tabindex="0" role="link" data-game="${g.game_id}">
         <td>${date}</td>
         <td><span class="badge ${badgeClass}"><span class="badge-dot"></span>${badgeLabel}</span></td>
         <td>${escapeHtml(g.opponent)}</td>
-        <td>${escapeHtml(g.result)}</td>
-        <td><span class="severity-pill ${wm.severity}">${wm.severity}</span> ${escapeHtml(wm.move_san)} (${Math.round(wm.eval_drop)}cp)</td>
-      `;
-
-      const detail = document.createElement("tr");
-      detail.className = "detail-row hidden";
-      detail.id = `detail-${i}`;
-      detail.innerHTML = `
-        <td colspan="5">
-          Move ${wm.move_number} (${wm.phase}): <strong>${escapeHtml(wm.move_san)}</strong>
-          dropped the evaluation by ${Math.round(wm.eval_drop)} centipawns —
-          classified as a <strong>${wm.severity}</strong>.
-          You played <strong>${escapeHtml(g.color)}</strong> vs ${escapeHtml(g.opponent)}
-          (${escapeHtml(g.time_control)}, ${escapeHtml(g.opening_name || "unknown opening")}).
-          <a href="/game?id=${g.game_id}" style="margin-left:8px;">View full game analysis →</a>
-        </td>
-      `;
-
-      const toggle = () => {
-        const nowHidden = detail.classList.toggle("hidden");
-        row.setAttribute("aria-expanded", String(!nowHidden));
-      };
-      row.addEventListener("click", toggle);
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-      });
-
-      body.appendChild(row);
-      body.appendChild(detail);
+        <td style="color:${resColor};font-weight:600">${escapeHtml(g.result)}</td>
+        <td>${escapeHtml(g.time_control || "")}</td>
+        <td style="color:${accColor};font-weight:600">${acc == null ? "—" : acc.toFixed(1) + "%"}</td>
+        <td>${g.blunders}</td>
+        <td><a href="/game?id=${g.game_id}">Review →</a></td></tr>`;
+    }).join("");
+    body.querySelectorAll("tr.game-row").forEach((row) => {
+      const open = () => { location.href = `/game?id=${row.dataset.game}`; };
+      row.addEventListener("click", (e) => { if (e.target.tagName !== "A") open(); });
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
     });
   }
+
+  // "What to work on": the top item of the Skills plan, with the habit to build and where to train it.
+  async function loadFocus() {
+    const el = document.getElementById("focus");
+    try {
+      const q = qs(currentSource, currentProfileId);
+      const plan = (await fetchJson(`/api/skills${q}`)).plan || [];
+      if (!plan.length) {
+        el.innerHTML = `<p class="focus-why">Not enough reviewed games for a plan yet. Open the <a href="/insights">Insights</a> page and build review data.</p>`;
+        return;
+      }
+      const top = plan[0];
+      const primary = top.actions.find((a) => !a.href.startsWith("#")) || { label: "Open the full plan", href: "/skills" };
+      el.innerHTML = `<div class="focus-title">${escapeHtml(top.title)}</div>
+        <p class="focus-why">${escapeHtml(top.why)}</p>
+        <p class="focus-habit"><strong>Habit:</strong> ${escapeHtml(top.habit)}</p>
+        <a class="focus-btn" href="${primary.href}">${escapeHtml(primary.label)}</a> <a class="focus-more" href="/skills">See all ${plan.length} priorities →</a>`;
+    } catch (err) {
+      el.innerHTML = `<p class="focus-why">Could not work out a plan right now.</p>`;
+    }
+  }
+
+  // The big button starts the same fetch + quick analysis the Settings panel does.
+  document.getElementById("home-sync").addEventListener("click", () => {
+    document.getElementById("settings-panel").classList.remove("hidden");
+    document.getElementById("settings-refresh").click();
+    document.getElementById("home-status").textContent = "Syncing — progress shows in Settings (⚙).";
+  });
 
   function renderOpenings(data) {
     const reviewBody = document.getElementById("review-body");

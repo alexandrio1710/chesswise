@@ -156,6 +156,7 @@
           <button class="btn" id="nav-next" title="Next move (→)" aria-label="Next move">▶</button>
           <button class="btn" id="nav-last" title="Last position (End)" aria-label="Last position">⏭</button>
           <span class="spacer"></span>
+          <button class="btn" id="btn-play" title="Play this position out against Stockfish (P)">▶ Play from here</button>
           <button class="btn" id="btn-flip" title="Flip the board (F)">⇅ Flip</button>
           <button class="btn" id="btn-share" title="Share this game">Share ↗</button>
         </div>
@@ -165,7 +166,7 @@
           <button class="btn small" id="ex-redo">Redo ▶</button>
           <button class="btn small primary" id="ex-back">Back to game</button>
         </div>
-        <p class="kbd-hint">← → step through moves · Home / End · F flip · R retry a mistake · B best move · K next key moment · drag any piece to explore your own line</p>
+        <p class="kbd-hint">← → step through moves · Home / End · F flip · P play from here · R retry a mistake · B best move · K next key moment · drag any piece to explore your own line</p>
       </div>
 
       <aside class="card rv-side">
@@ -1051,6 +1052,14 @@
   $('nav-last').addEventListener('click', () => { if (!S.retry) goToPly(S.moves.length); });
   $('btn-flip').addEventListener('click', flip);
 
+  // Play the position on the board (a game position or your own variation) out against Stockfish, as the side to move.
+  function playFromHere() {
+    if (!S.data) return;
+    const fen = S.board.getFen();
+    location.href = `/play?fen=${encodeURIComponent(fen)}&color=${sideOf(fen)}&game=${encodeURIComponent(S.id)}&ply=${S.ply}`;
+  }
+  $('btn-play').addEventListener('click', playFromHere);
+
   document.addEventListener('keydown', (e) => {
     if (!S.data || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
@@ -1061,6 +1070,7 @@
       case 'Home': e.preventDefault(); if (!S.retry) goToPly(0); break;
       case 'End': e.preventDefault(); if (!S.retry) goToPly(S.moves.length); break;
       case 'f': case 'F': flip(); break;
+      case 'p': case 'P': playFromHere(); break;
       case 'b': case 'B': toggleBest(); break;
       case 'r': case 'R': {
         const m = S.moves[S.ply - 1];

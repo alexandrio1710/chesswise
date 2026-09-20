@@ -119,3 +119,24 @@ class TestEndpoints:
     def test_examples_endpoint(self):
         assert client.get("/api/skills/examples", params={"cause": "bogus"}).status_code == 422
         assert "examples" in client.get("/api/skills/examples", params={"cause": "hung_piece"}).json()
+
+
+class TestRecentGames:
+    def test_lists_latest_first_with_accuracy_and_blunder_counts(self):
+        import stats
+        from db import get_connection
+        pid = _profile()
+        older = _game(pid, date="2026-05-01T10:00:00+00:00")
+        newer = _game(pid, date="2026-05-02T10:00:00+00:00", result="loss")
+        conn = get_connection()
+        try:
+            conn.execute("INSERT INTO mistakes (game_id, move_number, move_san, phase, severity, eval_drop, ply, color_moved) "
+                         "VALUES (?, 3, 'x', 'middlegame', 'blunder', 400, 5, 'white')", (newer,))
+            conn.commit()
+        finally:
+            conn.close()
+        rows = stats.recent_games(profile_id=pid, limit=5)
+        assert [r["game_id"] for r in rows] == [newer, older]
+        assert rows[0]["blunders"] == 1 and rows[1]["blunders"] == 0
+        assert rows[0]["accuracy"] is not None and 0 <= rows[0]["accuracy"] <= 100
+        assert client.get("/api/recent-games", params={"profile_id": pid, "limit": 1}).json()[0]["game_id"] == newer

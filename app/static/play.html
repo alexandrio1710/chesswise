@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chesswise — Play</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♟️</text></svg>">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  .layout { display: grid; grid-template-columns: minmax(320px, min(calc(100vh - 190px), 760px)) minmax(300px, 420px); gap: 24px; justify-content: center; align-items: start; }
+  @media (max-width: 960px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .plate { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); min-height: 40px; font-weight: 700; font-size: 14px; }
+  .plate .dot { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--baseline); }
+  .plate .dot.white { background: #f4f4f4; } .plate .dot.black { background: #2b2b2b; }
+  .plate .sub { font-weight: 500; font-size: 12px; color: var(--text-secondary); }
+  .plate .grow { flex: 1; }
+  .board-row { display: flex; gap: 10px; align-items: stretch; }
+  .board-host { flex: 1; min-width: 0; }
+  .side { display: flex; flex-direction: column; gap: 14px; }
+  .setup { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .seg { display: inline-flex; gap: 4px; }
+  .status { padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; line-height: 1.45; }
+  .status.over { border-color: var(--accent); }
+  .status .big { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+  .banner { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.45; background: color-mix(in srgb, var(--accent) 14%, var(--surface-1)); border: 1px solid var(--border); }
+  .moves { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; }
+  .moves .r { display: grid; grid-template-columns: 34px 1fr 1fr; padding: 4px 8px; }
+  .moves .r:nth-child(odd) { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+  .moves .n { color: var(--text-muted); }
+  .moves .empty { padding: 10px; color: var(--text-secondary); }
+  .kbd { font-size: 11px; color: var(--text-muted); margin: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header id="site-header"></header>
+
+  <div class="layout">
+    <div class="main">
+      <div class="plate" id="plate-top"></div>
+      <div class="board-row"><div id="evalbar-host" style="display:none"></div><div class="board-host" id="board-host"></div></div>
+      <div class="plate" id="plate-bottom"></div>
+    </div>
+
+    <div class="side">
+      <div class="banner hidden" id="banner"></div>
+      <section class="card flat">
+        <div class="setup">
+          <label class="field">You play
+            <span class="seg" id="side-seg"><button class="btn small primary" data-side="white">White</button><button class="btn small" data-side="black">Black</button><button class="btn small" data-side="random">Random</button></span>
+          </label>
+          <label class="field">Opponent<select id="level"></select></label>
+          <button class="btn primary" id="new-game">New game</button>
+        </div>
+      </section>
+      <div class="status" id="status">Loading…</div>
+      <div class="btn-row">
+        <button class="btn" id="undo" title="Take back your last move">↶ Take back</button>
+        <button class="btn" id="hint" title="Show the engine's suggestion">💡 Hint</button>
+        <button class="btn" id="eval-toggle" title="Show the evaluation bar">± Eval</button>
+        <button class="btn" id="flip">⇅ Flip</button>
+        <button class="btn" id="resign">Resign</button>
+      </div>
+      <div class="moves" id="moves"><div class="empty">Moves will appear here.</div></div>
+      <div class="btn-row hidden" id="after">
+        <button class="btn primary" id="save-review">Save &amp; review this game</button>
+        <button class="btn" id="copy-pgn">Copy PGN</button>
+      </div>
+      <p class="kbd">Drag a piece or click it, then click the square. Strength uses Stockfish's own rating limiter, so "~1600" plays like a 1600, not like a perfect engine with random blunders.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Board } from '/static/js/board.js';
+  import { EvalBar, escapeHtml, formatEval } from '/static/js/ui.js';
+  import { mountChrome } from '/static/js/chrome.js';
+
+  mountChrome({ title: 'Play', active: '/play' });
+  const $ = (id) => document.getElementById(id);
+  const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const opposite = (c) => (c === 'white' ? 'black' : 'white');
+  const sideOf = (fen) => (fen.split(' ')[1] === 'b' ? 'black' : 'white');
+
+  async function api(url, body) {
+    try {
+      const res = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* not JSON */ }
+      return { ok: res.ok, status: res.status, data };
+    } catch (e) { return { ok: false, status: 0, data: null }; }
+  }
+
+  const params = new URLSearchParams(location.search);
+  const G = { board: null, bar: null, side: 'white', startFen: START, level: '1600', history: [], thinking: false, over: null, token: 0, showEval: false, levels: {} };
+  const fromGame = params.get('game') ? { id: params.get('game'), ply: params.get('ply') } : null;
+
+  // --- setup ---------------------------------------------------------------------------
+  async function init() {
+    const lv = await api('/api/play/levels');
+    const levels = (lv.ok && lv.data.levels) || [{ key: '1600', label: '~1600' }];
+    $('level').innerHTML = levels.map((l) => `<option value="${l.key}">${escapeHtml(l.label)}</option>`).join('');
+    G.levels = Object.fromEntries(levels.map((l) => [l.key, l.label]));
+    const wanted = params.get('level');
+    G.level = (wanted && G.levels[wanted]) ? wanted : ((lv.ok && lv.data.default) || '1600');
+    $('level').value = G.level;
+
+    const fen = params.get('fen');
+    G.startFen = fen && fen.split(' ').length >= 4 ? fen : START;
+    const color = params.get('color');
+    G.side = color === 'black' ? 'black' : 'white';
+    if (fromGame) {
+      $('banner').classList.remove('hidden');
+      $('banner').innerHTML = `Practising a position from your game. Goal: win it from here.
+        <a href="/game?id=${encodeURIComponent(fromGame.id)}&ply=${encodeURIComponent(fromGame.ply || 0)}">Back to the review →</a>`;
+    }
+    G.bar = new EvalBar($('evalbar-host'), { orientation: G.side });
+    G.board = new Board($('board-host'), { orientation: G.side, fen: G.startFen, interactive: false, onMove: userMoved });
+    startGame();
+  }
+
+  function segSync() { document.querySelectorAll('#side-seg button').forEach((b) => b.classList.toggle('primary', b.dataset.side === (G.sidePref || G.side))); }
+  document.querySelectorAll('#side-seg button').forEach((b) => b.addEventListener('click', () => { G.sidePref = b.dataset.side; segSync(); newGame(); }));
+  $('level').addEventListener('change', () => { G.level = $('level').value; newGame(); });
+  $('new-game').addEventListener('click', newGame);
+
+  function newGame() {
+    if (G.sidePref === 'random') G.side = Math.random() < 0.5 ? 'white' : 'black';
+    else if (G.sidePref) G.side = G.sidePref;
+    startGame();
+  }
+
+  function startGame() {
+    G.token += 1;
+    G.history = [];
+    G.over = null;
+    G.thinking = false;
+    G.board.setOrientation(G.side);
+    G.bar.setOrientation(G.side);
+    G.board.setFen(G.startFen, { animate: false });
+    G.board.setArrows([]);
+    G.board.clearBadges();
+    $('after').classList.add('hidden');
+    $('status').classList.remove('over');
+    segSync();
+    render();
+    if (sideOf(G.startFen) !== G.side) engineMove(); else yourTurn();
+  }
+
+  // --- turn handling -------------------------------------------------------------------
+  function yourTurn() {
+    G.thinking = false;
+    G.board.setInteractive(true, G.side);
+    setStatus(`<div class="big">Your move</div>${cap(G.side)} to play${G.board.gameOutcome() ? '' : ''}.`);
+    render();
+    updateEval();
+  }
+
+  function setStatus(html) { $('status').innerHTML = html; }
+
+  function userMoved(mv) {
+    if (G.over || G.thinking) return;
+    G.board.setArrows([]);
+    G.history.push({ san: mv.san, uci: mv.uci, fenBefore: mv.fenBefore, fenAfter: mv.fenAfter, by: 'you' });
+    render();
+    if (checkOver()) return;
+    engineMove();
+  }
+
+  async function engineMove() {
+    const mine = ++G.token;
+    G.thinking = true;
+    G.board.setInteractive(false);
+    setStatus(`<div class="big"><span class="spinner"></span>${escapeHtml(G.levels[G.level] || 'Stockfish')} is thinking…</div>`);
+    const fen = G.board.getFen();
+    const r = await api('/api/play/reply', { fen, level: G.level });
+    if (mine !== G.token) return; // a new game / take-back happened meanwhile
+    if (!r.ok) {
+      G.thinking = false;
+      setStatus(`<div class="big">Couldn't get a reply</div>${escapeHtml((r.data && r.data.detail) || (r.status === 429 ? 'Too many requests — wait a moment.' : 'Is the server running?'))}
+        <div class="btn-row" style="margin-top:8px"><button class="btn small primary" id="retry-engine">Try again</button></div>`);
+      const b = $('retry-engine'); if (b) b.addEventListener('click', engineMove);
+      return;
+    }
+    const before = G.board.getFen();
+    const done = G.board.move(r.data.uci);
+    G.history.push({ san: r.data.san, uci: r.data.uci, fenBefore: before, fenAfter: r.data.fen, by: 'engine' });
+    render();
+    if (checkOver()) return;
+    yourTurn();
+  }
+
+  function checkOver() {
+    const o = G.board.gameOutcome();
+    if (!o) return false;
+    finish(o.kind === 'checkmate' ? `${cap(o.winner)} wins by checkmate` : cap(o.kind === 'draw' ? 'draw' : o.kind), o.winner);
+    return true;
+  }
+
+  function finish(text, winner) {
+    G.over = { text, winner };
+    G.thinking = false;
+    G.board.setInteractive(false);
+    const youWon = winner === G.side;
+    const flavour = winner == null ? 'A draw.' : youWon ? (fromGame ? 'You converted it.' : 'Well played.') : (fromGame ? 'It slipped again — try once more, or review where.' : 'Better luck next time.');
+    $('status').classList.add('over');
+    setStatus(`<div class="big">${escapeHtml(text)}</div>${flavour}`);
+    $('after').classList.remove('hidden');
+    render();
+  }
+
+  // --- side buttons --------------------------------------------------------------------
+  $('undo').addEventListener('click', () => {
+    if (G.thinking && G.history.length === 0) return;
+    G.token += 1; // cancels a pending engine reply
+    if (!G.history.length) return;
+    // Take back to your previous turn: drop the engine reply (if any) and your own move.
+    while (G.history.length && G.history[G.history.length - 1].by === 'engine') G.history.pop();
+    const last = G.history.pop();
+    const fen = last ? last.fenBefore : G.startFen;
+    G.over = null;
+    $('after').classList.add('hidden');
+    $('status').classList.remove('over');
+    G.board.setFen(fen, { animate: true });
+    G.board.setArrows([]);
+    if (sideOf(fen) !== G.side) engineMove(); else yourTurn();
+  });
+
+  $('hint').addEventListener('click', async () => {
+    if (G.over || G.thinking) return;
+    const fen = G.board.getFen();
+    const r = await api('/api/analyze/fen', { fen, depth: 12 });
+    const line = r.ok && r.data.top_lines && r.data.top_lines[0];
+    if (!line) return;
+    G.board.setArrows([{ from: line.move_uci.slice(0, 2), to: line.move_uci.slice(2, 4), color: '#81b64c', width: 0.17 }]);
+  });
+
+  $('eval-toggle').addEventListener('click', () => {
+    G.showEval = !G.showEval;
+    $('eval-toggle').classList.toggle('primary', G.showEval);
+    $('evalbar-host').style.display = G.showEval ? 'flex' : 'none';
+    if (G.showEval) updateEval();
+  });
+  async function updateEval() {
+    if (!G.showEval) return;
+    const fen = G.board.getFen();
+    const outcome = G.board.gameOutcome();
+    if (outcome) { G.bar.update({ cp: outcome.winner ? (outcome.winner === 'white' ? 10000 : -10000) : 0, fen }); return; }
+    const r = await api('/api/analyze/fen', { fen, depth: 12 });
+    if (!r.ok || fen !== G.board.getFen()) return;
+    const l = r.data.top_lines[0];
+    if (!l) return;
+    const turn = sideOf(fen) === 'white' ? 1 : -1;
+    G.bar.update({ cp: (l.eval_cp || 0) * turn, mate: l.mate_in != null ? l.mate_in * turn : null, fen });
+  }
+
+  $('flip').addEventListener('click', () => { G.board.flip(); G.bar.setOrientation(G.board.orientation); render(); });
+  $('resign').addEventListener('click', () => { if (!G.over) { G.token += 1; finish(`${cap(opposite(G.side))} wins — you resigned`, opposite(G.side)); } });
+
+  // --- rendering -----------------------------------------------------------------------
+  function render() {
+    const opp = G.levels[G.level] || 'Stockfish';
+    const top = opposite(G.board.orientation), bottom = G.board.orientation;
+    const name = (c) => (c === G.side ? 'You' : `Stockfish ${escapeHtml(opp)}`);
+    $('plate-top').innerHTML = `<span class="dot ${top}"></span><span>${name(top)}</span>`;
+    $('plate-bottom').innerHTML = `<span class="dot ${bottom}"></span><span>${name(bottom)}</span>`;
+    const startNo = parseInt(G.startFen.split(' ')[5], 10) || 1;
+    const blackFirst = sideOf(G.startFen) === 'black';
+    const rows = [];
+    G.history.forEach((h, i) => {
+      const idx = i + (blackFirst ? 1 : 0);
+      const no = startNo + Math.floor(idx / 2);
+      if (idx % 2 === 0) rows.push({ no, w: h.san, b: '' }); else if (rows.length && rows[rows.length - 1].no === no) rows[rows.length - 1].b = h.san; else rows.push({ no, w: '…', b: h.san });
+    });
+    $('moves').innerHTML = rows.length ? rows.map((r) => `<div class="r"><span class="n">${r.no}</span><span>${escapeHtml(r.w)}</span><span>${escapeHtml(r.b)}</span></div>`).join('') : '<div class="empty">Moves will appear here.</div>';
+    $('moves').scrollTop = $('moves').scrollHeight;
+    $('undo').disabled = !G.history.length;
+    $('hint').disabled = !!G.over || G.thinking;
+  }
+
+  // --- saving the game -----------------------------------------------------------------
+  function buildPgn() {
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '.');
+    const result = !G.over ? '*' : G.over.winner === 'white' ? '1-0' : G.over.winner === 'black' ? '0-1' : '1/2-1/2';
+    const opp = `Stockfish ${G.levels[G.level] || ''}`.trim();
+    const white = G.side === 'white' ? 'You' : opp, black = G.side === 'black' ? 'You' : opp;
+    const startNo = parseInt(G.startFen.split(' ')[5], 10) || 1;
+    const blackFirst = sideOf(G.startFen) === 'black';
+    let text = '';
+    G.history.forEach((h, i) => {
+      const idx = i + (blackFirst ? 1 : 0);
+      const no = startNo + Math.floor(idx / 2);
+      if (idx % 2 === 0) text += `${no}. `; else if (i === 0) text += `${no}... `;
+      text += h.san + ' ';
+    });
+    const custom = G.startFen !== START ? `[SetUp "1"]\n[FEN "${G.startFen}"]\n` : '';
+    return `[Event "Chesswise practice"]\n[Site "Chesswise"]\n[Date "${date}"]\n[White "${white}"]\n[Black "${black}"]\n[Result "${result}"]\n${custom}\n${text}${result}\n`;
+  }
+  $('copy-pgn').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(buildPgn()); $('copy-pgn').textContent = 'Copied ✓'; } catch (e) { $('copy-pgn').textContent = "Couldn't copy"; }
+    setTimeout(() => { $('copy-pgn').textContent = 'Copy PGN'; }, 2000);
+  });
+  $('save-review').addEventListener('click', async () => {
+    const btn = $('save-review');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Analyzing…';
+    const body = { pgn: buildPgn(), save: true, player_color: G.side, opponent: `Stockfish ${G.levels[G.level] || ''}`.trim() };
+    let profile = null;
+    try { profile = localStorage.getItem('profileId'); } catch (e) { /* ignore */ }
+    if (profile) body.profile_id = Number(profile);
+    const r = await api('/api/analyze/pgn', body);
+    if (r.ok && r.data.game_id) { location.href = `/game?id=${r.data.game_id}`; return; }
+    btn.disabled = false;
+    btn.textContent = 'Save & review this game';
+    setStatus(`<div class="big">Couldn't save</div>${escapeHtml((r.data && r.data.detail) || 'Try again in a moment.')}`);
+  });
+
+  window.__play = { G, buildPgn }; // handy for debugging and the browser tests
+  init();
+</script>
+</body>
+</html>
