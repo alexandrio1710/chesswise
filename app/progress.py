@@ -48,15 +48,7 @@ def average_accuracy(source: str | None = None, profile_id: int | None = None,
         finally:
             conn.close()
 
-    accuracies = []
-    for gid in game_ids:
-        game = stats.get_game_detail(gid)
-        if game is None:
-            continue
-        moves = stats.get_game_moves(gid)
-        acc = stats.compute_game_accuracy(moves, game["color"])
-        if acc is not None:
-            accuracies.append(acc)
+    accuracies = list(stats.game_accuracies(list(game_ids)).values())
     return round(sum(accuracies) / len(accuracies), 1) if accuracies else None
 
 

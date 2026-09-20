@@ -1562,6 +1562,25 @@ def _migration_029_opponent_countries(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_030_lookup_indexes(conn: sqlite3.Connection) -> None:
+    """Performance — indexes for lookups the app does constantly. `mistakes` had
+    none at all, so loading one game's moves (which LEFT JOINs mistakes on
+    game_id + ply) scanned every mistake row each time; pages that load many
+    games (Progress, Insights' accuracy figures) spent seconds in that scan —
+    /api/progress took 7.5s on 533 games. Also puzzles.mistake_id (joined the
+    same way) and notes.game_id.
+    """
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_mistakes_game_ply ON mistakes(game_id, ply)",
+        "CREATE INDEX IF NOT EXISTS idx_puzzles_mistake ON puzzles(mistake_id)",
+        "CREATE INDEX IF NOT EXISTS idx_notes_game ON notes(game_id)",
+    ]
+    for statement in statements:
+        table = statement.split(" ON ")[1].split("(")[0]
+        if _table_exists(conn, table):
+            conn.execute(statement)
+
+
 MIGRATIONS = [
     (1, "Initial schema: games, mistakes, puzzles tables", _migration_001_initial_schema),
     (2, "Add puzzle move explanations", _migration_002_puzzle_explanations),
@@ -1596,6 +1615,7 @@ MIGRATIONS = [
     (28, "Add game review data: best moves/lines per ply, termination, game shape, tactic events",
      _migration_028_game_review_data),
     (29, "Add opponent_countries (cached opponent country lookups for Insights geography)", _migration_029_opponent_countries),
+    (30, "Add lookup indexes (mistakes game/ply, puzzles.mistake_id, notes.game_id)", _migration_030_lookup_indexes),
 ]
 
 

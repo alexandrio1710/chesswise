@@ -104,3 +104,37 @@ def test_pending_counts(monkeypatch):
     monkeypatch.setattr(puzzles, "get_mistakes_without_puzzles", lambda: [1])
     monkeypatch.setattr(server.review, "games_needing_review", lambda game_ids=None: [7, 8])
     assert client.get("/api/pending").json() == {"unanalyzed_games": 3, "mistakes_without_puzzles": 1, "games_without_review": 2}
+
+
+class TestSlowPagesStayFast:
+    def test_batch_accuracy_matches_the_per_game_figure(self):
+        import stats
+        from db import get_connection
+        conn = get_connection()
+        try:
+            gid = conn.execute("INSERT INTO games (source, source_game_id, date, result, color, analyzed) VALUES ('manual', 'acc-batch-1', '2026-01-01', 'win', 'black', 1)").lastrowid
+            for ply, mover, cp in [(1, "white", 30), (2, "black", 30), (3, "white", 20), (4, "black", 400), (5, "white", -50)]:
+                conn.execute("INSERT INTO game_moves (game_id, ply, move_number, color_moved, move_san, eval_cp, eval_drop) VALUES (?, ?, ?, ?, 'x', ?, 0)",
+                             (gid, ply, (ply + 1) // 2, mover, cp))
+            conn.commit()
+        finally:
+            conn.close()
+        assert stats.game_accuracies([gid]) == {gid: stats.compute_game_accuracy(stats.get_game_moves(gid), "black")}
+        assert stats.game_accuracies([]) == {}
+
+    def test_lookup_indexes_exist(self):
+        from db import get_connection
+        conn = get_connection()
+        try:
+            names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        finally:
+            conn.close()
+        assert {"idx_mistakes_game_ply", "idx_puzzles_mistake", "idx_notes_game"} <= names
+
+    def test_endgame_trainer_does_not_sleep_for_ineligible_positions(self, monkeypatch):
+        import tablebase
+        slept = []
+        monkeypatch.setattr(tablebase.time, "sleep", lambda s: slept.append(s))
+        monkeypatch.setattr(tablebase, "is_tablebase_eligible", lambda fen: False)
+        assert tablebase.find_endgame_trainer_positions(limit=3, scan_limit=20) == []
+        assert slept == []

@@ -539,6 +539,34 @@ def get_game_moves(game_id: int) -> list[dict]:
         conn.close()
 
 
+def game_accuracies(game_ids: list[int]) -> dict[int, float]:
+    """{game_id: your accuracy} for many games at once, from one query.
+    Pages that average accuracy over hundreds of games used to call
+    get_game_detail + get_game_moves per game — two connections and a join each
+    — which made /api/progress take seconds. Games with too few moves to score
+    are left out."""
+    out: dict[int, float] = {}
+    if not game_ids:
+        return out
+    conn = get_connection()
+    try:
+        for i in range(0, len(game_ids), 400):
+            chunk = game_ids[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            colors = {r["id"]: r["color"] for r in conn.execute(f"SELECT id, color FROM games WHERE id IN ({marks})", chunk)}
+            moves: dict[int, list[dict]] = {}
+            for r in conn.execute(
+                f"SELECT game_id, ply, color_moved, eval_cp FROM game_moves WHERE game_id IN ({marks}) ORDER BY game_id, ply", chunk):
+                moves.setdefault(r["game_id"], []).append(dict(r))
+            for gid, rows in moves.items():
+                acc = compute_game_accuracy(rows, colors.get(gid, "white"))
+                if acc is not None:
+                    out[gid] = acc
+    finally:
+        conn.close()
+    return out
+
+
 def annotate_fen(moves: list[dict], pgn_text: str) -> list[dict]:
     """Copy of `moves` with a "fen_after" key added: the board position
     (FEN) immediately after that move. Lets the game page render an actual

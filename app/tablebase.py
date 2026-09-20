@@ -215,6 +215,8 @@ def find_endgame_trainer_positions(source: str | None = None, limit: int = 8, sc
         except ValueError:
             continue
         fen = board.fen()
+        if not is_tablebase_eligible(fen):
+            continue  # too many pieces for a tablebase: no network call, so no reason to wait either
         # Only pace actual network calls, not cache hits — up to scan_limit
         # (default 40) lookups fired back-to-back is exactly the kind of
         # tight loop the Chess.com archive-month loop paces for the same
